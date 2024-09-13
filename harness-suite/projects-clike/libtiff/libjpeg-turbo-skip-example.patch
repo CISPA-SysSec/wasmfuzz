@@ -1,0 +1,14 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 26bb189..19c4646 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -810,9 +810,6 @@ if(ENABLE_STATIC)
+   add_executable(jpegtran-static jpegtran.c cdjpeg.c rdswitch.c transupp.c)
+   target_link_libraries(jpegtran-static jpeg-static)
+   set_property(TARGET jpegtran-static PROPERTY COMPILE_FLAGS "${USE_SETMODE}")
+-
+-  add_executable(example-static example.c)
+-  target_link_libraries(example-static jpeg-static)
+ endif()
+ 
+ add_executable(rdjpgcom rdjpgcom.c)

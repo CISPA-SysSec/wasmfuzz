@@ -1,0 +1,50 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index be1552cd..33c8933b 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -12,7 +12,6 @@ cargo-fuzz = true
+ libfuzzer-sys = "0.4"
+ arbitrary = { version = "1.3.2", features = ["derive"] }
+ replace_with = "0.1.7"
+-tikv-jemallocator = "0.6.0"
+ 
+ [dependencies.zip]
+ path = ".."
+diff --git a/fuzz/fuzz_targets/fuzz_read.rs b/fuzz/fuzz_targets/fuzz_read.rs
+index 78fe670e..686873c4 100644
+--- a/fuzz/fuzz_targets/fuzz_read.rs
++++ b/fuzz/fuzz_targets/fuzz_read.rs
+@@ -2,14 +2,10 @@
+ 
+ use libfuzzer_sys::fuzz_target;
+ use std::io::{Read, Seek, SeekFrom};
+-use tikv_jemallocator::Jemalloc;
+ use zip::read::read_zipfile_from_stream;
+ 
+ const MAX_BYTES_TO_READ: u64 = 1 << 24;
+ 
+-#[global_allocator]
+-static GLOBAL: Jemalloc = Jemalloc;
+-
+ fn decompress_all(data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+     let reader = std::io::Cursor::new(data);
+     let mut zip = zip::ZipArchive::new(reader)?;
+diff --git a/fuzz/fuzz_targets/fuzz_write.rs b/fuzz/fuzz_targets/fuzz_write.rs
+index 53653a60..9284b99d 100755
+--- a/fuzz/fuzz_targets/fuzz_write.rs
++++ b/fuzz/fuzz_targets/fuzz_write.rs
+@@ -8,14 +8,10 @@ use std::fmt::{Arguments, Formatter, Write};
+ use std::io::{Cursor, Seek, SeekFrom};
+ use std::io::Write as IoWrite;
+ use std::path::PathBuf;
+-use tikv_jemallocator::Jemalloc;
+ use zip::result::{ZipError, ZipResult};
+ use zip::unstable::path_to_string;
+ use zip::write::FullFileOptions;
+ 
+-#[global_allocator]
+-static GLOBAL: Jemalloc = Jemalloc;
+-
+ #[derive(Arbitrary, Clone)]
+ pub enum BasicFileOperation<'k> {
+     WriteNormalFile {

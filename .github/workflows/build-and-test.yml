@@ -1,0 +1,25 @@
+name: Build-n-Test
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: "wasm32-wasip1"
+    - name: Check no-default-features
+      run: cargo check --no-default-features
+    - name: Build
+      run: cargo build
+    - name: Run tests
+      run: cargo test --verbose

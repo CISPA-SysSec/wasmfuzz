@@ -1,0 +1,117 @@
+{# Licensed under the Apache License: http://www.apache.org/licenses/LICENSE-2.0 #}
+{# For details: https://github.com/nedbat/coveragepy/blob/master/NOTICE.txt #}
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>{{ harness_name|escape }}</title>
+    <link rel="icon" sizes="32x32" href="favicon_32.png">
+    <link rel="stylesheet" href="style.css" type="text/css">
+    <script type="text/javascript" src="coverage_html.js" defer></script>
+</head>
+<body class="indexfile">
+
+<header>
+    <div class="content">
+        <h1>{{ harness_name|escape }}:
+            <span class="pc_cov">{{totals.coverage_percent()}} covered</span>
+        </h1>
+
+        <aside id="help_panel_wrapper">
+            <input id="help_panel_state" type="checkbox">
+            <label for="help_panel_state">
+                <img id="keyboard_icon" src="keybd_closed.png" alt="Show/hide keyboard shortcuts" />
+            </label>
+            <div id="help_panel">
+                <p class="legend">Shortcuts on this page</p>
+                <div class="keyhelp">
+                    <p>
+                        <kbd>n</kbd>
+                        <kbd>s</kbd>
+                        <kbd>m</kbd>
+                        <kbd>x</kbd>
+                        <kbd>b</kbd>
+                        <kbd>p</kbd>
+                        <kbd>c</kbd>
+                        &nbsp; change column sorting
+                    </p>
+                    <p>
+                        <kbd>[</kbd>
+                        <kbd>]</kbd>
+                        &nbsp; prev/next file
+                    </p>
+                    <p>
+                        <kbd>?</kbd> &nbsp; show/hide this help
+                    </p>
+                </div>
+            </div>
+        </aside>
+
+        <form id="filter_container">
+            <input id="filter" type="text" value="" placeholder="filter..." />
+        </form>
+
+        <p class="text">
+            HTML template from <a class="nav" href="https://github.com/nedbat/coveragepy">coverage.py v7.4.4</a>
+        </p>
+    </div>
+</header>
+
+<main id="index">
+    <table class="index" data-sortable>
+        <thead>
+            {# The title="" attr doesn"t work in Safari. #}
+            <tr class="tablehead" title="Click to sort">
+                <th class="name left" aria-sort="none" data-shortcut="n">Module</th>
+                <th aria-sort="none" data-default-sort-order="descending" data-shortcut="s">statements</th>
+                <th aria-sort="none" data-default-sort-order="descending" data-shortcut="m">missing</th>
+                <th aria-sort="none" data-default-sort-order="descending" data-shortcut="x">excluded</th>
+                <th aria-sort="none" data-default-sort-order="descending" data-shortcut="b">branches</th>
+                <th aria-sort="none" data-default-sort-order="descending" data-shortcut="p">partial</th>
+                <th class="right" aria-sort="none" data-shortcut="c">coverage</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for file in files %}
+            {% if file.is_stdlib %}
+            <tr class="file stdlib">
+            {% else %}
+            <tr class="file">
+            {% endif %}
+                <td class="name left"><a href="{{file.html_filename}}">{{file.relative_filename}}</a></td>
+                <td>{{file.nums.n_statements}}</td>
+                <td>{{file.nums.n_missing}}</td>
+                <td>{{file.nums.n_excluded}}</td>
+                <td>{{file.nums.n_branches}}</td>
+                <td>{{file.nums.n_partial_branches}}</td>
+                <td class="right" data-ratio="{{file.nums.coverage_ratio().0}} {{file.nums.coverage_ratio().1}}">{{file.nums.coverage_percent()}}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr class="total">
+                <td class="name left">Total</td>
+                <td>{{totals.n_statements}}</td>
+                <td>{{totals.n_missing}}</td>
+                <td>{{totals.n_excluded}}</td>
+                <td>{{totals.n_branches}}</td>
+                <td>{{totals.n_partial_branches}}</td>
+                <td class="right" data-ratio="{{totals.coverage_ratio().0}} {{totals.coverage_ratio().1}}">{{totals.coverage_percent()}}</td>
+            </tr>
+        </tfoot>
+    </table>
+
+    <p id="no_rows">
+        No items found using the specified filter.
+    </p>
+</main>
+
+<footer>
+    <div class="content">
+        HTML template from <a class="nav" href="https://github.com/nedbat/coveragepy">coverage.py v7.4.4</a>
+    </div>
+</footer>
+
+</body>
+</html>

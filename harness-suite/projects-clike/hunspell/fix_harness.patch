@@ -1,0 +1,26 @@
+diff --git a/src/hunspell/hunzip.hxx b/src/hunspell/hunzip.hxx
+index 87bd880..1c508ed 100644
+--- a/src/hunspell/hunzip.hxx
++++ b/src/hunspell/hunzip.hxx
+@@ -47,7 +47,7 @@
+ #include <fstream>
+ #include <vector>
+ 
+-#define BUFSIZE 65536
++#define BUFSIZE 2048
+ #define HZIP_EXTENSION ".hz"
+ 
+ #define MSG_OPEN "error: %s: cannot open\n"
+diff --git a/src/tools/affdicfuzzer.cxx b/src/tools/affdicfuzzer.cxx
+index 73e7d05..328de30 100644
+--- a/src/tools/affdicfuzzer.cxx
++++ b/src/tools/affdicfuzzer.cxx
+@@ -38,7 +38,7 @@ extern "C" int LLVMFuzzerTestOneInput(const char* data, size_t size)
+     int wordlen = data[0];
+     ++data;
+     --size;
+-    if (wordlen > size)
++    if (wordlen < 0 || wordlen >= size)
+         return 0;
+ 
+     std::ofstream wrd("/tmp/test.word", std::ios_base::out | std::ios_base::trunc | std::ios_base::binary);

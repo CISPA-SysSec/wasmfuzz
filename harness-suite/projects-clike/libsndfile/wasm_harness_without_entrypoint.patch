@@ -1,0 +1,40 @@
+diff --git a/Makefile.am b/Makefile.am
+index 55e8cf63..a4d19797 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -448,18 +448,9 @@ man/sndfile-deinterleave.1: man/sndfile-interleave.1
+ # ossfuzz/ #
+ ############
+ 
+-if USE_OSSFUZZ_FLAG
+-FUZZ_FLAG = $(LIB_FUZZING_ENGINE)
+ FUZZ_LDADD =
+-else
+-if USE_OSSFUZZ_STATIC
+-FUZZ_LDADD = $(LIB_FUZZING_ENGINE)
+-FUZZ_FLAG =
+-else
+-FUZZ_LDADD = ossfuzz/libstandaloneengine.la
+-FUZZ_FLAG =
+-endif
+-endif
++FUZZ_LDFLAGS_ADD = $(LIB_FUZZING_ENGINE)
++FUZZ_FLAG = $(CXXFLAGS)
+ 
+ if USE_OSSFUZZERS
+ noinst_PROGRAMS += \
+@@ -472,12 +463,12 @@ endif
+ 
+ ossfuzz_sndfile_fuzzer_SOURCES = ossfuzz/sndfile_fuzzer.cc
+ ossfuzz_sndfile_fuzzer_CXXFLAGS = $(AM_CXXFLAGS) $(FUZZ_FLAG)
+-ossfuzz_sndfile_fuzzer_LDFLAGS = $(AM_LDFLAGS) -static
++ossfuzz_sndfile_fuzzer_LDFLAGS = $(AM_LDFLAGS) -static $(FUZZ_LDFLAGS_ADD)
+ ossfuzz_sndfile_fuzzer_LDADD = src/libsndfile.la $(FUZZ_LDADD)
+ 
+ ossfuzz_sndfile_alt_fuzzer_SOURCES = ossfuzz/sndfile_alt_fuzzer.cc
+ ossfuzz_sndfile_alt_fuzzer_CXXFLAGS = $(AM_CXXFLAGS) $(FUZZ_FLAG)
+-ossfuzz_sndfile_alt_fuzzer_LDFLAGS = $(AM_LDFLAGS) -static
++ossfuzz_sndfile_alt_fuzzer_LDFLAGS = $(AM_LDFLAGS) -static $(FUZZ_LDFLAGS_ADD)
+ ossfuzz_sndfile_alt_fuzzer_LDADD = src/libsndfile.la $(FUZZ_LDADD)
+ 
+ ossfuzz_libstandaloneengine_la_SOURCES = ossfuzz/standaloneengine.cc ossfuzz/testinput.h

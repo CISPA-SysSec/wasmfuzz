@@ -1,0 +1,14 @@
+diff --git a/src/dsp/cpu.c b/src/dsp/cpu.c
+index 2234c77b..bfb1fc65 100644
+--- a/src/dsp/cpu.c
++++ b/src/dsp/cpu.c
+@@ -187,7 +187,7 @@ static int AndroidCPUInfo(CPUFeature feature) {
+ }
+ WEBP_EXTERN VP8CPUInfo VP8GetCPUInfo;
+ VP8CPUInfo VP8GetCPUInfo = AndroidCPUInfo;
+-#elif defined(EMSCRIPTEN) // also needs to be before generic NEON test
++#elif defined(EMSCRIPTEN) || defined(__wasm__) // also needs to be before generic NEON test
+ // Use compile flags as an indicator of SIMD support instead of a runtime check.
+ static int wasmCPUInfo(CPUFeature feature) {
+   switch (feature) {
+

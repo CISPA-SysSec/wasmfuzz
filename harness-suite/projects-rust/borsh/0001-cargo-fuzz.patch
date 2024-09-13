@@ -1,0 +1,227 @@
+From d4d150d528b846671946ef94b6e82b1c04ce0b02 Mon Sep 17 00:00:00 2001
+Date: Sat, 6 Jan 2024 23:01:48 +0100
+Subject: [PATCH] cargo-fuzz
+
+---
+ Cargo.toml                    |  2 +-
+ fuzz/Cargo.toml               | 22 ++++++++++++
+ fuzz/{fuzz-run => }/README.md |  0
+ fuzz/fuzz-run/Cargo.toml      | 15 --------
+ fuzz/fuzz-run/src/main.rs     | 67 -----------------------------------
+ fuzz/fuzz_targets/main.rs     | 63 ++++++++++++++++++++++++++++++++
+ 6 files changed, 86 insertions(+), 83 deletions(-)
+ create mode 100644 fuzz/Cargo.toml
+ rename fuzz/{fuzz-run => }/README.md (100%)
+ delete mode 100644 fuzz/fuzz-run/Cargo.toml
+ delete mode 100644 fuzz/fuzz-run/src/main.rs
+ create mode 100644 fuzz/fuzz_targets/main.rs
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 2a1e1907..6c62d1f7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,5 +1,5 @@
+ [workspace]
+-members = ["borsh", "borsh-derive", "fuzz/fuzz-run", "benchmarks"]
++members = ["borsh", "borsh-derive", "benchmarks"]
+ 
+ [workspace.package]
+ # shared version of all public crates in the workspace
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 00000000..3f479181
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,22 @@
++[package]
++name = "borsh-fuzz"
++authors = ["Near Inc <hello@nearprotocol.com>"]
++edition = "2018"
++publish = false
++
++[package.metadata]
++cargo-fuzz = true
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "borsh-fuzz"
++path = "fuzz_targets/main.rs"
++
++[dependencies]
++borsh = { path = "../borsh" }
++[dependencies.libfuzzer-sys]
++git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
++
+diff --git a/fuzz/fuzz-run/README.md b/fuzz/README.md
+similarity index 100%
+rename from fuzz/fuzz-run/README.md
+rename to fuzz/README.md
+diff --git a/fuzz/fuzz-run/Cargo.toml b/fuzz/fuzz-run/Cargo.toml
+deleted file mode 100644
+index 257ac331..00000000
+--- a/fuzz/fuzz-run/Cargo.toml
++++ /dev/null
+@@ -1,15 +0,0 @@
+-[package]
+-name = "borsh-fuzz"
+-version.workspace = true
+-rust-version.workspace = true
+-authors = ["Near Inc <hello@nearprotocol.com>"]
+-edition = "2018"
+-publish = false
+-
+-[[bin]]
+-name = "borsh-fuzz"
+-path = "src/main.rs"
+-
+-[dependencies]
+-honggfuzz = "0.5"
+-borsh = { path = "../../borsh" }
+diff --git a/fuzz/fuzz-run/src/main.rs b/fuzz/fuzz-run/src/main.rs
+deleted file mode 100644
+index a955788d..00000000
+--- a/fuzz/fuzz-run/src/main.rs
++++ /dev/null
+@@ -1,67 +0,0 @@
+-use borsh::BorshDeserialize;
+-use std::collections::{BTreeMap, HashMap, HashSet};
+-
+-#[macro_use]
+-extern crate honggfuzz;
+-
+-macro_rules! fuzz_types {
+-    (
+-        $data:ident;
+-        $( $type:ty, )*
+-    ) => {
+-        $(
+-            let _ = <$type>::deserialize(&mut &$data[..]);
+-        )*
+-    };
+-
+-}
+-
+-fn main() {
+-    loop {
+-        fuzz!(|data: &[u8]| {
+-            fuzz_types!(
+-                data;
+-                u32,
+-                u64,
+-                i32,
+-                i64,
+-                f32,
+-                f64,
+-                String,
+-                (u32,u64,i32,i64,f32,f64,String,),
+-                std::net::SocketAddrV4,
+-                std::net::SocketAddrV6,
+-                std::net::Ipv4Addr,
+-                std::net::Ipv6Addr,
+-                Box<[u8]>,
+-                Option<u64>,
+-                Option<String>,
+-                Option<Vec<u8>>,
+-                Option<Vec<u64>>,
+-                Option<Box<[u8]>>,
+-                Option<std::net::SocketAddrV4>,
+-                Vec<u64>,
+-                Vec<String>,
+-                Vec<Vec<u8>>,
+-                Vec<Vec<u64>>,
+-                Vec<Box<[u8]>>,
+-                Vec<std::net::SocketAddrV4>,
+-                HashSet<u64>,
+-                HashSet<String>,
+-                HashSet<Vec<u8>>,
+-                HashSet<Vec<u64>>,
+-                HashSet<Box<[u8]>>,
+-                HashSet<std::net::SocketAddrV4>,
+-                HashMap<u64, u64>,
+-                HashMap<String, String>,
+-                HashMap<std::net::SocketAddrV4, String>,
+-                HashMap<Vec<u8>, Vec<u8>>,
+-                HashMap<Box<[u8]>, HashMap<String, String>>,
+-                BTreeMap<u64, u64>,
+-                BTreeMap<String, String>,
+-                BTreeMap<Vec<u8>, Vec<u8>>,
+-                BTreeMap<Box<[u8]>, BTreeMap<String, String>>,
+-            );
+-        });
+-    }
+-}
+diff --git a/fuzz/fuzz_targets/main.rs b/fuzz/fuzz_targets/main.rs
+new file mode 100644
+index 00000000..45586521
+--- /dev/null
++++ b/fuzz/fuzz_targets/main.rs
+@@ -0,0 +1,63 @@
++#![no_main]
++#[macro_use] extern crate libfuzzer_sys;
++
++use borsh::BorshDeserialize;
++use std::collections::{BTreeMap, HashMap, HashSet};
++
++macro_rules! fuzz_types {
++    (
++        $data:ident;
++        $( $type:ty, )*
++    ) => {
++        $(
++            let _ = <$type>::deserialize(&mut &$data[..]);
++        )*
++    };
++
++}
++
++fuzz_target!(|data: &[u8]| {
++    fuzz_types!(
++        data;
++        u32,
++        u64,
++        i32,
++        i64,
++        f32,
++        f64,
++        String,
++        (u32,u64,i32,i64,f32,f64,String,),
++        std::net::SocketAddrV4,
++        std::net::SocketAddrV6,
++        std::net::Ipv4Addr,
++        std::net::Ipv6Addr,
++        Box<[u8]>,
++        Option<u64>,
++        Option<String>,
++        Option<Vec<u8>>,
++        Option<Vec<u64>>,
++        Option<Box<[u8]>>,
++        Option<std::net::SocketAddrV4>,
++        Vec<u64>,
++        Vec<String>,
++        Vec<Vec<u8>>,
++        Vec<Vec<u64>>,
++        Vec<Box<[u8]>>,
++        Vec<std::net::SocketAddrV4>,
++        HashSet<u64>,
++        HashSet<String>,
++        HashSet<Vec<u8>>,
++        HashSet<Vec<u64>>,
++        HashSet<Box<[u8]>>,
++        HashSet<std::net::SocketAddrV4>,
++        HashMap<u64, u64>,
++        HashMap<String, String>,
++        HashMap<std::net::SocketAddrV4, String>,
++        HashMap<Vec<u8>, Vec<u8>>,
++        HashMap<Box<[u8]>, HashMap<String, String>>,
++        BTreeMap<u64, u64>,
++        BTreeMap<String, String>,
++        BTreeMap<Vec<u8>, Vec<u8>>,
++        BTreeMap<Box<[u8]>, BTreeMap<String, String>>,
++    );
++});
+-- 
+2.46.0
+

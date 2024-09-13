@@ -1,0 +1,81 @@
+[package]
+name = "wasmfuzz"
+version = "0.1.0"
+authors = []
+license = "Apache-2.0 OR MIT"
+edition = "2021"
+
+[dependencies]
+wat = "1.0"
+wasmparser = "0.214"
+wasm-encoder = "0.214"
+rustc-demangle = "0.1"
+clap = { version = "4.4", features = ["derive"] }
+md5 = "0.7"
+rand = "0.8"
+bitvec = "1.0.1"
+target-lexicon = "0.12"
+speedy = "0.8"
+colored = "2.1"
+anyhow = "1.0"
+dirs = "5.0"
+serde = "1.0"
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+gimli = { version = "0.31" }
+symbolic = { version = "12.10.0", features = ["demangle", "symcache"] }
+rustc-hash = "2.0.0"
+hexyl = "0.14"
+humantime = "2.1"
+humansize = "2.1"
+crossbeam-channel = "0.5"
+ordered-float = { version = "4.2", features = ["speedy"] }
+decurse = "0.0.4"
+rustix = { version = "0.38", features = ["mm", "param"] }
+object = { version = "0.36", default-features = false, features = [
+    "read_core",
+    "compression",
+    "wasm",
+] }
+ouroboros = "0.18.3"
+libafl = { git = "https://github.com/AFLplusplus/LibAFL", rev = "6df1b34375d76e23d285149513de662f1fc879ab", default-features = false, features = [
+    "std",
+    "rand_trait",
+] }
+libafl_bolts = { git = "https://github.com/AFLplusplus/LibAFL", rev = "6df1b34375d76e23d285149513de662f1fc879ab" }
+wasmtime = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "wasmfuzz-fuzzing24-prelim", default-features = false, features = [
+    "runtime",
+] }
+cranelift = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "wasmfuzz-fuzzing24-prelim", features = [
+    "jit",
+    "module",
+    "native",
+    "frontend",
+] }
+
+# feat:with_mimalloc
+mimalloc = { version = "0.1", optional = true, default-features = false }
+
+# feat:reports
+askama = { version = "0.12", optional = true }
+lcov = { version = "0.8", optional = true }
+syntect = { version = "5.1", optional = true }
+
+# feat:compressed_harnesses
+zstd = { version = "0.13.1", optional = true }
+
+
+[features]
+default = ["reports", "compressed_harnesses"]
+reports = ["askama", "lcov", "syntect"]
+with_mimalloc = ["mimalloc"]
+compressed_harnesses = ["zstd"]
+
+
+[profile.dev.package."cranelift"]
+opt-level = 3
+[profile.dev.package."cranelift-codegen"]
+opt-level = 3
+[profile.dev.package."regalloc2"]
+opt-level = 3
+[profile.dev.package."libafl"]
+opt-level = 3

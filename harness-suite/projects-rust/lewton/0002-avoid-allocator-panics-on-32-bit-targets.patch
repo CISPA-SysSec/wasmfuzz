@@ -1,0 +1,40 @@
+From 92ac645d0adf2f8f855ed06a224738cdc5241a30 Mon Sep 17 00:00:00 2001
+Date: Mon, 17 Jun 2024 23:42:54 +0200
+Subject: [PATCH 2/2] avoid allocator panics on 32-bit targets
+
+---
+ src/header.rs | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/header.rs b/src/header.rs
+index 42b03a8..f8689a7 100644
+--- a/src/header.rs
++++ b/src/header.rs
+@@ -314,15 +314,24 @@ pub fn read_header_comment(packet :&[u8]) -> Result<CommentHeader, HeaderReadErr
+ 	}
+ 	// First read the vendor string
+ 	let vendor_length = try!(rdr.read_u32::<LittleEndian>()) as usize;
++	if vendor_length > packet.len() {
++		return Err(HeaderReadError::EndOfPacket);
++	}
+ 	let mut vendor_buf = vec![0; vendor_length]; // TODO fix this, we initialize memory for NOTHING!!! Out of some reason, this is seen as "unsafe" by rustc.
+ 	try!(rdr.read_exact(&mut vendor_buf));
+ 	let vendor = try!(String::from_utf8(vendor_buf));
+ 
+ 	// Now read the comments
+ 	let comment_count = try!(rdr.read_u32::<LittleEndian>()) as usize;
++	if comment_count > packet.len() {
++		return Err(HeaderReadError::EndOfPacket);
++	}
+ 	let mut comment_list = Vec::with_capacity(comment_count);
+ 	for _ in 0 .. comment_count {
+ 		let comment_length = try!(rdr.read_u32::<LittleEndian>()) as usize;
++		if comment_length > packet.len() {
++			return Err(HeaderReadError::EndOfPacket);
++		}
+ 		let mut comment_buf = vec![0; comment_length]; // TODO fix this, we initialize memory for NOTHING!!! Out of some reason, this is seen as "unsafe" by rustc.
+ 		try!(rdr.read_exact(&mut comment_buf));
+ 		let comment = match String::from_utf8(comment_buf) {
+-- 
+2.46.0
+

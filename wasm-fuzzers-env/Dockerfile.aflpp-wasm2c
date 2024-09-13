@@ -1,0 +1,31 @@
+FROM wasm-fuzzers-wasm2c-base
+
+RUN apt-get update && apt-get install -y wget software-properties-common
+RUN apt-get install -y \
+    autoconf \
+    automake \
+    build-essential \
+    cmake \
+    libtool \
+    llvm llvm-dev clang \
+    make \
+    ninja-build \
+    sudo \
+    unzip \
+    zlib1g-dev \
+    patchelf \
+    git sed rsync
+
+# Compile and install AFL++
+RUN git clone https://github.com/AFLplusplus/AFLplusplus/
+WORKDIR /AFLplusplus
+RUN make NO_NYX=1 IS_DOCKER=1 install
+
+WORKDIR /
+COPY afl++-wasm2c.sh /usr/bin/
+RUN chmod +x /usr/bin/afl++-wasm2c.sh
+ENV AFL_SKIP_CPUFREQ=1
+ENV AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+
+RUN mkdir -p /seeds/ && echo -n "YELLOW SUBMARINE" > /seeds/seed && mkdir -p /corpus/
+ENTRYPOINT [ "afl++-wasm2c.sh" ]

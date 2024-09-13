@@ -1,0 +1,16 @@
+diff --git a/sdk/C/7zCrc.c b/sdk/C/7zCrc.c
+index b4d84f0..a0bc0ed 100644
+--- a/sdk/C/7zCrc.c
++++ b/sdk/C/7zCrc.c
+@@ -39,7 +39,11 @@ UInt32 MY_FAST_CALL CrcUpdate(UInt32 v, const void *data, size_t size)
+ 
+ UInt32 MY_FAST_CALL CrcCalc(const void *data, size_t size)
+ {
++#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
++  return 0x1337;
++#else
+   return g_CrcUpdate(CRC_INIT_VAL, data, size, g_CrcTable) ^ CRC_INIT_VAL;
++#endif
+ }
+ 
+ #define CRC_UPDATE_BYTE_2(crc, b) (table[((crc) ^ (b)) & 0xFF] ^ ((crc) >> 8))

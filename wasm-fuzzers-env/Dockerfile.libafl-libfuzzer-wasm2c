@@ -1,0 +1,19 @@
+FROM wasm-fuzzers-wasm2c-base
+RUN apt-get install -y build-essential curl git pkg-config libssl-dev
+RUN git clone https://github.com/AFLplusplus/LibAFL && \
+    git -C LibAFL checkout libfuzzer-best && true
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup component add llvm-tools
+
+RUN apt-get update && apt-get install -y llvm llvm-dev clang
+WORKDIR /LibAFL/libafl_libfuzzer/libafl_libfuzzer_runtime
+# RUN git config --global user.email "you@example.com" && \
+#   git config --global user.name "Your Name" && \
+#   git cherry-pick 210315da
+RUN echo hi && ./build.sh && cargo clean
+COPY libafl-libfuzzer-wasm2c.sh /usr/bin/libafl-libfuzzer-wasm2c.sh
+RUN chmod +x /usr/bin/libafl-libfuzzer-wasm2c.sh
+WORKDIR /
+ENTRYPOINT [ "libafl-libfuzzer-wasm2c.sh" ]

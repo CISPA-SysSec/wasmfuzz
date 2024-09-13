@@ -1,0 +1,17 @@
+diff --git a/common-alloc.h b/common-alloc.h
+index 0a52d75..5ed924c 100644
+--- a/common-alloc.h
++++ b/common-alloc.h
+@@ -27,10 +27,10 @@
+ 
+ #if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+ 
+-// Arbitrary limit of 2 GByte for memory allocations. Used to prevent the
++// Arbitrary limit of 512 MB for memory allocations. Used to prevent the
+ // MemorySanitizer from aborting with errors like "requested allocation size
+ // 0xffffffffffffffff exceeds maximum supported size of 0x200000000".
+-static const size_t kMaxAllowedMemory = 2 * 1024 * 1024 * 1024L;
++static const size_t kMaxAllowedMemory = 512 << 20; // 512 MB
+ 
+ static void *LzmaAlloc(ISzAllocPtr p, size_t size) {
+   if (size > kMaxAllowedMemory) {

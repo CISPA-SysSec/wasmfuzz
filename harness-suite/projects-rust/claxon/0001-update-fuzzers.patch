@@ -1,0 +1,101 @@
+From 3aea639233d064c2d72e078ebe41e29184605336 Mon Sep 17 00:00:00 2001
+Date: Tue, 11 Jun 2024 00:47:51 +0200
+Subject: [PATCH] update fuzzers
+
+---
+ fuzz/fuzzers/decode_full.rs         | 5 +++--
+ fuzz/fuzzers/decode_header.rs       | 5 +++--
+ fuzz/fuzzers/decode_single_block.rs | 5 +++--
+ fuzz/fuzzers/diff.rs                | 6 +++---
+ 4 files changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/fuzz/fuzzers/decode_full.rs b/fuzz/fuzzers/decode_full.rs
+index d08311e..db34a26 100644
+--- a/fuzz/fuzzers/decode_full.rs
++++ b/fuzz/fuzzers/decode_full.rs
+@@ -7,13 +7,14 @@
+ 
+ #![no_main]
+ 
++#[macro_use]
+ extern crate libfuzzer_sys;
+ extern crate claxon;
+ 
+ use std::io::Cursor;
+ 
+-#[export_name="rust_fuzzer_test_input"]
+-pub extern fn go(data: &[u8]) {
++fuzz_target!(|data: &[u8]| go(data));
++fn go(data: &[u8]) {
+     let cursor = Cursor::new(data);
+     let mut reader = match claxon::FlacReader::new(cursor) {
+         Ok(r) => r,
+diff --git a/fuzz/fuzzers/decode_header.rs b/fuzz/fuzzers/decode_header.rs
+index 4a19ef1..4ffe29b 100644
+--- a/fuzz/fuzzers/decode_header.rs
++++ b/fuzz/fuzzers/decode_header.rs
+@@ -7,13 +7,14 @@
+ 
+ #![no_main]
+ 
++#[macro_use]
+ extern crate libfuzzer_sys;
+ extern crate claxon;
+ 
+ use std::io::Cursor;
+ 
+-#[export_name="rust_fuzzer_test_input"]
+-pub extern fn go(data: &[u8]) {
++fuzz_target!(|data: &[u8]| go(data));
++fn go(data: &[u8]) {
+     let cursor = Cursor::new(data);
+     match claxon::FlacReader::new(cursor) {
+         Ok(..) => {}
+diff --git a/fuzz/fuzzers/decode_single_block.rs b/fuzz/fuzzers/decode_single_block.rs
+index 048ea8f..0ff9827 100644
+--- a/fuzz/fuzzers/decode_single_block.rs
++++ b/fuzz/fuzzers/decode_single_block.rs
+@@ -7,13 +7,14 @@
+ 
+ #![no_main]
+ 
++#[macro_use]
+ extern crate libfuzzer_sys;
+ extern crate claxon;
+ 
+ use std::io::Cursor;
+ 
+-#[export_name="rust_fuzzer_test_input"]
+-pub extern fn go(data: &[u8]) {
++fuzz_target!(|data: &[u8]| go(data));
++fn go(data: &[u8]) {
+     let cursor = Cursor::new(data);
+     let mut reader = match claxon::FlacReader::new(cursor) {
+         Ok(r) => r,
+diff --git a/fuzz/fuzzers/diff.rs b/fuzz/fuzzers/diff.rs
+index 10b1a57..d1a7c4d 100644
+--- a/fuzz/fuzzers/diff.rs
++++ b/fuzz/fuzzers/diff.rs
+@@ -6,7 +6,7 @@
+ // A copy of the License has been included in the root of the repository.
+ 
+ #![no_main]
+-
++#[macro_use]
+ extern crate libfuzzer_sys;
+ extern crate claxon;
+ 
+@@ -14,8 +14,8 @@ use std::io::Seek;
+ use std::io;
+ use std::iter;
+ 
+-#[export_name="rust_fuzzer_test_input"]
+-pub extern fn go(data: &[u8]) {
++fuzz_target!(|data: &[u8]| go(data));
++fn go(data: &[u8]) {
+     // We want two distinct marker bytes.
+     if data.len() < 2 || data[0] == data[1] {
+         return
+-- 
+2.46.0
+

@@ -1,0 +1,65 @@
+diff --git a/gix-config-value/fuzz/Cargo.toml b/gix-config-value/fuzz/Cargo.toml
+index 0a3d571f6..6cf63b403 100644
+--- a/gix-config-value/fuzz/Cargo.toml
++++ b/gix-config-value/fuzz/Cargo.toml
+@@ -5,7 +5,7 @@ publish = false
+ edition = "2021"
+ 
+ [package.metadata]
+-cargo-fuzz = true
++cargo-fuzz = false
+ 
+ [dependencies]
+ libfuzzer-sys = "0.4"
+diff --git a/gix-config/fuzz/Cargo.toml b/gix-config/fuzz/Cargo.toml
+index 06762f35c..0e7ab751c 100644
+--- a/gix-config/fuzz/Cargo.toml
++++ b/gix-config/fuzz/Cargo.toml
+@@ -7,7 +7,7 @@ publish = false
+ edition = "2021"
+ 
+ [package.metadata]
+-cargo-fuzz = true
++cargo-fuzz = false
+ 
+ [dependencies]
+ libfuzzer-sys = "0.4.7"
+diff --git a/gix-pathspec/fuzz/Cargo.toml b/gix-pathspec/fuzz/Cargo.toml
+index e1d3e3e3d..63192f10e 100644
+--- a/gix-pathspec/fuzz/Cargo.toml
++++ b/gix-pathspec/fuzz/Cargo.toml
+@@ -6,7 +6,7 @@ publish = false
+ edition = "2021"
+ 
+ [package.metadata]
+-cargo-fuzz = true
++cargo-fuzz = false
+ 
+ [dependencies]
+ anyhow = "1.0.77"
+diff --git a/gix-ref/fuzz/Cargo.toml b/gix-ref/fuzz/Cargo.toml
+index 268e1967e..af5f3a85a 100644
+--- a/gix-ref/fuzz/Cargo.toml
++++ b/gix-ref/fuzz/Cargo.toml
+@@ -5,7 +5,7 @@ publish = false
+ edition = "2021"
+ 
+ [package.metadata]
+-cargo-fuzz = true
++cargo-fuzz = false
+ 
+ [dependencies]
+ anyhow = "1.0.75"
+diff --git a/gix-url/fuzz/Cargo.toml b/gix-url/fuzz/Cargo.toml
+index 5a6a5e0a8..e6943965a 100644
+--- a/gix-url/fuzz/Cargo.toml
++++ b/gix-url/fuzz/Cargo.toml
+@@ -6,7 +6,7 @@ publish = false
+ edition = "2021"
+ 
+ [package.metadata]
+-cargo-fuzz = true
++cargo-fuzz = false
+ 
+ [dependencies]
+ anyhow = "1.0.76"

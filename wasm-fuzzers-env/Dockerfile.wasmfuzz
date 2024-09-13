@@ -1,0 +1,7 @@
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y wget
+RUN wget -nv "https://TODO/wasmfuzz.`uname -m`" -O /usr/bin/wasmfuzz && chmod +x /usr/bin/wasmfuzz
+COPY wasmfuzz.sh /usr/bin/
+RUN chmod +x /usr/bin/wasmfuzz.sh
+RUN mkdir -p /seeds/ && echo -n "YELLOW SUBMARINE" > /seeds/seed && mkdir -p /corpus/
+ENTRYPOINT [ "wasmfuzz.sh" ]

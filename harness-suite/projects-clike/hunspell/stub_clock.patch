@@ -1,0 +1,14 @@
+diff --git a/src/hunspell/suggestmgr.cxx b/src/hunspell/suggestmgr.cxx
+index 5f480f9..58bdd4b 100644
+--- a/src/hunspell/suggestmgr.cxx
++++ b/src/hunspell/suggestmgr.cxx
+@@ -84,6 +84,9 @@ const w_char W_VLINE = {'\0', '|'};
+ #define MAX_CHAR_DISTANCE 4
+ #define MAXWORDUTF8LEN (MAXWORDLEN * 3)
+ 
++
++clock_t clock() { return 0xdeadbeef; }
++
+ SuggestMgr::SuggestMgr(const std::string& tryme, unsigned int maxn, AffixMgr* aptr) {
+   // register affix manager and check in string of chars to
+   // try when building candidate suggestions

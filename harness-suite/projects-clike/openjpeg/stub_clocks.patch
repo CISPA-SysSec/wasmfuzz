@@ -1,0 +1,108 @@
+diff --git a/src/bin/jp2/opj_compress.c b/src/bin/jp2/opj_compress.c
+index 212f144..8fbadcf 100644
+--- a/src/bin/jp2/opj_compress.c
++++ b/src/bin/jp2/opj_compress.c
+@@ -52,6 +52,8 @@
+ #include <dirent.h>
+ #endif /* _WIN32 */
+ 
++#include <strings.h>
++#if 0
+ #ifdef _WIN32
+ #include <windows.h>
+ #define strcasecmp _stricmp
+@@ -62,6 +64,7 @@
+ #include <sys/resource.h>
+ #include <sys/times.h>
+ #endif /* _WIN32 */
++#endif
+ 
+ #include "opj_apps_config.h"
+ #include "openjpeg.h"
+@@ -1885,6 +1888,7 @@ static void info_callback(const char *msg, void *client_data)
+ 
+ static OPJ_FLOAT64 opj_clock(void)
+ {
++#if 0
+ #ifdef _WIN32
+     /* _WIN32: use QueryPerformance (very accurate) */
+     LARGE_INTEGER freq, t ;
+@@ -1908,6 +1912,8 @@ static OPJ_FLOAT64 opj_clock(void)
+     return (procTime + (OPJ_FLOAT64)(t.ru_utime.tv_usec + t.ru_stime.tv_usec) *
+             1e-6) ;
+ #endif
++#endif
++    return 0.0;
+ }
+ 
+ 
+diff --git a/src/bin/jp2/opj_decompress.c b/src/bin/jp2/opj_decompress.c
+index ba26bfb..602d408 100644
+--- a/src/bin/jp2/opj_decompress.c
++++ b/src/bin/jp2/opj_decompress.c
+@@ -52,6 +52,8 @@
+ #include <dirent.h>
+ #endif /* _WIN32 */
+ 
++#include <strings.h>
++#if 0
+ #ifdef _WIN32
+ #include <windows.h>
+ #define strcasecmp _stricmp
+@@ -62,6 +64,7 @@
+ #include <sys/resource.h>
+ #include <sys/times.h>
+ #endif /* _WIN32 */
++#endif
+ 
+ #include "openjpeg.h"
+ #include "opj_getopt.h"
+@@ -990,6 +993,7 @@ int parse_DA_values(char* inArg, unsigned int *DA_x0, unsigned int *DA_y0,
+ 
+ static OPJ_FLOAT64 opj_clock(void)
+ {
++#if 0
+ #ifdef _WIN32
+     /* _WIN32: use QueryPerformance (very accurate) */
+     LARGE_INTEGER freq, t ;
+@@ -1018,6 +1022,8 @@ static OPJ_FLOAT64 opj_clock(void)
+     return (procTime + (OPJ_FLOAT64)(t.ru_utime.tv_usec + t.ru_stime.tv_usec) *
+             1e-6) ;
+ #endif
++#endif
++    return 0;
+ }
+ 
+ /* -------------------------------------------------------------------------- */
+diff --git a/src/lib/openjp2/opj_clock.c b/src/lib/openjp2/opj_clock.c
+index 24f79a9..3d64db9 100644
+--- a/src/lib/openjp2/opj_clock.c
++++ b/src/lib/openjp2/opj_clock.c
+@@ -31,6 +31,7 @@
+ 
+ #include "opj_includes.h"
+ 
++#if 0
+ #ifdef _WIN32
+ #include <windows.h>
+ #else
+@@ -38,9 +39,11 @@
+ #include <sys/resource.h>
+ #include <sys/times.h>
+ #endif /* _WIN32 */
++#endif
+ 
+ OPJ_FLOAT64 opj_clock(void)
+ {
++#if 0
+ #ifdef _WIN32
+     /* _WIN32: use QueryPerformance (very accurate) */
+     LARGE_INTEGER freq, t ;
+@@ -63,5 +66,7 @@ OPJ_FLOAT64 opj_clock(void)
+     return (procTime + (OPJ_FLOAT64)(t.ru_utime.tv_usec + t.ru_stime.tv_usec) *
+             1e-6) ;
+ #endif
++#endif
++    return 0.0;
+ }
+ 

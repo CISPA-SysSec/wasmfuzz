@@ -1,0 +1,31 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 3105492..ace18ea 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,5 +1,6 @@
+ [workspace]
+ members = ["crates/*"]
++exclude = ["crates/toml_edit_fuzz"]
+ resolver = "2"
+ 
+ [workspace.package]
+diff --git a/crates/toml_edit_fuzz/Cargo.toml b/crates/toml_edit_fuzz/Cargo.toml
+index e2abccf..29e3c2d 100644
+--- a/crates/toml_edit_fuzz/Cargo.toml
++++ b/crates/toml_edit_fuzz/Cargo.toml
+@@ -1,8 +1,7 @@
+ [package]
+ name = "toml_edit_fuzz"
+ version = "0.0.0"
+-edition.workspace = true
+-rust-version.workspace = true
++edition = "2021"
+ publish = false
+ 
+ [package.metadata.release]
+@@ -20,5 +19,3 @@ name = "parse_document"
+ path = "parse_document.rs"
+ test = false
+ 
+-[lints]
+-workspace = true

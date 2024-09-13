@@ -1,0 +1,812 @@
+use std::{
+    path::{Path, PathBuf},
+    sync::{mpsc, Arc, RwLock},
+    time::Instant,
+};
+
+use clap::Parser;
+use humantime::Duration;
+use rand::{prelude::*, rngs::StdRng, Rng, SeedableRng};
+
+use crate::{
+    instrumentation::{
+        BBCoveragePass, Edge, EdgeCoveragePass, EdgeShortestExecutionTracePass, FeedbackLattice,
+        FuncIdx, FunctionCoveragePass, Passes,
+    },
+    ir::{Location, ModuleSpec},
+    jit::{
+        FeedbackOptions, JitFuzzingSession, JitFuzzingSessionBuilder, PassesGen, RunResult, Stats,
+        SwarmConfig,
+    },
+    HashSet,
+};
+
+#[derive(Debug, Parser, Clone)]
+pub(crate) struct CliOpts {
+    #[clap(flatten)]
+    pub g: super::opts::GeneralOpts,
+    #[clap(long, default_value = "2m")]
+    pub config_interval: Duration,
+    #[clap(long)]
+    pub timeout: Option<Duration>,
+    #[clap(long)]
+    pub cores: Option<usize>,
+    // Delay thread startup in multi-core setting. Can help with peak memory usage / tames the thundering herd.
+    #[clap(long, default_value = "100ms")]
+    pub stagger_cores: Duration,
+
+    #[cfg(feature = "reports")]
+    #[clap(long)]
+    pub live_html_coverage: Option<PathBuf>,
+
+    #[clap(long)]
+    pub experiment: Option<Experiment>,
+
+    #[clap(long, default_value = "30m")]
+    pub expire_corpus_after: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Experiment {
+    UseBusInputs,
+    SwarmFocusEdge,
+}
+impl std::str::FromStr for Experiment {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "use-bus-inputs" => Self::UseBusInputs,
+            "swarm-focus-edge" => Self::SwarmFocusEdge,
+            _ => return Err("unknown Experiment".to_owned()),
+        })
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct OrchestratorHandle {
+    // pub Arc<Mutex<Orchestrator>>
+    chan: mpsc::Sender<(OrcMessage, mpsc::SyncSender<OrcMessage>)>,
+    corpus: Arc<RwLock<SharedCorpus>>,
+}
+
+enum OrcMessage {
+    ReqSuggest,
+    ReqReportFinds(Vec<Vec<u8>>),
+    ReqShouldContinue,
+    ReqShutdown,
+    ReqLoadCorpus(Vec<Vec<u8>>),
+
+    RespOk,
+    RespSuggest(Config),
+    RespShouldContinue(bool),
+    RespInvalid,
+}
+
+impl OrchestratorHandle {
+    pub fn new(module: Arc<ModuleSpec>, opts: CliOpts) -> Self {
+        let (tx, rx) = mpsc::channel::<(OrcMessage, mpsc::SyncSender<OrcMessage>)>();
+        let corpus = SharedCorpus::new(&opts);
+        let corpus_ = corpus.clone();
+        let _thread_handle = std::thread::spawn(move || {
+            let mut orc = Orchestrator::new(module, opts, corpus_);
+            while let Ok((req, tx)) = rx.recv() {
+                let resp = match req {
+                    OrcMessage::ReqSuggest => OrcMessage::RespSuggest(orc.suggest()),
+                    OrcMessage::ReqShouldContinue => {
+                        OrcMessage::RespShouldContinue(orc.should_continue())
+                    }
+                    OrcMessage::ReqReportFinds(finds) => {
+                        let mut update_live_coverage = false;
+                        for input in finds {
+                            let res = orc.report_find(&input);
+                            update_live_coverage |= res.map(|x| x.novel_coverage).unwrap_or(false);
+                        }
+                        orc.corpus.write().unwrap().cull_and_update_weights();
+                        if update_live_coverage {
+                            orc.update_live_coverage();
+                            orc.frontier_bbs = orc.compute_frontier().into_iter().collect();
+                        }
+                        OrcMessage::RespOk
+                    }
+                    OrcMessage::ReqShutdown => {
+                        tx.send(OrcMessage::RespOk).unwrap();
+                        break;
+                    }
+                    OrcMessage::ReqLoadCorpus(corpus) => {
+                        let _ = orc.load_corpus(&corpus);
+                        orc.update_live_coverage();
+                        OrcMessage::RespOk
+                    }
+                    _ => OrcMessage::RespInvalid,
+                };
+                tx.send(resp).unwrap();
+            }
+        });
+
+        Self { chan: tx, corpus }
+    }
+
+    fn req(&self, req: OrcMessage) -> OrcMessage {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.chan.send((req, tx)).unwrap();
+        rx.recv().unwrap()
+    }
+
+    pub fn suggest(&self) -> Config {
+        let resp = self.req(OrcMessage::ReqSuggest);
+        match resp {
+            OrcMessage::RespSuggest(config) => config,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn should_continue(&self) -> bool {
+        let resp = self.req(OrcMessage::ReqShouldContinue);
+        match resp {
+            OrcMessage::RespShouldContinue(v) => v,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn shutdown(&self) {
+        self.req(OrcMessage::ReqShutdown);
+    }
+
+    pub fn report_finds(&self, inputs: Vec<Vec<u8>>) {
+        let resp = self.req(OrcMessage::ReqReportFinds(inputs));
+        assert!(matches!(resp, OrcMessage::RespOk));
+    }
+
+    pub fn fetch_corpus(&self) -> Vec<Arc<[u8]>> {
+        self.corpus.read().unwrap().sample(&mut thread_rng())
+    }
+
+    pub fn load_corpus(&self, seed_corpus: Vec<Vec<u8>>) {
+        let resp = self.req(OrcMessage::ReqLoadCorpus(seed_corpus));
+        assert!(matches!(resp, OrcMessage::RespOk));
+    }
+}
+
+struct Entry {
+    input: Arc<[u8]>,
+    weight: f32,
+    last_seen_used: Instant,
+}
+
+pub(crate) struct SharedCorpus {
+    disk_path: Option<PathBuf>,
+    entries: crate::HashMap<Box<[u8]>, Entry>,
+    // entries: Vec<Entry>,
+    // seen: HashSet<Box<[u8]>>,
+    // last_seen: crate::HashMap<Box<[u8]>, Instant>,
+    soft_cull_threshold: std::time::Duration,
+    hard_cull_threshold: std::time::Duration,
+}
+
+impl SharedCorpus {
+    fn new(opts: &CliOpts) -> Arc<RwLock<Self>> {
+        Arc::new(RwLock::new(Self {
+            disk_path: opts.g.out_dir(),
+            entries: crate::HashMap::default(),
+            soft_cull_threshold: *opts.config_interval,
+            hard_cull_threshold: *opts.expire_corpus_after,
+        }))
+    }
+    // TODO: re-scan directory periodically?
+
+    fn cull_and_update_weights(&mut self) {
+        let Some(max) = self.entries.values().map(|e| e.last_seen_used).max() else {
+            return;
+        };
+
+        if let Some(disk_path) = self.disk_path.as_ref() {
+            for e in self.entries.values() {
+                if max.duration_since(e.last_seen_used) >= self.hard_cull_threshold {
+                    let p = Self::get_inp_path(disk_path, &e.input);
+                    eprintln!(
+                        "removing {:?}: last used {:?} ago",
+                        p,
+                        humantime::Duration::from(e.last_seen_used.elapsed())
+                    );
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+
+        self.entries
+            .retain(|_, e| max.duration_since(e.last_seen_used) < self.hard_cull_threshold);
+
+        for e in self.entries.values_mut() {
+            if max.duration_since(e.last_seen_used) < self.soft_cull_threshold {
+                e.weight = 1.0;
+            } else {
+                let t = max.duration_since(e.last_seen_used) - self.soft_cull_threshold;
+                let t = t.as_secs_f64()
+                    / (self.hard_cull_threshold - self.soft_cull_threshold).as_secs_f64();
+                e.weight = 1.0 - (t as f32);
+            }
+        }
+    }
+
+    fn insert(&mut self, input: &[u8], now: Instant) -> bool {
+        if let Some(e) = self.entries.get_mut(input) {
+            e.last_seen_used = now;
+            false
+        } else {
+            self.entries.insert(
+                input.to_vec().into_boxed_slice(),
+                Entry {
+                    input: input.to_vec().into_boxed_slice().into(),
+                    last_seen_used: now,
+                    weight: 1.0,
+                },
+            );
+
+            if let Some(disk_path) = self.disk_path.as_ref() {
+                let p = Self::get_inp_path(disk_path, input);
+                if !p.is_file() {
+                    let _ = std::fs::create_dir_all(disk_path);
+                    let _ = std::fs::write(&p, input);
+                    println!("saved {p:?}");
+                }
+            }
+            true
+        }
+    }
+
+    fn sample<R: RngCore>(&self, rng: &mut R) -> Vec<Arc<[u8]>> {
+        let mut res = Vec::new();
+        for e in self.entries.values() {
+            if e.weight >= rng.gen() {
+                res.push(e.input.clone());
+            }
+        }
+        res.shuffle(rng);
+        // dbg!(res.len(), self.entries.len());
+        res
+    }
+
+    fn get_inp_path(base_path: &Path, input: &[u8]) -> PathBuf {
+        let mut inp_path = base_path.to_path_buf();
+        let inphash = md5::compute(input);
+        inp_path.push(format!("{inphash:x}"));
+        inp_path
+    }
+}
+
+// `Orchestrator` suggests fuzzer configurations over time.
+// TODO: implement some kind of bandit for config options?
+// TODO: suggest timelines?
+// TODO: keep track of
+//       * covered funcs/edges
+//       * covered funcs/edges that are not covered in every input <- others aren't useful scopes
+//       * time-to-reach-edge
+// TODO: use this to suggest _scopes_ with time and memory limits
+// TODO: maintain a set of _interesting_ edges? => ones that seem to affect control flow
+pub(crate) struct Orchestrator {
+    start: Instant,
+    last_func_find: Instant,
+    codecov_sess: JitFuzzingSession,
+    // func_reachcounts: crate::HashMap<FuncIdx, u32>,
+    // edge_reachcounts: crate::HashMap<Edge, u32>,
+    // func_min_fuel: crate::HashMap<FuncIdx, u64>,
+    // func_min_memory: crate::HashMap<FuncIdx, u64>,
+    module: Arc<ModuleSpec>,
+    rng: StdRng,
+    found_crashes: bool,
+    opts: CliOpts,
+    corpus: Arc<RwLock<SharedCorpus>>,
+    init_funcs: HashSet<FuncIdx>,
+    init_edges: HashSet<Edge>,
+    config_epoch: usize,
+    frontier_bbs: Vec<Location>,
+}
+
+impl Orchestrator {
+    fn new(module: Arc<ModuleSpec>, opts: CliOpts, corpus: Arc<RwLock<SharedCorpus>>) -> Self {
+        let now = Instant::now();
+        let mut codecov_sess = JitFuzzingSessionBuilder::new(module.clone())
+            .feedback(FeedbackOptions {
+                live_funcs: true,
+                live_bbs: true,
+                live_edges: true,
+                edge_shortest_trace: true,
+                func_input_size_cyclic: true,
+                ..FeedbackOptions::nothing()
+            })
+            .instruction_limit(Some(750_000_000))
+            .input_size_limit(u16::MAX as u32)
+            .build();
+        codecov_sess.run(b"DUMMY", &mut Stats::default());
+        let edges_pass = codecov_sess.get_pass::<EdgeCoveragePass>();
+        let funcs_pass = codecov_sess.get_pass::<FunctionCoveragePass>();
+        let init_edges = edges_pass.coverage.iter_covered_keys().collect();
+        let init_funcs = funcs_pass.coverage.iter_covered_keys().collect();
+        Self {
+            start: now,
+            last_func_find: now,
+            opts,
+            codecov_sess,
+            // func_reachcounts: Default::default(),
+            // edge_reachcounts: Default::default(),
+            module,
+            rng: StdRng::from_entropy(),
+            found_crashes: false,
+            corpus,
+            init_funcs,
+            init_edges,
+            config_epoch: 0,
+            frontier_bbs: Vec::new(),
+        }
+    }
+
+    pub fn load_corpus(&mut self, inputs: &[Vec<u8>]) -> Result<(), ()> {
+        for (i, input) in inputs.iter().enumerate() {
+            if i > 16 && (i + 1).is_power_of_two() {
+                let edges = self.codecov_sess.get_edge_cov().unwrap_or(0);
+                eprintln!(
+                    "loading corpus: {}/{} entries [edges: {edges:>5}] ...",
+                    i + 1,
+                    inputs.len()
+                );
+            }
+            // saves all inputs
+            let res = self.add_corpus(input);
+            if let Some(res) = res {
+                if res.is_crash() {
+                    eprintln!("load_corpus with crashing input! {:?}", res);
+                    return Err(());
+                }
+            }
+        }
+        if !inputs.is_empty() {
+            let edges = self.codecov_sess.get_edge_cov().unwrap_or(0);
+            eprintln!(
+                "done loading: {} entries [edges: {edges:>5}] ...",
+                inputs.len(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn report_find(&mut self, /*config: &Config,*/ input: &[u8]) -> Option<RunResult> {
+        // TODO: apply some kind of bandit on config?
+        let res = self.add_corpus(input);
+
+        if let Some(path) = self.opts.g.out_dir() {
+            let mut inp_path = path.clone();
+            let inphash = md5::compute(input);
+            inp_path.push(format!("{inphash:x}"));
+            if !inp_path.is_file() {
+                let _ = std::fs::create_dir_all(path);
+                let _ = std::fs::write(&inp_path, input);
+                println!("saved {inp_path:?}");
+            }
+        }
+
+        res
+    }
+
+    pub fn suggest(&mut self) -> Config {
+        let mut timeout = *self.opts.config_interval;
+        if let Some(tm) = self.opts.timeout.as_deref() {
+            let tm_remaining = (*tm).saturating_sub(self.start.elapsed());
+            let tm_remaining = tm_remaining.max(std::time::Duration::from_secs(1));
+            timeout = timeout.min(tm_remaining);
+        }
+
+        self.config_epoch += 1;
+        if self.config_epoch < 4 {
+            let instruction_limit =
+                (self.config_epoch != 3).then_some(1_000_000 * self.config_epoch as u64);
+            let instruction_limit = Some(instruction_limit.unwrap_or(750_000_000)); // TODO
+            let swarm = SwarmConfig::from_instruction_limit(instruction_limit);
+            // First config: no additional feedback guidance.
+            let mut opts = FeedbackOptions::minimal_code_coverage();
+            if self.config_epoch > 0 {
+                opts.edge_shortest_trace = true;
+            }
+            return Config {
+                passes: OrcPassesGen {
+                    opts,
+                    spec: self.module.clone(),
+                    swarm: swarm.clone(),
+                },
+                swarm,
+                timeout,
+            };
+        }
+
+        let is_saturated = self.coverage_is_saturated();
+        // let apply_memlimit = self.rng.gen_ratio(9, 10);
+        let apply_fuellimit = self.rng.gen_ratio(9, 10);
+
+        // let target_function = None;
+        let mut target_edge = None;
+        let mut target_bb = None;
+
+        if is_saturated && self.rng.gen_ratio(5, 10) {
+            // filter instrumentation sites?
+        }
+
+        if is_saturated {
+            if self.rng.gen() && !self.frontier_bbs.is_empty() {
+                target_bb = Some(self.frontier_bbs[self.rng.gen_range(0..self.frontier_bbs.len())]);
+            } else {
+                let edges_pass = self.codecov_sess.get_pass::<EdgeCoveragePass>();
+                let edges = edges_pass
+                    .coverage
+                    .iter_covered_keys()
+                    .filter(|e| {
+                        self.module.functions[e.function as usize]
+                            .critical_insn_edges
+                            .contains(&(e.from, e.to))
+                    })
+                    .collect::<Vec<_>>();
+                // TODO: focus on frontier edges?
+                if !edges.is_empty() {
+                    target_edge = Some(edges[self.rng.gen_range(0..edges.len())]);
+                }
+            }
+        }
+
+        let fuel_limit = apply_fuellimit.then(|| {
+            let scope_per_edge_max_needed_fuel = match target_edge {
+                Some(edge) => *self
+                    .codecov_sess
+                    .get_pass::<EdgeShortestExecutionTracePass>()
+                    .coverage
+                    .saved_val(&edge),
+                None => self
+                    .codecov_sess
+                    .get_pass::<EdgeShortestExecutionTracePass>()
+                    .coverage
+                    .iter_saved()
+                    .map(|(_edge, &val)| val)
+                    .filter(|&x| !x.is_bottom())
+                    .map(|x| *x)
+                    .max()
+                    .unwrap_or(500_000),
+            };
+
+            let res = scope_per_edge_max_needed_fuel * 2 + 500_000;
+            // bucket the fuel limit to reduce corpus size
+            let res = res.next_power_of_two();
+            res.min(self.codecov_sess.swarm.instruction_limit.unwrap())
+        });
+        let memory_limit_pages = 1 << self.rng.gen_range(7..15);
+
+        let mut swarm = SwarmConfig::default();
+        swarm.instruction_limit =
+            Some(fuel_limit.unwrap_or(self.codecov_sess.swarm.instruction_limit.unwrap()));
+        swarm.memory_limit_pages = Some(memory_limit_pages);
+        swarm.input_size_limit = Some(
+            *[1024, 4096, 16384, 32768, u16::MAX as u32]
+                .choose(&mut self.rng)
+                .unwrap(),
+        );
+        if matches!(self.opts.experiment, Some(Experiment::SwarmFocusEdge)) {
+            if let Some(target_edge) = target_edge {
+                if !self.init_edges.contains(&target_edge) && self.rng.gen_ratio(5, 10) {
+                    swarm.must_include_edges.insert(target_edge);
+                }
+            }
+            if let Some(target_bb) = target_bb {
+                swarm.must_include_bbs.insert(target_bb);
+            }
+        }
+
+        if !swarm.must_include_bbs.is_empty() || !swarm.must_include_edges.is_empty() {
+            swarm.discard_short_circuit_coverage = true;
+        }
+
+        let extra_musts_and_avoids = self.rng.gen_ratio(5, 10);
+        if extra_musts_and_avoids {
+            // let random_func =
+        }
+
+        let mut opts = FeedbackOptions::nothing();
+        let FeedbackOptions {
+            live_funcs,
+            live_bbs,
+            live_edges,
+            cmpcov_hamming,
+            cmpcov_absdist,
+            perffuzz_func,
+            perffuzz_bb,
+            perffuzz_edge,
+            perffuzz_edge_global,
+            call_value_profile,
+            func_input_size,
+            func_input_size_cyclic,
+            func_input_size_color,
+            memory_op_value,
+            memory_op_address,
+            memory_store_prev_value,
+            path_hash_func,
+            path_hash_edge,
+            func_shortest_trace,
+            edge_shortest_trace,
+            func_longest_trace,
+        } = &mut opts;
+
+        *live_funcs = true;
+        *live_bbs = false;
+        *live_edges = true;
+
+        if !is_saturated {
+            for _ in 0..3 {
+                let opt = match self.rng.gen::<u8>() % 5 {
+                    0 => &mut *cmpcov_absdist,
+                    1 => &mut *cmpcov_hamming,
+                    2 => &mut *func_input_size_color,
+                    3 => &mut *edge_shortest_trace,
+                    4 => &mut *perffuzz_edge_global,
+                    // 4 => &mut *func_longest_trace,
+                    _ => unreachable!(),
+                };
+                if *opt {
+                    break;
+                }
+                *opt = true;
+            }
+        } else {
+            for _ in 0..5 {
+                let opt = match self.rng.gen::<u8>() % 19 {
+                    0 => &mut *call_value_profile,
+                    1 => &mut *cmpcov_absdist,
+                    2 => &mut *cmpcov_hamming,
+                    3 => &mut *perffuzz_func,
+                    4 => &mut *perffuzz_bb,
+                    5 => &mut *perffuzz_edge,
+                    6 => &mut *perffuzz_edge_global,
+                    7 => &mut *call_value_profile,
+                    8 => &mut *func_input_size,
+                    9 => &mut *func_input_size_cyclic,
+                    10 => &mut *func_input_size_color,
+                    11 => &mut *memory_op_value,
+                    12 => &mut *memory_op_address,
+                    13 => &mut *memory_store_prev_value,
+                    14 => &mut *path_hash_func,
+                    15 => &mut *path_hash_edge,
+                    16 => &mut *func_shortest_trace,
+                    17 => &mut *edge_shortest_trace,
+                    18 => &mut *func_longest_trace,
+                    _ => unreachable!(),
+                };
+                if *opt {
+                    break;
+                }
+                *opt = true;
+            }
+        }
+
+        Config {
+            passes: OrcPassesGen {
+                opts,
+                spec: self.module.clone(),
+                swarm: swarm.clone(),
+            },
+            swarm,
+            timeout,
+        }
+    }
+
+    fn coverage_is_saturated(&self) -> bool {
+        let now = Instant::now();
+        if now.duration_since(self.start).as_secs_f32() < 5.0 {
+            false
+        } else {
+            dbg!(now
+                .duration_since(self.start)
+                .min(std::time::Duration::from_secs(30)))
+                < dbg!(now.duration_since(self.last_func_find)).mul_f32(2.)
+        }
+    }
+
+    fn should_continue(&self) -> bool {
+        !self.found_crashes
+            && self
+                .opts
+                .timeout
+                .map(|x| self.start.elapsed() < *x)
+                .unwrap_or(true)
+    }
+
+    fn add_corpus(&mut self, input: &[u8]) -> Option<RunResult> {
+        let mut corp = self.corpus.write().unwrap();
+        if !corp.insert(input, Instant::now()) {
+            return None;
+        }
+        drop(corp);
+        let res = self.codecov_sess.run(input, &mut Stats::new());
+        if res.novel_coverage_passes.contains(&"funcs") {
+            self.last_func_find = Instant::now();
+        }
+        self.found_crashes |= res.is_crash();
+        Some(res)
+    }
+
+    fn update_live_coverage(&self) {
+        #[cfg(feature = "reports")]
+        if let Some(out_path) = self.opts.live_html_coverage.as_ref() {
+            crate::cli::cov_html::write_html_cov_report(
+                self.module.clone(),
+                &self.codecov_sess,
+                out_path,
+            );
+        }
+    }
+
+    fn compute_frontier(&self) -> HashSet<Location> {
+        let edge_cov = self.codecov_sess.get_pass::<EdgeCoveragePass>();
+        let bb_cov = self.codecov_sess.get_pass::<BBCoveragePass>();
+        let covered_blocks = bb_cov.coverage.iter_covered_keys().collect::<HashSet<_>>();
+        let covered_edges = edge_cov
+            .coverage
+            .iter_covered_keys()
+            .collect::<HashSet<_>>();
+        let mut res = HashSet::default();
+        for func in &self.module.functions {
+            if self.init_funcs.contains(&FuncIdx(func.idx)) {
+                continue;
+            }
+            for &(from, to) in &func.critical_insn_edges {
+                let edge = Edge {
+                    function: func.idx,
+                    from,
+                    to,
+                };
+                let from_bb = Location {
+                    function: func.idx,
+                    index: func.operator_basic_block[from.i()].0,
+                };
+                if covered_blocks.contains(&from_bb) && !covered_edges.contains(&edge) {
+                    // res.push(edge);
+                    res.insert(from_bb);
+                }
+            }
+        }
+        res
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Config {
+    pub swarm: SwarmConfig,
+    pub passes: OrcPassesGen,
+    pub timeout: std::time::Duration,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OrcPassesGen {
+    pub swarm: SwarmConfig,
+    pub opts: FeedbackOptions,
+    pub spec: Arc<ModuleSpec>,
+}
+
+impl PassesGen for OrcPassesGen {
+    fn generate_passes(&self) -> Passes {
+        use crate::instrumentation::*;
+
+        let mut passes = Passes::empty();
+
+        let FeedbackOptions {
+            live_funcs,
+            live_bbs,
+            live_edges,
+            cmpcov_hamming,
+            cmpcov_absdist,
+            perffuzz_func,
+            perffuzz_bb,
+            perffuzz_edge,
+            perffuzz_edge_global,
+            call_value_profile,
+            func_input_size,
+            func_input_size_cyclic,
+            func_input_size_color,
+            memory_op_value,
+            memory_op_address,
+            memory_store_prev_value,
+            func_shortest_trace,
+            edge_shortest_trace,
+            func_longest_trace,
+            path_hash_func,
+            path_hash_edge,
+        } = self.opts;
+
+        macro_rules! add_pass {
+            ($cond:expr, $pass:expr) => {
+                if $cond {
+                    passes.push_cc($pass);
+                }
+            };
+        }
+
+        add_pass!(live_funcs, FunctionCoveragePass::new(&self.spec));
+        add_pass!(live_bbs, BBCoveragePass::new(&self.spec));
+        add_pass!(live_edges, EdgeCoveragePass::new(&self.spec));
+
+        macro_rules! add_pass {
+            ($cond:expr, $pass:expr) => {
+                if $cond {
+                    passes.push_kv($pass);
+                }
+            };
+        }
+
+        add_pass!(
+            cmpcov_hamming,
+            CmpCoveragePass::new(CmpCovKind::Hamming, &self.spec)
+        );
+        add_pass!(
+            cmpcov_absdist,
+            CmpCoveragePass::new(CmpCovKind::AbsDist, &self.spec)
+        );
+
+        add_pass!(
+            func_input_size,
+            InputSizePass::new(InputComplexityMetric::Size, &self.spec)
+        );
+        add_pass!(
+            func_input_size_cyclic,
+            InputSizePass::new(InputComplexityMetric::ByteDiversity, &self.spec)
+        );
+        add_pass!(
+            func_input_size_color,
+            InputSizePass::new(InputComplexityMetric::DeBruijn, &self.spec)
+        );
+
+        add_pass!(perffuzz_func, PerffuzzFunctionPass::new(&self.spec));
+        add_pass!(perffuzz_func, FunctionRecursionDepthPass::new(&self.spec));
+        add_pass!(perffuzz_bb, PerffuzzBBPass::new(&self.spec));
+        add_pass!(perffuzz_edge, EdgeHitsInAFunctionPass::new(&self.spec));
+        add_pass!(perffuzz_edge_global, PerffuzzEdgePass::new(&self.spec));
+
+        add_pass!(memory_op_value, MemoryLoadValRangePass::new(&self.spec));
+        add_pass!(memory_op_value, MemoryStoreValRangePass::new(&self.spec));
+        add_pass!(memory_op_address, MemoryOpAddressRangePass::new(&self.spec));
+        add_pass!(
+            memory_store_prev_value,
+            MemoryStorePrevValRangePass::new(&self.spec)
+        );
+
+        add_pass!(call_value_profile, CallParamsRangePass::new(&self.spec));
+        add_pass!(call_value_profile, CallParamsSetPass::new(&self.spec));
+        add_pass!(call_value_profile, GlobalsRangePass::new(&self.spec));
+
+        add_pass!(
+            func_shortest_trace,
+            FunctionShortestExecutionTracePass::new(&self.spec)
+        );
+        add_pass!(
+            edge_shortest_trace,
+            EdgeShortestExecutionTracePass::new(&self.spec)
+        );
+        add_pass!(
+            func_longest_trace,
+            FunctionLongestExecutionTracePass::new(&self.spec)
+        );
+
+        macro_rules! add_pass {
+            ($cond:expr, $pass:expr) => {
+                if $cond {
+                    passes.push_hash($pass);
+                }
+            };
+        }
+
+        add_pass!(path_hash_func, FuncPathHashPass::new(&self.spec));
+        add_pass!(path_hash_edge, EdgePathHashPass::new(&self.spec));
+
+        if !self.swarm.avoid_functions.is_empty()
+            || !self.swarm.avoid_edges.is_empty()
+            || !self.swarm.must_include_edges.is_empty()
+            || !self.swarm.must_include_functions.is_empty()
+        {
+            passes.push_erased(SwarmShortCircuitPass::new(self.swarm.clone()));
+        }
+
+        passes
+    }
+}
