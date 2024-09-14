@@ -32,9 +32,9 @@ Based on a preliminary experiment comparing `wasmfuzz` and `cargo-fuzz` (libfuzz
 
 To build form source you need a somewhat recent stable or nightly Rust toolchain.
 
-- From source: `cargo install --force https+git://github.com/CISPA-SysSec/wasmfuzz`
+- From source: `cargo install --force --git https://github.com/CISPA-SysSec/wasmfuzz`
 - From a git checkout: `cargo install --force --path .`
-- Pre-built binaries: `TODO`
+- Pre-built binaries: https://github.com/CISPA-SysSec/wasmfuzz/releases/download/initial-commit/wasmfuzz-x86\_64-unknown-linux-gnu.2.31
 
 Pre-built binaries are dynamically linked against an old `glibc` version and should be compatible with most Linux environments.
 
@@ -114,7 +114,7 @@ A [FuzzM](https://github.com/fuzzm/fuzzm-project) container is included but we'r
 
 ## Notes on Upstreaming
 
-- The fuzzer/JIT currently depends on a minor patch to Cranelift/Wasmtime: [[Upstream issue]](https://github.com/bytecodealliance/wasmtime/issues/4000)
+- Our JIT currently depends on a minor patch to Cranelift's JIT setup: [[Upstream issue]](https://github.com/bytecodealliance/wasmtime/issues/4000)
 
 - `rustc` support for `-Zembed-source` for embedded sources in harness binaries: [[Upstream PR]](https://github.com/rust-lang/rust/pull/126985)
 
