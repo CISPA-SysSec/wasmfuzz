@@ -1,7 +1,7 @@
 FROM wasm-fuzzers-wasm2c-base
 RUN apt-get install -y build-essential curl git pkg-config libssl-dev
 RUN git clone https://github.com/AFLplusplus/LibAFL && \
-    git -C LibAFL checkout libfuzzer-best && true
+    git -C LibAFL checkout 035c01b4a1fbdf7c66fb9032d64c4f471263743a && true
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain nightly -y
 ENV PATH="/root/.cargo/bin:${PATH}"

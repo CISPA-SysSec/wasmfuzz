@@ -6,14 +6,15 @@
 
   <p>
 
-[![License](https://img.shields.io/github/license/cispa-syssec/wasmfuzz)](LICENSE-APACHE)
-[![Paper](https://img.shields.io/badge/paper-pdf-brightgreen)](isstaws24fuzzingmain-p5-p-30a9e696b6-80430-final.pdf)
+[![License](https://img.shields.io/github/license/cispa-syssec/wasmfuzz)](./LICENSE-APACHE)
+[![Paper](https://img.shields.io/badge/paper-pdf-brightgreen)](./assets/isstaws24fuzzingmain-p5-p-30a9e696b6-80430-final.pdf)
 [![DOI](https://img.shields.io/badge/doi-10.1145/3678722.3685531-blue)](https://doi.org/10.1145/3678722.3685531)
     
   </p>
 </div>
 
-![Overview Sketch](./afl++-vs-wasmfuzz.svg)
+![Overview Sketch](./assets/afl++-vs-wasmfuzz.svg#gh-light-mode-only)
+![Overview Sketch](./assets/afl++-vs-wasmfuzz-dark.svg#gh-dark-mode-only)
 
 
 ## `wasmfuzz` Fuzzer
@@ -34,7 +35,7 @@ To build form source you need a somewhat recent stable or nightly Rust toolchain
 
 - From source: `cargo install --force --git https://github.com/CISPA-SysSec/wasmfuzz`
 - From a git checkout: `cargo install --force --path .`
-- Pre-built binaries: https://github.com/CISPA-SysSec/wasmfuzz/releases/download/initial-commit/wasmfuzz-x86\_64-unknown-linux-gnu.2.31
+- Pre-built binaries: https://github.com/CISPA-SysSec/wasmfuzz/releases/download/initial-commit/wasmfuzz-x86_64-unknown-linux-gnu.2.31
 
 Pre-built binaries are dynamically linked against an old `glibc` version and should be compatible with most Linux environments.
 
