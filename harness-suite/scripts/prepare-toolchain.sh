@@ -1,15 +1,16 @@
 #!/bin/bash
-set -e
+set -e +x
 
 WASI_VERSION=24
 WASI_VERSION_FULL=${WASI_VERSION}.0
 WASI_DIR="wasi-sdk-${WASI_VERSION_FULL}-$(uname -m)-linux"
 wget -q "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_VERSION}/${WASI_DIR}.tar.gz"
-tar xvf "${WASI_DIR}.tar.gz"
+tar xf "${WASI_DIR}.tar.gz"
 WASI_SDK_PATH=$(pwd)/$WASI_DIR
 
+# TODO: get rid of precompiled libz
 wget -q https://github.com/vmware-labs/webassembly-language-runtimes/releases/download/libs%2Fzlib%2F1.2.13%2B20230623-2993864/libz-1.2.13-wasi-sdk-20.0.tar.gz
-tar xvf libz-1.2.13-wasi-sdk-20.0.tar.gz --directory="${WASI_SDK_PATH}/share/wasi-sysroot/"
+tar xf libz-1.2.13-wasi-sdk-20.0.tar.gz --directory="${WASI_SDK_PATH}/share/wasi-sysroot/"
 
 mv "$WASI_SDK_PATH" /wasi-sdk
 

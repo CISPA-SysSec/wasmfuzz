@@ -1,7 +1,7 @@
 FROM ubuntu:24.04 AS builder
 
 RUN apt-get update && \
-    apt-get install -y make build-essential git wget curl tar vim rename
+    apt-get install -y make build-essential git wget curl tar vim rename python3-tomlkit
 
 # install commonly-used building packages
 RUN apt-get install -y autoconf automake autopoint libtool \

@@ -5,6 +5,8 @@ import shutil
 import argparse
 from pathlib import Path
 
+# Note: Python's stdlib doesn't currently support writing TOML files
+import tomlkit
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--workdir', default='/projects/')
@@ -15,7 +17,7 @@ parser.add_argument('--init-toolchain', action='store_true')
 args = parser.parse_args()
 
 WASM_V2 = True
-RUSTUP_TOOLCHAIN = "nightly-2024-08-28"
+RUSTUP_TOOLCHAIN = "nightly-2024-09-22"
 TARGET_TRIPLE = "wasm32-wasip1"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
@@ -24,32 +26,27 @@ os.environ["RUSTUP_TOOLCHAIN"] = RUSTUP_TOOLCHAIN
 
 def patch_cargo_toml(path):
     "switch project over to a custom `libfuzzer-sys` crate that supports building to WebAssembly modules"
-    # TODO: this is incredibly crude, but python's stdlib doesn't currently ship a toml writer (3.12)
     print(f"patching {path} for custom libfuzzer-sys")
     with open(path) as f:
-        cargo_toml = f.read()
-    if "[dependencies.libfuzzer-sys]\n" in cargo_toml:
-        lines = cargo_toml.splitlines()
-        i = lines.index("[dependencies.libfuzzer-sys]")
-        j = lines.index("", i)
-        cargo_toml = '\n'.join(lines[:i] + lines[j:])
-    del_lines = ["dependencies.libfuzzer-sys", "libfuzzer-sys =", "arbitrary ="]
-    cargo_toml = '\n'.join(x for x in cargo_toml.splitlines() if not any(y in x for y in del_lines))
-    cargo_toml += "\n"
-    cargo_toml += "\n"
-    cargo_toml += "[dependencies.arbitrary]\n"
-    cargo_toml += "git = \"https://github.com/rust-fuzz/arbitrary.git\"\n"
-    cargo_toml += "features = [\"derive\"]\n"
-    cargo_toml += "\n"
-    cargo_toml += "[dependencies.libfuzzer-sys]\n"
-    cargo_toml += "git = \"https://github.com/Mrmaxmeier/libfuzzer\"\n"
-    cargo_toml += "branch = \"target-wasm\"\n"
-    cargo_toml += "\n"
-    cargo_toml += "[patch.crates-io]\n" # fix rare cases of remaining libfuzzer-sys dependencies (regalloc2)
-    cargo_toml += 'libfuzzer-sys = { git = "https://github.com/Mrmaxmeier/libfuzzer", branch = "target-wasm" }\n'
-    cargo_toml += 'arbitrary = { git = "https://github.com/rust-fuzz/arbitrary.git", features = ["derive"] }\n'
+        cargo_toml = tomlkit.load(f)
+    deps = cargo_toml["dependencies"]
+    deps["libfuzzer-sys"] = {
+        "git": "https://github.com/Mrmaxmeier/libfuzzer",
+        "rev": "b608dcf44c2071a54393cb92a2bc305a5e2a6799" # "target-wasm" branch
+    }
+    deps["arbitrary"] = {
+        "git": "https://github.com/rust-fuzz/arbitrary.git",
+        "rev": "ef80790c5bbcd24f342967e2388aa14f2c0d4a6b",
+        "features": ["derive"]
+    }
+    # fix rare cases of remaining libfuzzer-sys dependencies (regalloc2)
+    if "patch" not in cargo_toml:
+        cargo_toml.add("patch", tomlkit.table())
+        cargo_toml["patch"].add("crates-io", tomlkit.table())
+    cargo_toml["patch"]["crates-io"]["libfuzzer-sys"] = deps["libfuzzer-sys"]
+    cargo_toml["patch"]["crates-io"]["arbitrary"] = deps["arbitrary"]
     with open(path, "w") as f:
-        f.write(cargo_toml)
+        tomlkit.dump(cargo_toml, f)
 
 
 def build_folder(folder, verb="build"):
@@ -95,7 +92,7 @@ def init_toolchain():
     subprocess.run(f"curl --proto '=https' -sSf https://sh.rustup.rs/ | sh -s -- " \
                    f"-y --default-toolchain={RUSTUP_TOOLCHAIN} --target={TARGET_TRIPLE} " \
                    f"--profile minimal --component=rust-src", shell=True, check=True)
-    
+
     # Prime crates.io registry with a sample build
     dir = Path("/tmp/sample")
     dir.mkdir()
