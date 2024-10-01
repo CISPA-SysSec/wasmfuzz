@@ -546,8 +546,22 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 self.push_i32(0, bcx);
             }
             "wasi_snapshot_preview1::clock_time_get" => {
-                // ignore args and return 0
-                self.adjust_pop_push(&[I32, I64, I32], &[]);
+                // consume arguments
+                let _clock_id = self.pop1(I32, bcx);
+                let _precision = self.pop1(I64, bcx);
+                let time_ptr = self.pop1(I32, bcx);
+                // store fixed time (in nanos) in `time_ptr`
+                self.push1(I32, time_ptr);
+                let val = bcx.ins().iconst(I64, 1700000000 * 1000000000);
+                self.push1(I64, val);
+                let mem_offset0 = wasmparser::MemArg {
+                    align: 0,
+                    max_align: 0,
+                    memory: 0,
+                    offset: 0,
+                };
+                translate_memory(&MemoryInstruction::I64Store(mem_offset0), self, bcx);
+                // return 0 (indicate success)
                 self.push_i32(0, bcx);
             }
             "wasi_snapshot_preview1::fd_fdstat_get" => {
