@@ -31,6 +31,7 @@ pub(crate) struct Opts {
 
 #[derive(Parser)]
 pub(crate) enum Subcommand {
+    #[clap(hide = true)]
     CorpusInfo {
         program: String,
         #[clap(long)]
@@ -38,8 +39,20 @@ pub(crate) enum Subcommand {
         #[clap(long)]
         csv_out: String,
     },
-    /// Run JIT repeatedly on specified inputs.
-    Jit {
+    /// Run a single input.
+    RunInput {
+        program: String,
+        inputs: Vec<String>,
+        #[clap(long)]
+        trace: bool,
+        #[clap(long)]
+        verbose_jit: bool,
+        #[clap(long, default_value = "true")]
+        print_stdout: FlagBool,
+    },
+    /// Run a single specified input (repeatedly for timing).
+    #[clap(hide = true)]
+    BenchInput {
         program: String,
         inputs: Vec<String>,
         #[clap(long)]
@@ -49,19 +62,6 @@ pub(crate) enum Subcommand {
         #[clap(long, default_value = "true")]
         run_from_snapshot: FlagBool,
         #[clap(long, default_value = "1000000")]
-        execs: u32,
-        // #[clap(flatten)]
-        // i: InstrumentationOpts,
-    },
-    /// Run ReusableStage repeatedly on specified inputs.
-    BenchReusable {
-        program: String,
-        inputs: Vec<String>,
-        #[clap(long)]
-        trace: bool,
-        #[clap(long)]
-        verbose: bool,
-        #[clap(long, default_value = "100000")]
         execs: u32,
         #[clap(flatten)]
         i: InstrumentationOpts,
@@ -79,24 +79,28 @@ pub(crate) enum Subcommand {
     #[cfg(feature = "reports")]
     CovHtml(cov_html::HtmlCovOpts),
     /// Run corpus on program and evaluate instrumentation pass relationship
+    #[clap(hide = true)]
     EvalPassCorr {
         program: String,
         corpus: String,
         #[clap(long)]
         jsonl_out_path: String,
     },
+    #[clap(hide = true)]
     EvalPassSpeed {
         program: String,
         corpus: String,
         #[clap(long)]
         jsonl_out_path: String,
     },
+    #[clap(hide = true)]
     EvalPagesTouched {
         program: String,
         corpus: String,
         #[clap(long)]
         jsonl_out_path: String,
     },
+    #[clap(hide = true)]
     EvalSnapshotPerf {
         #[clap(long, default_value = "420")]
         pages: usize,
@@ -162,20 +166,62 @@ pub(crate) fn main() {
     let opts: Opts = Opts::parse();
 
     match opts.subcmd {
-        Subcommand::Jit {
+        Subcommand::RunInput {
             program,
             inputs,
             trace,
-            verbose,
-            execs,
-            // i,
-            run_from_snapshot,
+            verbose_jit,
+            print_stdout,
         } => {
             let inputs = gather_inputs_paths(&None, &inputs, true);
             let mod_spec = parse_program(&PathBuf::from(program));
             let mut stats = Stats::default();
             let mut sess = JitFuzzingSession::builder(mod_spec)
                 // .feedback(i.to_feedback_opts())
+                .feedback(FeedbackOptions::nothing())
+                .tracing(TracingOptions {
+                    stdout: true,
+                    ..TracingOptions::default()
+                })
+                .debug(trace, verbose_jit)
+                .build();
+            sess.initialize(&mut stats);
+
+            if *print_stdout {
+                std::env::set_var("STDOUTDEBUG", "1");
+            }
+
+            if inputs.is_empty() {
+                println!("No input specified. Exiting.")
+            }
+            for input in inputs {
+                println!("testcase: {input:?}");
+                let testcase = std::fs::read(input).expect("couldn't read input");
+                assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
+                let res = sess.run(&testcase, &mut stats);
+                if res.is_crash() {
+                    println!(
+                        "execution trapped with {:?} which indicates that the target crashed",
+                        res.trap_kind.unwrap()
+                    );
+                    break;
+                }
+            }
+        }
+        Subcommand::BenchInput {
+            program,
+            inputs,
+            trace,
+            verbose,
+            execs,
+            i,
+            run_from_snapshot,
+        } => {
+            let inputs = gather_inputs_paths(&None, &inputs, true);
+            let mod_spec = parse_program(&PathBuf::from(program));
+            let mut stats = Stats::default();
+            let mut sess = JitFuzzingSession::builder(mod_spec)
+                .feedback(i.to_feedback_opts())
                 .feedback(FeedbackOptions::nothing())
                 .tracing(TracingOptions {
                     stdout: true,
@@ -211,51 +257,6 @@ pub(crate) fn main() {
                 )
             }
         }
-        Subcommand::BenchReusable {
-            program,
-            inputs,
-            trace,
-            verbose,
-            execs,
-            i,
-        } => {
-            let mod_spec = parse_program(&PathBuf::from(program));
-            let mut stats = Stats::default();
-            let mut sess = JitFuzzingSession::builder(mod_spec)
-                .feedback(i.to_feedback_opts())
-                .tracing(TracingOptions {
-                    stdout: true,
-                    ..TracingOptions::default()
-                })
-                .debug(trace, verbose)
-                .build();
-            sess.initialize(&mut stats);
-
-            for inp in &inputs {
-                println!("testcase: {inp}");
-                let testcase = std::fs::read(inp).expect("couldn't read seed");
-                assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
-                sess.run_reusable(&testcase, false, &mut stats).expect_ok();
-            }
-
-            if !inputs.is_empty() {
-                println!("bench: {} ({})", inputs[0], execs);
-                let start = Instant::now();
-                let testcase = std::fs::read(&inputs[0]).expect("couldn't read seed");
-                for i in 0u32..execs {
-                    sess.run_reusable(&testcase, false, &mut stats).expect_ok();
-                    if i.is_power_of_two() {
-                        println!("{} {}", i, i.trailing_zeros());
-                    }
-                }
-                let elapsed = start.elapsed();
-                println!(
-                    "done after {:?} ({:.02} exec/s)",
-                    elapsed,
-                    execs as f32 / elapsed.as_secs_f32()
-                )
-            }
-        }
         Subcommand::CorpusInfo {
             program,
             dir,
@@ -274,10 +275,11 @@ pub(crate) fn main() {
                 .build();
             sess.initialize(&mut stats);
 
+            // TODO: track steps/fuel per input?
             let mut csv_out = std::fs::File::create(csv_out).unwrap();
             writeln!(
                 csv_out,
-                "module,input,crashed,exec_us,edge_cov,total_edge_cov"
+                "module,input,size,crashed,exec_us,edge_cov,total_edge_cov"
             )
             .unwrap();
             for input_path in &input_paths {
@@ -290,9 +292,10 @@ pub(crate) fn main() {
                 let edge_cov = sess.get_edge_cov().unwrap();
                 writeln!(
                     csv_out,
-                    "{},{},{},{},{},",
+                    "{},{},{},{},{},{},",
                     mod_spec.filename,
                     input_path.file_stem().unwrap().to_string_lossy(),
+                    input.len(),
                     is_crash as u8,
                     exec_us,
                     edge_cov
@@ -310,7 +313,7 @@ pub(crate) fn main() {
             let total_edge_cov = sess.get_edge_cov().unwrap();
             writeln!(
                 csv_out,
-                "{},,,{},,{}",
+                "{},,,,{},,{}",
                 mod_spec.filename, exec_us, total_edge_cov
             )
             .unwrap();

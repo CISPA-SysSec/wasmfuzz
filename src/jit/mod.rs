@@ -552,12 +552,19 @@ impl JitStage {
     fn ensure_init(&mut self, spec: &ModuleSpec, opts: &CompilationOptions, passes: &mut Passes) {
         assert_eq!(opts.kind, self.kind);
         if self.instance.is_none() {
-            println!("translating {:?} ...", self.kind);
+            let action = if self.kind != CompilationKind::Reusable {
+                format!("generating code for kind {:?}", self.kind)
+            } else if passes.iter().len() > 0 {
+                format!("generating code with {} passes", passes.iter().len())
+            } else {
+                "generating code".into()
+            };
+            println!("{action} ...");
             let modtrans = ModuleTranslator::new(spec, opts);
             let instance = modtrans.compile_to_instance(passes);
             println!(
-                "translating {:?} ... done (code size: {})",
-                self.kind, instance.code_size
+                "{action} ... done (code size: {})",
+                humansize::format_size(instance.code_size, humansize::DECIMAL)
             );
 
             let fuzz_fn = unsafe {
@@ -573,7 +580,7 @@ impl JitStage {
 
         if self.inp_ptr.is_none() {
             let instance = self.instance.as_mut().unwrap();
-            println!("reset vmctx because inp_ptr is_none {:?}", self.kind);
+            // println!("reset vmctx because inp_ptr is_none {:?}", self.kind);
             instance.vmctx.reset(spec);
 
             // for initializer and malloc call: set reasonable limits
@@ -1032,7 +1039,7 @@ impl RunResult {
         // assert!(self.trap_kind.is_none());
         if self.is_crash() {
             let trap_kind = self.trap_kind.as_ref().unwrap();
-            panic!("execution trapped with {:?} which indicates a crash. crashing runs expected in this context", trap_kind);
+            panic!("execution trapped with {:?} which indicates a crash. crashing runs are not expected in this context", trap_kind);
         }
     }
 
