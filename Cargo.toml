@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.214"
-wasm-encoder = "0.214"
+wasmparser = "0.217"
+wasm-encoder = "0.217"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive"] }
 md5 = "0.7"
@@ -22,7 +22,9 @@ dirs = "5.0"
 serde = "1.0"
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 gimli = { version = "0.31" }
-symbolic = { version = "12.10.0", features = ["demangle", "symcache"] }
+# We pin symbolic since DWARFv5 embedded source code support was removed >.>
+symbolic = { version = "12.11.1", features = ["demangle", "symcache"] }
+symbolic-debuginfo = "=12.11.1"
 rustc-hash = "2.0.0"
 hexyl = "0.14"
 humantime = "2.1"

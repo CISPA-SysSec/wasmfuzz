@@ -119,3 +119,5 @@ A [FuzzM](https://github.com/fuzzm/fuzzm-project) container is included but we'r
 
 - `rustc` support for `-Zembed-source` for embedded sources in harness binaries: [[Upstream PR]](https://github.com/rust-lang/rust/pull/126985)
 
+- `symbolic` only supports DWARF embedded sources at exactly v12.10.0-v12.11.1: [[Upstream PR]](https://github.com/getsentry/symbolic/pull/849)
+
