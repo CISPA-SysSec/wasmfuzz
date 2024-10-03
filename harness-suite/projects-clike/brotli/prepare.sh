@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/google/brotli.git "$PROJECT/repo" 39bcecf4559f9b0e75c6248a75d9c0db6b123d88
+git clone-rev.sh https://github.com/google/brotli.git "$PROJECT/repo" 350100a5bb9d9671aca85213b2ec7a70a361b0cd

@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/gimli-rs/gimli.git "$PROJECT/repo" 2d28dbe240089bf0165c0c429b6cdd6c3c8e71eb
+git clone-rev.sh https://github.com/gimli-rs/gimli.git "$PROJECT/repo" 3e6ff1d2a7762cef58f30c8881b55196f3007f97

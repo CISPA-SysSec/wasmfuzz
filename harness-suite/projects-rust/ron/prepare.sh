@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/ron-rs/ron.git "$PROJECT/repo" abc60f50327dfb32c45e9f2d73463b6fe52d7e4e
+git clone-rev.sh https://github.com/ron-rs/ron.git "$PROJECT/repo" ea6b40619c92a9663883cf7c45c0876734a2fcf5
 git -C "$PROJECT/repo" apply "$PROJECT/disable-bench.patch"

@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/astral-sh/ruff.git "$PROJECT/repo" a73bebcf15e078c90cd590f0a8eb53313bbd5ea9
+git clone-rev.sh https://github.com/astral-sh/ruff.git "$PROJECT/repo" 4aefe523938f7176be0bcaa03b6f126c8ae783fb
