@@ -544,9 +544,9 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             }
             "wasi_snapshot_preview1::clock_time_get" => {
                 // consume arguments
-                let _clock_id = self.pop1(I32, bcx);
-                let _precision = self.pop1(I64, bcx);
                 let time_ptr = self.pop1(I32, bcx);
+                let _precision = self.pop1(I64, bcx);
+                let _clock_id = self.pop1(I32, bcx);
                 // store fixed time (in nanos) in `time_ptr`
                 self.push1(I32, time_ptr);
                 let val = bcx.ins().iconst(I64, 1700000000 * 1000000000);
