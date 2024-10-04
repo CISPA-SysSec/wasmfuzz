@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::{
     fs::File,
-    io::Write,
+    io::{BufRead, Write},
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -180,29 +180,33 @@ pub(crate) fn main() {
                 // .feedback(i.to_feedback_opts())
                 .feedback(FeedbackOptions::nothing())
                 .tracing(TracingOptions {
-                    stdout: true,
+                    stdout: *print_stdout,
                     ..TracingOptions::default()
                 })
                 .debug(trace, verbose_jit)
                 .build();
             sess.initialize(&mut stats);
 
-            if *print_stdout {
-                std::env::set_var("STDOUTDEBUG", "1");
-            }
-
             if inputs.is_empty() {
                 println!("No input specified. Exiting.")
             }
             for input in inputs {
-                println!("testcase: {input:?}");
+                println!("Testcase: {input:?}");
                 let testcase = std::fs::read(input).expect("couldn't read input");
                 assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
-                let res = sess.run(&testcase, &mut stats);
-                if res.is_crash() {
+                let res = sess.run_tracing_fresh(&testcase, &mut stats).err().clone();
+
+                if *print_stdout {
+                    let stdout = &sess.tracing_context().stdout;
+                    for line in stdout.lines() {
+                        eprintln!("[STDOUT] {}", line.unwrap())
+                    }
+                }
+
+                if let Some(trap_kind) = res {
                     println!(
                         "execution trapped with {:?} which indicates that the target crashed",
-                        res.trap_kind.unwrap()
+                        trap_kind
                     );
                     break;
                 }
@@ -233,14 +237,14 @@ pub(crate) fn main() {
             sess.initialize(&mut stats);
 
             for inp in &inputs {
-                println!("testcase: {inp:?}");
+                println!("Testcase: {inp:?}");
                 let testcase = std::fs::read(inp).expect("couldn't read seed");
                 assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
                 sess.run(&testcase, &mut stats).expect_ok();
             }
 
             if !inputs.is_empty() {
-                println!("bench: {:?} ({})", inputs[0], execs);
+                println!("Bench: {:?} ({})", inputs[0], execs);
                 let start = Instant::now();
                 let testcase = std::fs::read(&inputs[0]).expect("couldn't read seed");
                 for i in 0u32..execs {

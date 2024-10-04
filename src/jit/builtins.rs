@@ -143,7 +143,7 @@ pub(crate) unsafe extern "C" fn builtin_debug_wasmfuzz_write_stdout(
     let buf = &vmctx.heap()[buf as usize..][..n as usize].to_vec();
     assert!(buf.len() == n as usize);
     if !buf.is_empty() {
-        dbg!(String::from_utf8_lossy(buf));
+        eprintln!("[STDOUT] {:?}", String::from_utf8_lossy(buf));
     }
 }
 

@@ -553,17 +553,17 @@ impl JitStage {
         assert_eq!(opts.kind, self.kind);
         if self.instance.is_none() {
             let action = if self.kind != CompilationKind::Reusable {
-                format!("generating code for kind {:?}", self.kind)
+                format!("Generating code for kind {:?}", self.kind)
             } else if passes.iter().len() > 0 {
-                format!("generating code with {} passes", passes.iter().len())
+                format!("Generating code with {} passes", passes.iter().len())
             } else {
-                "generating code".into()
+                "Generating code".into()
             };
             println!("{action} ...");
             let modtrans = ModuleTranslator::new(spec, opts);
             let instance = modtrans.compile_to_instance(passes);
             println!(
-                "{action} ... done (code size: {})",
+                "{action} ... done (size: {})",
                 humansize::format_size(instance.code_size, humansize::DECIMAL)
             );
 

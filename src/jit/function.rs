@@ -397,6 +397,15 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         ty: Option<&FuncType>,
         bcx: &mut FunctionBuilder,
     ) {
+        fn memarg_offset(offset: u64) -> wasmparser::MemArg {
+            wasmparser::MemArg {
+                align: 0,
+                max_align: 0,
+                memory: 0,
+                offset,
+            }
+        }
+
         self.builtin_level += 1;
         // TODO: move to builtins.rs?
         if bcx.func.layout.entry_block().is_none() {
@@ -467,26 +476,14 @@ impl<'a, 's> FuncTranslator<'a, 's> {
 
                 let zero = bcx.ins().iconst(I32, 0);
                 bcx.ins().jump(block, &[iovs_addr, iovs_len, zero]);
-                let mem_offset0 = wasmparser::MemArg {
-                    align: 0,
-                    max_align: 0,
-                    memory: 0,
-                    offset: 0,
-                };
-                let mem_offset4 = wasmparser::MemArg {
-                    align: 0,
-                    max_align: 0,
-                    memory: 0,
-                    offset: 4,
-                };
 
                 bcx.switch_to_block(block);
 
                 // write_stdout(iovs[0]->buf, iovs[0]->len);
                 self.push1(I32, block_iovs_addr);
-                translate_memory(&MemoryInstruction::I32Load(mem_offset0), self, bcx); // iovs[0]->buf
+                translate_memory(&MemoryInstruction::I32Load(memarg_offset(0)), self, bcx); // iovs[0]->buf
                 self.push1(I32, block_iovs_addr);
-                translate_memory(&MemoryInstruction::I32Load(mem_offset4), self, bcx); // iovs[0]->len
+                translate_memory(&MemoryInstruction::I32Load(memarg_offset(4)), self, bcx); // iovs[0]->len
 
                 let iov_len = self.pop1(I32, bcx);
                 let iov_ptr = self.pop1(I32, bcx);
@@ -540,7 +537,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 // *nwritten = count;
                 self.push1(I32, nwritten_addr);
                 self.push1(I32, end_count);
-                translate_memory(&MemoryInstruction::I32Store(mem_offset0), self, bcx);
+                translate_memory(&MemoryInstruction::I32Store(memarg_offset(0)), self, bcx);
 
                 // return success
                 self.push_i32(0, bcx);
@@ -554,13 +551,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 self.push1(I32, time_ptr);
                 let val = bcx.ins().iconst(I64, 1700000000 * 1000000000);
                 self.push1(I64, val);
-                let mem_offset0 = wasmparser::MemArg {
-                    align: 0,
-                    max_align: 0,
-                    memory: 0,
-                    offset: 0,
-                };
-                translate_memory(&MemoryInstruction::I64Store(mem_offset0), self, bcx);
+                translate_memory(&MemoryInstruction::I64Store(memarg_offset(0)), self, bcx);
                 // return 0 (indicate success)
                 self.push_i32(0, bcx);
             }
@@ -575,20 +566,14 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 // __wasi_errno_t err = __wasi_environ_sizes_get(&environ_count, &environ_buf_size);
                 let zero = bcx.ins().iconst(I32, 0);
 
-                let m_imm = wasmparser::MemArg {
-                    align: 0,
-                    max_align: 0,
-                    memory: 0,
-                    offset: 0,
-                };
                 // *environ_count = 0
                 self.push1(I32, environ_count_addr);
                 self.push1(I32, zero);
-                translate_memory(&MemoryInstruction::I32Store(m_imm), self, bcx);
+                translate_memory(&MemoryInstruction::I32Store(memarg_offset(0)), self, bcx);
                 // *environ_buf_size = 0
                 self.push1(I32, environ_buf_size_addr);
                 self.push1(I32, zero);
-                translate_memory(&MemoryInstruction::I32Store(m_imm), self, bcx);
+                translate_memory(&MemoryInstruction::I32Store(memarg_offset(0)), self, bcx);
                 // success
                 self.push1(I32, zero);
             }

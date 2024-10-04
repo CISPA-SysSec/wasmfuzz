@@ -67,10 +67,8 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
         // TODO(perf): bind to core?
 
         let orc_handle = orc_handle.clone();
-
         let mod_spec = mod_spec.clone();
-        // let thread_name = opts.thread_name.as_deref().unwrap_or("worker").to_owned();
-        let thread_name = format!("orc-worker-{core_idx}");
+        let thread_name = format!("worker-{core_idx}");
         let mq = mq.clone();
         let opts = opts.clone();
         let handle = std::thread::Builder::new()
@@ -97,20 +95,28 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                     } else {
                         res
                     };
-                    println!("orc run exited with {res:?}");
+                    println!("Fuzz-task exited with {res:?}");
 
-                    for _ in 0..10 {
-                        if !dbg!(worker.inmemory_cmin(false)) {
-                            break;
-                        }
-                    }
-
-                    let mut inputs = Vec::new();
-                    for i in worker.corpus.ids() {
-                        let entry = worker.corpus.get(i).unwrap();
+                    if worker.solutions.count() != 0 {
+                        let mut inputs = Vec::new();
+                        let id = worker.solutions.ids().next().unwrap();
+                        let entry = worker.solutions.get(id).unwrap();
                         inputs.push(entry.borrow().input().as_ref().unwrap().bytes().to_vec());
+                        orc_handle.report_finds(inputs);
+                    } else {
+                        for _ in 0..10 {
+                            if !dbg!(worker.inmemory_cmin(false)) {
+                                break;
+                            }
+                        }
+
+                        let mut inputs = Vec::new();
+                        for i in worker.corpus.ids() {
+                            let entry = worker.corpus.get(i).unwrap();
+                            inputs.push(entry.borrow().input().as_ref().unwrap().bytes().to_vec());
+                        }
+                        orc_handle.report_finds(inputs);
                     }
-                    orc_handle.report_finds(inputs);
                 }
             })
             .unwrap();
@@ -119,7 +125,7 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
     }
 
     for handle in handles {
-        handle.join().expect("worker thread died");
+        handle.join().expect("Worker thread died");
     }
 
     orc_handle.shutdown();
