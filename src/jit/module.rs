@@ -133,7 +133,7 @@ impl<'s> ModuleTranslator<'s> {
         let mut func_ids = HashMap::default();
         let mut func_sigs = HashMap::default();
         for func in &spec.functions {
-            let signature = Self::function_signature(&module, func, true);
+            let signature = Self::function_signature(&module, func, true, opts.is_concolic());
             let func_id = module
                 .declare_function(&func.symbol, Linkage::Local, &signature)
                 .unwrap();
@@ -151,7 +151,12 @@ impl<'s> ModuleTranslator<'s> {
         }
     }
 
-    fn function_signature(module: &JITModule, func: &FuncSpec, internal: bool) -> Signature {
+    fn function_signature(
+        module: &JITModule,
+        func: &FuncSpec,
+        internal: bool,
+        with_concolic: bool,
+    ) -> Signature {
         let mut signature = module.make_signature();
         if internal {
             signature.call_conv = isa::CallConv::Fast;
@@ -163,6 +168,17 @@ impl<'s> ModuleTranslator<'s> {
 
         for ret in func.ty.results() {
             signature.returns.push(AbiParam::new(super::wasm2ty(ret)));
+        }
+
+        if with_concolic && internal {
+            let symval = AbiParam::new(ir::types::I32);
+            for _ in func.ty.params() {
+                signature.params.push(symval);
+            }
+
+            for _ in func.ty.results() {
+                signature.returns.push(symval);
+            }
         }
 
         signature.params.push(ir::AbiParam::special(
@@ -277,6 +293,7 @@ impl<'s> ModuleTranslator<'s> {
             export_func_ptrs,
             trap_pc_registry,
             code_size,
+            s.options,
         )
     }
 
@@ -327,6 +344,12 @@ impl<'s> ModuleTranslator<'s> {
             let var = functrans.get_slot(i as u32);
             bcx.declare_var(var, super::wasm2ty(ty));
             bcx.def_var(var, param);
+
+            if functrans.options.is_concolic() {
+                let var_sym = functrans.get_slot_concolic(i as u32);
+                bcx.declare_var(var_sym, types::I32);
+                bcx.def_var(var_sym, params[func.ty.params().len() + i]);
+            }
         }
         // populate other locals with zeroed values
         for (ii, ty) in func.locals.iter().enumerate() {
@@ -336,6 +359,13 @@ impl<'s> ModuleTranslator<'s> {
             let var = functrans.get_slot(i as u32);
             bcx.declare_var(var, super::wasm2ty(ty));
             bcx.def_var(var, val);
+
+            if functrans.options.is_concolic() {
+                let var_sym = functrans.get_slot_concolic(i as u32);
+                bcx.declare_var(var_sym, types::I32);
+                let concrete = bcx.ins().iconst(types::I32, 0);
+                bcx.def_var(var_sym, concrete);
+            }
         }
 
         if options.verbose {
@@ -374,7 +404,14 @@ impl<'s> ModuleTranslator<'s> {
 
         let returns = wasm2tys(func.ty.results());
         if !functrans.dead(&bcx) {
-            let rvals = functrans.popn(&returns, &mut bcx);
+            let mut rvals = functrans.popn(&returns, &mut bcx);
+            if functrans.options.is_concolic() {
+                let concolic_vars = rvals
+                    .iter()
+                    .map(|el| functrans.get_concolic(el))
+                    .collect::<Vec<_>>();
+                rvals.extend_from_slice(&concolic_vars);
+            }
 
             if options.debug_trace {
                 super::builtins::translate_debug_log(
@@ -441,13 +478,13 @@ impl<'s> ModuleTranslator<'s> {
         pass_meta: &mut HashMap<u64, Box<dyn Any>>,
     ) -> (FuncId, Vec<MachTrap>, Vec<TrapKind>) {
         let func = &spec.functions[fidx as usize];
-        let signature = Self::function_signature(&self.module, func, false);
+        let signature = Self::function_signature(&self.module, func, false, options.is_concolic());
         let export_func_id = self
             .module
             .declare_function(symbol, Linkage::Local, &signature)
             .unwrap();
         export_func_ids.insert(symbol.to_owned(), export_func_id);
-        ctx.func.signature = Self::function_signature(&self.module, func, false);
+        ctx.func.signature = Self::function_signature(&self.module, func, false, false);
         assert!(ctx.func.signature.call_conv == isa::CallConv::SystemV);
         ctx.func.name = UserFuncName::user(1, func.idx);
         let subfunc_id = self.func_ids[&func.idx];
@@ -456,7 +493,13 @@ impl<'s> ModuleTranslator<'s> {
         let block = bcx.create_block();
         bcx.switch_to_block(block);
         bcx.append_block_params_for_function_params(block);
-        let params = bcx.block_params(block).to_vec();
+        let mut params = bcx.block_params(block).to_vec();
+        if options.is_concolic() {
+            let vmctx = params.pop().unwrap();
+            let sym_concrete = bcx.ins().iconst(types::I32, 0);
+            params.extend(vec![sym_concrete; func.ty.params().len()]);
+            params.push(vmctx);
+        }
 
         let _func_ids = HashMap::default();
         let mut tramp_functrans = super::FuncTranslator::new(
@@ -481,7 +524,10 @@ impl<'s> ModuleTranslator<'s> {
         }
 
         let call_inst = bcx.ins().call(subfunc_ref, &params);
-        let rvals = bcx.inst_results(call_inst).to_vec();
+        let mut rvals = bcx.inst_results(call_inst).to_vec();
+        if options.is_concolic() {
+            rvals.truncate(func.ty.results().len());
+        }
 
         tramp_functrans.iter_passes(&mut bcx, |pass, ctx| pass.instrument_trampoline_ret(ctx));
 

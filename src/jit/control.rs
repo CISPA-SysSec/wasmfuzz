@@ -2,12 +2,25 @@ use crate::instrumentation::FuncIdx;
 use crate::ir::WFOperator;
 use crate::{ir::ControlInstruction, AbortCode};
 
+use super::concolic::{
+    translate_concolic_push_path_constraint_eq, translate_concolic_push_path_constraint_nz,
+};
 use super::util::wasm2tys;
 use super::FuncTranslator;
 use codegen::ir::SigRef;
 use cranelift::codegen::ir::{self, ArgumentPurpose};
 use cranelift::prelude::types::*;
 use cranelift::prelude::*;
+
+fn params_augument_concolic(params: &mut Vec<Value>, state: &mut FuncTranslator) {
+    if state.options.is_concolic() {
+        let symvals = params
+            .iter()
+            .map(|val| state.get_concolic(val))
+            .collect::<Vec<_>>();
+        params.extend_from_slice(&symvals);
+    }
+}
 
 pub(crate) fn translate_control<'a, 'b, 's>(
     op: &ControlInstruction,
@@ -43,8 +56,9 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 //   br 0
                 state.pop_control_frame();
             } else {
-                let params = state.popn(&tys, bcx);
+                let mut params = state.popn(&tys, bcx);
                 state.pop_control_frame();
+                params_augument_concolic(&mut params, state);
                 bcx.ins().jump(block, &params);
                 state.mark_dead(bcx);
             }
@@ -55,6 +69,12 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 block_return_values.push(param);
             }
 
+            if state.options.is_concolic() {
+                for (param, ty) in block_return_values.iter().zip(&tys) {
+                    let param_symex = bcx.append_block_param(block, types::I32);
+                    state.set_concolic(*ty, *param, param_symex, bcx);
+                }
+            }
             bcx.switch_to_block(block);
             state.pushn(&tys, &block_return_values);
             let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, state.ip.inc());
@@ -72,7 +92,8 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             let block = state.block(state.ip, bcx);
             let tys = wasm2tys(ty.params());
             if !state.dead(bcx) {
-                let params = state.popn(&tys, bcx);
+                let mut params = state.popn(&tys, bcx);
+                params_augument_concolic(&mut params, state);
                 bcx.ins().jump(block, &params);
                 state.mark_dead(bcx);
             }
@@ -81,7 +102,12 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 let param = bcx.append_block_param(block, super::wasm2ty(ty));
                 block_params.push(param);
             }
-
+            if state.options.is_concolic() {
+                for (param, ty) in block_params.iter().zip(&tys) {
+                    let param_symex = bcx.append_block_param(block, types::I32);
+                    state.set_concolic(*ty, *param, param_symex, bcx);
+                }
+            }
             if matches!(op, ControlInstruction::Block { .. }) {
                 bcx.seal_block(block); // we can only re-enter loop headers
             }
@@ -101,6 +127,11 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             }
 
             let cond = state.pop1(I32, bcx);
+
+            if state.options.is_concolic() {
+                let caller = state.loc();
+                translate_concolic_push_path_constraint_nz(cond, caller, state, bcx);
+            }
 
             state.push_control_frame();
             let cont = state.block(state.ip, bcx);
@@ -146,7 +177,8 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             } else {
                 let end_block = state.block(*end_operator_index, bcx);
                 let param_tys = wasm2tys(target_params.params());
-                let params = state.popn(&param_tys, bcx);
+                let mut params = state.popn(&param_tys, bcx);
+                params_augument_concolic(&mut params, state);
                 bcx.ins().jump(end_block, &params);
                 state.mark_dead(bcx);
             }
@@ -164,7 +196,8 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             }
             let target = state.block(*cfg_target, bcx);
             let param_tys = wasm2tys(target_params.params());
-            let params = state.popn(&param_tys, bcx);
+            let mut params = state.popn(&param_tys, bcx);
+            params_augument_concolic(&mut params, state);
             let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, *cfg_target);
             state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
             if !state.dead(bcx) {
@@ -186,6 +219,11 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             let else_block = bcx.create_block();
             let cond = state.pop1(I32, bcx);
 
+            if state.options.is_concolic() {
+                let caller = state.loc();
+                translate_concolic_push_path_constraint_nz(cond, caller, state, bcx);
+            }
+
             let jump_block = bcx.create_block();
             bcx.ins().brif(cond, jump_block, &[], else_block, &[]);
 
@@ -193,8 +231,9 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             bcx.switch_to_block(jump_block);
             let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, *cfg_target);
             state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
-            let params = state.peekn(target_params.params().len(), bcx);
+            let mut params = state.peekn(target_params.params().len(), bcx);
             if !state.dead(bcx) {
+                params_augument_concolic(&mut params, state);
                 bcx.ins().jump(target, &params);
             }
 
@@ -210,6 +249,12 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 return state.adjust_pop_push(&[I32], &[]);
             }
             let val = state.pop1(I32, bcx);
+
+            if state.options.is_concolic() {
+                // TODO: explicitly solve for targets with different funcs?
+                let caller = state.loc();
+                translate_concolic_push_path_constraint_eq(val, I32, caller, state, bcx);
+            }
 
             let default_target = state.block(*default, bcx);
             let default_block = bcx.create_block();
@@ -254,8 +299,15 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             if state.dead(bcx) {
                 return state.adjust_pop_push(&rets, &[]);
             }
-            let rvals = state.popn(&rets, bcx);
-            bcx.ins().return_(&rvals);
+            let mut rvals = state.popn(&rets, bcx);
+            if state.options.is_concolic() {
+                let concolic_vars = rvals
+                    .iter()
+                    .map(|el| state.get_concolic(el))
+                    .collect::<Vec<_>>();
+                rvals.extend_from_slice(&concolic_vars);
+            }
+            bcx.ins().return_(&rvals); // TODO: refactor for easier inlining?
             state.mark_dead(bcx);
         }
 
@@ -305,6 +357,11 @@ pub(crate) fn translate_control<'a, 'b, 's>(
 
             let callee_idx = state.pop1(I32, bcx);
 
+            if state.options.is_concolic() {
+                let caller = state.loc();
+                translate_concolic_push_path_constraint_eq(callee_idx, I32, caller, state, bcx);
+            }
+
             let sig = {
                 let mut signature = Signature::new(isa::CallConv::Fast);
                 for param in function_ty.params() {
@@ -312,6 +369,16 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 }
                 for ret in function_ty.results() {
                     signature.returns.push(AbiParam::new(super::wasm2ty(ret)));
+                }
+
+                if state.options.is_concolic() {
+                    let symval = AbiParam::new(ir::types::I32);
+                    for _ in function_ty.params() {
+                        signature.params.push(symval);
+                    }
+                    for _ in function_ty.results() {
+                        signature.returns.push(symval);
+                    }
                 }
 
                 signature.params.push(ir::AbiParam::special(
@@ -379,6 +446,7 @@ fn translate_call(
         return state.adjust_pop_push(&[], &return_tys);
     }
 
+    params_augument_concolic(&mut params, state);
     let vmctx = bcx
         .func
         .special_param(ArgumentPurpose::VMContext)
@@ -393,7 +461,14 @@ fn translate_call(
         Callee::Indirect { sigref, callee } => bcx.ins().call_indirect(sigref, callee, &params),
     };
 
-    let inst_results = bcx.inst_results(call).to_vec();
+    let mut inst_results = bcx.inst_results(call).to_vec();
+
+    if state.options.is_concolic() {
+        let symvals = inst_results.split_off(function_ty.results().len());
+        for ((val, symval), ty) in inst_results.iter().zip(symvals).zip(&return_tys) {
+            state.set_concolic(*ty, *val, symval, bcx);
+        }
+    }
 
     state.iter_passes(bcx, |pass, ctx| {
         pass.instrument_call_return(instr_callee.map(FuncIdx), &inst_results, &return_tys, ctx)

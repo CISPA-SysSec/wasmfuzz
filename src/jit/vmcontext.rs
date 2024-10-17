@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use wasmtime::vm::{raise_trap, TrapReason};
 
 use crate::{
+    concolic::ConcolicContext,
     cow_memory::{CowResetMapping, ResettableMapping, RestoreDirtyLKMMapping},
     ir::ModuleSpec,
 };
@@ -30,6 +31,7 @@ pub(crate) struct VMContext {
     pub input_size: usize,
     pub input: Vec<u8>,
     pub feedback: FeedbackContext,
+    pub concolic: ConcolicContext,
     pub host_ptrs_backing: RefCell<Vec<usize>>,
     pub tainted: bool,
     pub random_get_seed: u64,
@@ -91,6 +93,7 @@ impl VMContext {
             input_ptr: 0,
             input: Vec::new(),
             feedback: FeedbackContext::new(),
+            concolic: ConcolicContext::new(module.globals.len()),
             tainted: false,
             random_get_seed: 0xdeadbeefdeadbeef,
         })
@@ -117,6 +120,7 @@ impl VMContext {
         self.globals.copy_from_slice(&self.globals_snapshot);
         self.heap_pages = self.heap_pages_snapshot;
         self.heap_alloc.restore();
+        self.concolic.reset();
 
         // input_ptr should be fine still
         self.input_size = 0;
@@ -134,6 +138,7 @@ impl VMContext {
         for (val, initial) in self.globals.iter_mut().zip(&from.globals) {
             *val = initial.as_bits();
         }
+        self.concolic.reset();
         self.tainted = false;
         self.random_get_seed = 0xdeadbeefdeadbeef;
     }

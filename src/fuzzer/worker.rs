@@ -85,6 +85,7 @@ impl Worker {
                     .tracing(TracingOptions {
                         stdout: true,
                         cmplog: *opts.x.use_cmplog,
+                        concolic: false, // TODO
                     })
                     .run_from_snapshot(*opts.x.run_from_snapshot)
                     .swarm(config.swarm)
@@ -96,6 +97,7 @@ impl Worker {
                     .tracing(TracingOptions {
                         stdout: true,
                         cmplog: *opts.x.use_cmplog,
+                        concolic: *opts.x.use_concolic,
                     })
                     .swarm(SwarmConfig::from_instruction_limit(
                         opts.x.instruction_limit,

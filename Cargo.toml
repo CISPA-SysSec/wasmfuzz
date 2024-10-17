@@ -54,6 +54,10 @@ cranelift = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "wasmfuzz
     "frontend",
 ] }
 
+# feat:concolic
+z3 = { git = "https://github.com/Mrmaxmeier/z3.rs.git", branch = "hack-optimize-lower", optional = true }
+bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = true }
+
 # feat:with_mimalloc
 mimalloc = { version = "0.1", optional = true, default-features = false }
 
@@ -71,6 +75,17 @@ default = ["reports", "compressed_harnesses"]
 reports = ["askama", "lcov", "syntect"]
 with_mimalloc = ["mimalloc"]
 compressed_harnesses = ["zstd"]
+concolic = []
+concolic_bitwuzla = ["bitwuzla", "concolic"]
+concolic_z3 = ["z3", "concolic"]
+concolic_debug_verify = []
+full = [
+    "reports",
+    "compressed_harnesses",
+    "concolic_z3",
+    "concolic_bitwuzla",
+    "with_mimalloc",
+]
 
 
 [profile.dev.package."cranelift"]

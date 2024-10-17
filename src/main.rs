@@ -3,6 +3,7 @@
 //! See [the whitepaper](https://isotropic.org/papers/chicken.pdf) for more details.
 
 mod cli;
+mod concolic;
 pub mod cow_memory;
 mod fuzzer;
 mod instrumentation;

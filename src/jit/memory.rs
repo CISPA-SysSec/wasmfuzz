@@ -31,6 +31,8 @@ fn translate_load(
         pass.instrument_memory_load(addr32, imm.offset as u32, val, result_ty, opcode, ctx)
     });
 
+    let kind = crate::concolic::MemoryAccessKind::from_opcode_and_ty(opcode, result_ty);
+    state.fill_concolic_memory_load(result_ty, val, addr32, imm.offset as u32, kind, bcx);
     state.push1(result_ty, val);
 }
 
@@ -61,6 +63,8 @@ fn translate_store(
         return;
     }
     bcx.ins().Store(opcode, val_ty, flags, offset, val, addr);
+    let kind = crate::concolic::MemoryAccessKind::from_opcode_and_ty(opcode, val_ty);
+    state.concolic_memory_store(val, addr32, imm.offset as u32, kind, bcx);
 }
 
 pub(crate) fn translate_memory(

@@ -30,6 +30,7 @@ fn translate_iunop(op: &IUnaryOp, ty: Type, state: &mut FuncTranslator, bcx: &mu
         IUnaryOp::Ctz => bcx.ins().ctz(val),
         IUnaryOp::Popcnt => bcx.ins().popcnt(val),
     };
+    state.fill_concolic_unop(ty, res, op.into(), val, bcx);
     state.push1(ty, res);
 }
 
@@ -57,6 +58,7 @@ fn translate_ibinop(
         IBinaryOp::Rotl => bcx.ins().rotl(a, b),
         IBinaryOp::Rotr => bcx.ins().rotr(a, b),
     };
+    state.fill_concolic_binop(ty, val, op.into(), a, b, ty, bcx);
     state.push1(ty, val);
 }
 
@@ -77,6 +79,7 @@ fn translate_itestop(
             }
             let res = bcx.ins().icmp_imm(IntCC::Equal, arg, 0);
             let res = bcx.ins().uextend(I32, res);
+            state.fill_concolic_unop(I32, res, op.into(), arg, bcx);
             state.push1(I32, res);
         }
     }
@@ -103,6 +106,7 @@ fn translate_irelop(op: &IRelOp, ty: Type, state: &mut FuncTranslator, bcx: &mut
     }
     let val = bcx.ins().icmp(cc, a, b);
     let val = bcx.ins().uextend(I32, val);
+    state.fill_concolic_binop(I32, val, op.into(), a, b, ty, bcx);
     state.push1(I32, val);
 }
 
@@ -117,6 +121,7 @@ fn translate_funop(op: &FUnaryOp, ty: Type, state: &mut FuncTranslator, bcx: &mu
         FUnaryOp::Trunc => bcx.ins().trunc(val),
         FUnaryOp::Nearest => bcx.ins().nearest(val),
     };
+    state.fill_concolic_unop(ty, res, op.into(), val, bcx);
     state.push1(ty, res);
 }
 
@@ -136,6 +141,7 @@ fn translate_fbinop(
         FBinaryOp::Max => bcx.ins().fmax(a, b),
         FBinaryOp::Copysign => bcx.ins().fcopysign(a, b),
     };
+    state.fill_concolic_binop(ty, val, op.into(), a, b, ty, bcx);
     state.push1(ty, val);
 }
 
@@ -156,6 +162,7 @@ fn translate_frelop(op: &FRelOp, ty: Type, state: &mut FuncTranslator, bcx: &mut
     }
     let val = bcx.ins().fcmp(cc, a, b);
     let val = bcx.ins().uextend(I32, val);
+    state.fill_concolic_binop(I32, val, op.into(), a, b, ty, bcx);
     state.push1(I32, val);
 }
 
@@ -263,6 +270,7 @@ fn translate_conversion_op(
         ConversionOp::I32ReinterpretF32 => bcx.ins().bitcast(I32, MemFlags::new(), val),
         ConversionOp::I64ReinterpretF64 => bcx.ins().bitcast(I64, MemFlags::new(), val),
     };
+    state.fill_concolic_unop(to_ty, res, op.into(), val, bcx);
     state.push1(to_ty, res);
 }
 
@@ -299,6 +307,7 @@ pub(crate) fn translate_numeric(
     match op {
         NumericInstruction::Const(val) => {
             let (ty, val) = translate_const(val, bcx);
+            state.set_concolic_concrete(ty, val, bcx);
             state.push1(ty, val);
         }
         NumericInstruction::I32UnOp(unop) => translate_iunop(unop, I32, state, bcx),

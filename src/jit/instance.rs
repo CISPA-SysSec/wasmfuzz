@@ -3,7 +3,7 @@ use crate::{ir::Location, HashMap};
 use cranelift::jit::JITModule;
 use wasmtime::vm::{catch_traps, TrapReason};
 
-use super::{module::TrapKind, vmcontext::VMContext};
+use super::{module::TrapKind, vmcontext::VMContext, CompilationOptions};
 
 pub(crate) struct ModuleInstance {
     pub vmctx: Box<VMContext>,
@@ -12,6 +12,7 @@ pub(crate) struct ModuleInstance {
     module: JITModule,
     export_func_ptrs: HashMap<String, *const u8>,
     trap_pc_registry: HashMap<usize, TrapKind>,
+    options: CompilationOptions,
 }
 
 impl ModuleInstance {
@@ -21,6 +22,7 @@ impl ModuleInstance {
         export_func_ptrs: HashMap<String, *const u8>,
         trap_pc_registry: HashMap<usize, TrapKind>,
         code_size: usize,
+        options: CompilationOptions,
     ) -> Self {
         // NB: The trap we're returning in get_wasm_trap here is arbitrary.
         // We're resolving traps separately based on trap pc address.
@@ -31,6 +33,7 @@ impl ModuleInstance {
             export_func_ptrs,
             trap_pc_registry,
             code_size,
+            options,
         }
     }
 
@@ -93,8 +96,16 @@ impl ModuleInstance {
         self.vmctx.input_ptr = pos as u32;
         self.vmctx.input_size = buf.len();
 
+        if cfg!(feature = "concolic_debug_verify") {
+            self.vmctx.input.clear();
+            self.vmctx.input.extend_from_slice(buf);
+        }
         // unstable feedback might be caused by input buffer over-reads
         // self.vmctx.heap()[pos..][..u16::MAX as usize].fill(0);
         self.vmctx.heap()[pos..pos + buf.len()].copy_from_slice(buf);
+
+        if self.options.is_concolic() {
+            self.vmctx.concolic.mark_input(pos, buf.len());
+        }
     }
 }

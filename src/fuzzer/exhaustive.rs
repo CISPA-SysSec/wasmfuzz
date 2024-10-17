@@ -117,3 +117,196 @@ impl QueuedInputMutation for ReplaceEveryInputByte {
         Some(format!("replace-every-byte @ {:#x}", self.changed_position))
     }
 }
+
+#[cfg(feature = "concolic_bitwuzla")]
+pub(crate) use concolic_bitwuzla::*;
+#[cfg(feature = "concolic_bitwuzla")]
+mod concolic_bitwuzla {
+    // TODO: refactor/move from here.
+    // TODO: slice path constraints? we currently apply all, even for unrelated inputs.
+    // => a single unsupported fp constraint breaks all subsequent path constrains
+
+    use super::*;
+    use crate::{
+        concolic::{self, ConcolicEvent, ConcolicTrace},
+        ir::ModuleSpec,
+    };
+    use std::{collections::VecDeque, sync::Arc};
+
+    pub(crate) struct ConcolicFlipPathsWithBitwuzla {
+        input: Vec<u8>,
+        events: VecDeque<ConcolicEvent>,
+        solver: concolic::BitwuzlaSolver,
+        trace: ConcolicTrace,
+        current: Option<ConcolicEvent>,
+    }
+
+    impl ConcolicFlipPathsWithBitwuzla {
+        pub(crate) fn new(input: &[u8], trace: ConcolicTrace, spec: Arc<ModuleSpec>) -> Self {
+            ConcolicFlipPathsWithBitwuzla {
+                input: input.to_vec(),
+                events: trace.events.iter().cloned().collect(),
+                solver: concolic::BitwuzlaSolver::new(Some(spec)),
+                current: None,
+                trace,
+            }
+        }
+    }
+
+    impl QueuedInputMutation for ConcolicFlipPathsWithBitwuzla {
+        fn input(&self) -> &[u8] {
+            &self.input
+        }
+        fn has_next(&self) -> bool {
+            !self.events.is_empty()
+        }
+        fn next(&mut self, input: &mut [u8]) {
+            let event = self.events.pop_front().unwrap();
+            if self
+                .solver
+                .try_negate(&event, &self.trace.symvals)
+                .unwrap_or(false)
+            {
+                self.solver.apply_model(input);
+            }
+            let _ = self
+                .solver
+                .assert(&event, &self.input, &self.trace.symvals, false);
+            self.current = Some(event);
+        }
+        fn credit(&self) -> Option<String> {
+            self.current
+                .as_ref()
+                .map(|el| format!("concolic-model: {:?}", el))
+        }
+        fn mutation_overhead(&self) -> u32 {
+            1024
+        }
+    }
+
+    pub(crate) struct ConcolicOptimisticBitwuzla {
+        input: Vec<u8>,
+        events: VecDeque<ConcolicEvent>,
+        solver: concolic::BitwuzlaSolver,
+        trace: ConcolicTrace,
+        current: Option<ConcolicEvent>,
+    }
+
+    impl ConcolicOptimisticBitwuzla {
+        pub(crate) fn new(input: &[u8], trace: ConcolicTrace, spec: Arc<ModuleSpec>) -> Self {
+            ConcolicOptimisticBitwuzla {
+                input: input.to_vec(),
+                events: Self::filter_optimistic_events(&trace),
+                solver: concolic::BitwuzlaSolver::new(Some(spec)),
+                current: None,
+                trace,
+            }
+        }
+
+        fn filter_optimistic_events(context: &ConcolicTrace) -> VecDeque<ConcolicEvent> {
+            if context.events.len() < 1024 {
+                return context.events.iter().cloned().collect();
+            }
+            let mut res = VecDeque::new();
+            for ids in context.events_by_location.values() {
+                if ids.len() <= 32 {
+                    for &i in ids {
+                        res.push_back(context.events[i].clone());
+                    }
+                } else {
+                    for &i in &ids[..16] {
+                        res.push_back(context.events[i].clone());
+                    }
+                    for &i in &ids[ids.len() - 16..] {
+                        res.push_back(context.events[i].clone());
+                    }
+                }
+            }
+            res
+        }
+    }
+
+    impl QueuedInputMutation for ConcolicOptimisticBitwuzla {
+        fn input(&self) -> &[u8] {
+            &self.input
+        }
+        fn has_next(&self) -> bool {
+            !self.events.is_empty()
+        }
+        fn next(&mut self, input: &mut [u8]) {
+            let event = self.events.pop_front().unwrap();
+            if self
+                .solver
+                .try_negate(&event, &self.trace.symvals)
+                .unwrap_or(false)
+            {
+                self.solver.apply_model(input);
+            }
+            self.current = Some(event);
+        }
+        fn credit(&self) -> Option<String> {
+            self.current
+                .as_ref()
+                .map(|el| format!("concolic-optimistic: {:?}", el))
+        }
+        fn mutation_overhead(&self) -> u32 {
+            1024
+        }
+    }
+
+    // TODO(strat): symbolic-like exploration? => flip and fork
+    // https://github.com/trailofbits/manticore/blob/master/manticore/core/manticore.py
+    /*
+    pub(crate) struct BitwuzlaExploreState {
+        cursor: usize,
+        solve_fuel: u16,
+        input: Vec<u8>,
+        events: VecDeque<ConcolicEvent>,
+    }
+
+    pub(crate) struct ConcolicExploreBitwuzla {
+        states: BinaryHeap<BitwuzlaExploreState>,
+        solver: concolic::BitwuzlaSolver,
+        context: ConcolicContext,
+        current: Option<ConcolicEvent>,
+    }
+
+    impl ConcolicExploreBitwuzla {
+        pub(crate) fn new(input: &[u8], context: ConcolicContext) -> Box<dyn DeterministicInputMutation> {
+            Box::new(ConcolicExploreBitwuzla {
+                input: input.to_vec(),
+                events: context.events.iter().cloned().collect(),
+                solver: concolic::BitwuzlaSolver::new(),
+                current: None,
+                context,
+            })
+        }
+    }
+
+    impl DeterministicInputMutation for ConcolicExploreBitwuzla {
+        fn input(&self) -> &[u8] {
+            &self.input
+        }
+        fn has_next(&self) -> bool {
+            !self.events.is_empty()
+        }
+        fn next(&mut self, input: &mut [u8]) {
+            let event = self.events.pop_front().unwrap();
+            if self
+                .solver
+                .try_negate(&event, &self.context)
+                .unwrap_or(false)
+            {
+                self.solver.apply_model(input);
+            }
+            let _ = self.solver.assert(&event, &self.input, &self.context);
+            self.current = Some(event);
+        }
+        fn credit(&self) -> Option<String> {
+            self.current
+                .as_ref()
+                .map(|el| format!("concolic-model: {:?}", el))
+        }
+    }
+    */
+}
