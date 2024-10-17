@@ -22,6 +22,12 @@ use super::{
         builtin_memory_grow, builtin_memory_size, builtin_random_get,
         builtin_trace_wasmfuzz_write_stdout, fetch_vmctx, signature, translate_debug_log,
     },
+    concolic::{
+        translate_build_concolic_binop, translate_build_concolic_memory_load,
+        translate_build_concolic_select, translate_build_concolic_unop,
+        translate_concolic_debug_verify, translate_concolic_memory_copy,
+        translate_concolic_memory_fill, translate_concolic_memory_store,
+    },
     memory::translate_memory,
     module::TrapKind,
     util::{wasm2tys, MemFlagsExt},
@@ -54,6 +60,7 @@ pub(crate) struct FuncTranslator<'a, 's> {
     stack_control_depths: Vec<usize>,
     pub blocks: HashMap<InsnIdx, ir::Block>,
     pub dead_bbs: HashSet<ir::Block>,
+    pub concolic_vals: HashMap<Value, Value>,
     pub gv_vmctx: Option<GlobalValue>,
     pub heap: Option<GlobalValue>,
     pub func_refs: HashMap<FuncId, FuncRef>,
@@ -95,6 +102,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             stack_control_depths: vec![0],
             blocks: HashMap::default(),
             dead_bbs: HashSet::default(),
+            concolic_vals: HashMap::default(),
             func_refs,
             gv_vmctx: None,
             heap: None,
@@ -121,7 +129,9 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             StackEntry::Undefined(ty) => self.undef(ty, bcx),
             StackEntry::Value(ty_, val) => {
                 assert_eq!(ty, ty_, "pop1: expected {ty:?} got {ty_:?}");
-
+                if self.options.is_concolic() {
+                    assert!(self.concolic_vals.contains_key(&val));
+                }
                 val
             }
         }
@@ -193,15 +203,143 @@ impl<'a, 's> FuncTranslator<'a, 's> {
     }
 
     pub(crate) fn push1(&mut self, ty: Type, val: ir::Value) {
+        if self.options.is_concolic() {
+            assert!(self.concolic_vals.contains_key(&val));
+        }
         self.stack.push(StackEntry::Value(ty, val));
     }
 
     pub(crate) fn pushn(&mut self, tys: &[Type], vals: &[ir::Value]) {
+        if self.options.is_concolic() {
+            for val in vals {
+                assert!(self.concolic_vals.contains_key(val));
+            }
+        }
+
         self.stack.extend(
             vals.iter()
                 .zip(tys)
                 .map(|(v, ty)| StackEntry::Value(*ty, *v)),
         )
+    }
+
+    pub(crate) fn get_concolic(&self, value: &ir::Value) -> ir::Value {
+        debug_assert!(self.options.is_concolic());
+        *self
+            .concolic_vals
+            .get(value)
+            .expect("symvar missing for ir value")
+    }
+
+    pub(crate) fn set_concolic(
+        &mut self,
+        ty: Type,
+        dest: ir::Value,
+        symref: ir::Value,
+        bcx: &mut FunctionBuilder,
+    ) {
+        if self.options.is_concolic() {
+            debug_assert!(!self.concolic_vals.contains_key(&symref));
+            debug_assert!(!self.concolic_vals.values().any(|&v| v == dest));
+            if cfg!(debug_assertions) && self.concolic_vals.contains_key(&dest) {
+                debug_assert!(*self.concolic_vals.get(&dest).unwrap() == symref);
+            }
+            self.concolic_vals.insert(dest, symref);
+            if cfg!(feature = "concolic_debug_verify") {
+                translate_concolic_debug_verify(dest, ty, symref, self, bcx);
+            }
+        }
+    }
+
+    pub(crate) fn set_concolic_concrete(
+        &mut self,
+        ty: Type,
+        dest: ir::Value,
+        bcx: &mut FunctionBuilder,
+    ) {
+        if self.options.is_concolic() {
+            self.set_concolic(ty, dest, bcx.ins().iconst(I32, 0), bcx);
+        }
+    }
+
+    pub(crate) fn fill_concolic_unop(
+        &mut self,
+        ty: Type,
+        dest: ir::Value,
+        op: crate::concolic::UnaryOp,
+        source: ir::Value,
+        bcx: &mut FunctionBuilder,
+    ) {
+        if !self.options.is_concolic() {
+            return;
+        }
+        let symref = translate_build_concolic_unop(op, source, self, bcx);
+        self.set_concolic(ty, dest, symref, bcx);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fill_concolic_binop(
+        &mut self,
+        dest_ty: Type,
+        dest: ir::Value,
+        op: crate::concolic::BinaryOp,
+        a: ir::Value,
+        b: ir::Value,
+        ty: Type,
+        bcx: &mut FunctionBuilder,
+    ) {
+        if !self.options.is_concolic() {
+            return;
+        }
+        let symref = translate_build_concolic_binop(op, a, b, ty, self, bcx);
+        self.set_concolic(dest_ty, dest, symref, bcx);
+    }
+
+    pub(crate) fn fill_concolic_select(
+        &mut self,
+        dest: ir::Value,
+        cond: ir::Value,
+        a: ir::Value,
+        b: ir::Value,
+        ty: Type,
+        bcx: &mut FunctionBuilder,
+    ) {
+        if !self.options.is_concolic() {
+            return;
+        }
+        let symref = translate_build_concolic_select(cond, a, b, ty, self, bcx);
+        self.set_concolic(ty, dest, symref, bcx);
+    }
+
+    pub(crate) fn fill_concolic_memory_load(
+        &mut self,
+        result_ty: Type,
+        dest: Value,
+        addr32: Value,
+        offset: u32,
+        kind: crate::concolic::MemoryAccessKind,
+        bcx: &mut FunctionBuilder,
+    ) {
+        if !self.options.is_concolic() {
+            return;
+        }
+        let symref =
+            translate_build_concolic_memory_load(addr32, offset, kind, self.loc(), self, bcx);
+        self.set_concolic(result_ty, dest, symref, bcx);
+    }
+
+    pub(crate) fn concolic_memory_store(
+        &mut self,
+        val: Value,
+        addr32: Value,
+        offset: u32,
+        kind: crate::concolic::MemoryAccessKind,
+        bcx: &mut FunctionBuilder,
+    ) {
+        if !self.options.is_concolic() {
+            return;
+        }
+        translate_concolic_memory_store(val, addr32, offset, kind, self.loc(), self, bcx);
     }
 
     pub(crate) fn push_control_frame(&mut self) {
@@ -246,6 +384,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         // This value is undefined and will not be used in actual execution traces.
         // We assign a dummy to proceed with compilation
         let val = bcx.ins().iconst(ty, 0xfadebabe);
+        self.set_concolic_concrete(ty, val, bcx);
         val
     }
 
@@ -418,6 +557,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                     builtin_memory_size as unsafe extern "C" fn(_) -> u32,
                     &[],
                 );
+                self.set_concolic_concrete(I32, res, bcx);
                 self.push1(I32, res);
             }
             "MemoryGrow" => {
@@ -429,6 +569,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                     &[delta],
                 );
 
+                self.set_concolic_concrete(I32, res, bcx);
                 self.push1(I32, res);
             }
             "MemoryFill" => {
@@ -441,6 +582,10 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                     builtin_memory_fill as unsafe extern "C" fn(_, _, _, _),
                     &[dest, val, len],
                 );
+
+                if self.options.is_concolic() {
+                    translate_concolic_memory_fill(dest, val, len, self, bcx);
+                }
             }
             "MemoryCopy" => {
                 let len = self.pop1(I32, bcx);
@@ -452,6 +597,10 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                     builtin_memory_copy as unsafe extern "C" fn(_, _, _, _),
                     &[dst_pos, src_pos, len],
                 );
+
+                if self.options.is_concolic() {
+                    translate_concolic_memory_copy(dst_pos, src_pos, len, self, bcx);
+                }
             }
             "wasi_snapshot_preview1::fd_write" => {
                 /*
@@ -473,6 +622,12 @@ impl<'a, 's> FuncTranslator<'a, 's> {
 
                 let end = bcx.create_block();
                 let end_count = bcx.append_block_param(end, I32);
+
+                // Note: This is not correct but is probably fine.
+                self.set_concolic_concrete(I32, block_iovs_addr, bcx);
+                self.set_concolic_concrete(I32, block_iovs_len, bcx);
+                self.set_concolic_concrete(I32, block_count, bcx);
+                self.set_concolic_concrete(I32, end_count, bcx);
 
                 let zero = bcx.ins().iconst(I32, 0);
                 bcx.ins().jump(block, &[iovs_addr, iovs_len, zero]);
@@ -549,8 +704,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 let _clock_id = self.pop1(I32, bcx);
                 // store fixed time (in nanos) in `time_ptr`
                 self.push1(I32, time_ptr);
-                let val = bcx.ins().iconst(I64, 1700000000 * 1000000000);
-                self.push1(I64, val);
+                self.push_i64(1700000000 * 1000000000, bcx);
                 translate_memory(&MemoryInstruction::I64Store(memarg_offset(0)), self, bcx);
                 // return 0 (indicate success)
                 self.push_i32(0, bcx);
@@ -564,18 +718,17 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 let environ_buf_size_addr = self.pop1(I32, bcx);
                 let environ_count_addr = self.pop1(I32, bcx);
                 // __wasi_errno_t err = __wasi_environ_sizes_get(&environ_count, &environ_buf_size);
-                let zero = bcx.ins().iconst(I32, 0);
 
                 // *environ_count = 0
                 self.push1(I32, environ_count_addr);
-                self.push1(I32, zero);
+                self.push_i32(0, bcx);
                 translate_memory(&MemoryInstruction::I32Store(memarg_offset(0)), self, bcx);
                 // *environ_buf_size = 0
                 self.push1(I32, environ_buf_size_addr);
-                self.push1(I32, zero);
+                self.push_i32(0, bcx);
                 translate_memory(&MemoryInstruction::I32Store(memarg_offset(0)), self, bcx);
                 // success
-                self.push1(I32, zero);
+                self.push_i32(0, bcx);
             }
             "wasi_snapshot_preview1::fd_prestat_get" => {
                 // ignore args and return __WASI_ERRNO_BADF (8)
@@ -648,6 +801,10 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             self.slot.insert(idx, res);
             res
         }
+    }
+
+    pub(crate) fn get_slot_concolic(&mut self, idx: u32) -> Variable {
+        self.get_slot(u32::MAX - idx)
     }
 
     // #[deprecated]
@@ -762,7 +919,14 @@ impl<'a, 's> FuncTranslator<'a, 's> {
 
     fn push_i32(&mut self, val: i32, bcx: &mut FunctionBuilder) {
         let val = bcx.ins().iconst(I32, val as u32 as i64);
+        self.set_concolic_concrete(I32, val, bcx);
         self.push1(I32, val);
+    }
+
+    fn push_i64(&mut self, val: i64, bcx: &mut FunctionBuilder) {
+        let val = bcx.ins().iconst(I64, val);
+        self.set_concolic_concrete(I64, val, bcx);
+        self.push1(I64, val);
     }
 
     pub(crate) fn iter_passes<F: Fn(&mut dyn ErasedInstrumentationPass, InstrCtx)>(
@@ -807,6 +971,8 @@ trait HostCallTy {
 mod fn_sig_impls {
     use super::VMContext;
     use super::{HostCallFn, HostCallTy};
+    use crate::concolic::*;
+    use crate::jit::concolic::ValTy;
     use cranelift::codegen::ir::types::*;
     use cranelift::codegen::ir::Value;
 
@@ -922,6 +1088,12 @@ mod fn_sig_impls {
     impl_ty!(u32 => I32);
     impl_ty!(u64 => I64);
     impl_ty!(usize => I64);
+
+    impl_ty!(UnaryOp => I8);
+    impl_ty!(BinaryOp => I8);
+    impl_ty!(ValTy => I8);
+    impl_ty!(MemoryAccessKind => I8);
+    impl_ty!(SymValRef => I32);
 
     impl<T: HostCallTy> HostCallTy for *mut T {
         fn as_cranelift_ty() -> Type {

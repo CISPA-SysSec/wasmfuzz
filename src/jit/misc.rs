@@ -30,6 +30,7 @@ pub(crate) fn translate_parametric(
             let ty = state.peekty2();
             let (a, b) = state.pop2(ty, bcx);
             let val = bcx.ins().select(cond, a, b);
+            state.fill_concolic_select(val, cond, a, b, ty, bcx);
             state.push1(ty, val);
         }
     }
@@ -57,6 +58,11 @@ pub(crate) fn translate_variable(
             }
             let var = state.get_slot(index);
             let val = bcx.use_var(var);
+            if state.options.is_concolic() {
+                let var_sym = state.get_slot_concolic(index);
+                let val_sym = bcx.use_var(var_sym);
+                state.set_concolic(ty, val, val_sym, bcx);
+            }
             state.push1(ty, val);
         }
         VariableInstruction::LocalSet(index) => {
@@ -67,6 +73,12 @@ pub(crate) fn translate_variable(
             let val = state.pop1(ty, bcx);
             let var = state.get_slot(index);
             bcx.def_var(var, val);
+
+            if state.options.is_concolic() {
+                let var_sym = state.get_slot_concolic(index);
+                let val_sym = state.get_concolic(&val);
+                bcx.def_var(var_sym, val_sym);
+            }
         }
         VariableInstruction::LocalTee(index) => {
             let ty = local_ty(index, state);
@@ -76,6 +88,12 @@ pub(crate) fn translate_variable(
             let val = state.peek1(ty, bcx);
             let var = state.get_slot(index);
             bcx.def_var(var, val);
+
+            if state.options.is_concolic() {
+                let var_sym = state.get_slot_concolic(index);
+                let val_sym = state.get_concolic(&val);
+                bcx.def_var(var_sym, val_sym);
+            }
         }
         VariableInstruction::GlobalGet(index) => {
             let ty = super::wasm2ty(&state.spec.globals[index as usize].ty());
@@ -90,6 +108,13 @@ pub(crate) fn translate_variable(
             let offset = (index as i32) * 8;
             let flags = ir::MemFlags::trusted();
             let val = bcx.ins().load(ty, flags, addr, offset);
+
+            if state.options.is_concolic() {
+                let addr = state.vmctx.concolic.global_symvars.as_ptr();
+                let addr = state.host_ptr(bcx, addr);
+                let val_sym = bcx.ins().load(ty, flags, addr, (index as i32) * 4);
+                state.set_concolic(ty, val, val_sym, bcx);
+            }
 
             state.push1(ty, val);
         }
@@ -112,6 +137,13 @@ pub(crate) fn translate_variable(
             state.iter_passes(bcx, |pass, ctx| {
                 pass.instrument_global_set(index, val, ty, ctx)
             });
+
+            if state.options.is_concolic() {
+                let addr = state.vmctx.concolic.global_symvars.as_ptr();
+                let addr = state.host_ptr(bcx, addr);
+                let val_sym = state.get_concolic(&val);
+                bcx.ins().store(flags, val_sym, addr, (index as i32) * 4);
+            }
         }
     }
 }

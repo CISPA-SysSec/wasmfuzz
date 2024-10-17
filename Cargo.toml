@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.217"
-wasm-encoder = "0.217"
+wasmparser = "0.219"
+wasm-encoder = "0.219"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive"] }
 md5 = "0.7"
@@ -26,7 +26,7 @@ gimli = { version = "0.31" }
 symbolic = { version = "12.11.1", features = ["demangle", "symcache"] }
 symbolic-debuginfo = "=12.11.1"
 rustc-hash = "2.0.0"
-hexyl = "0.14"
+hexyl = "0.15"
 humantime = "2.1"
 humansize = "2.1"
 crossbeam-channel = "0.5"
@@ -54,6 +54,10 @@ cranelift = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "wasmfuzz
     "frontend",
 ] }
 
+# feat:concolic
+z3 = { version = "0.12.1", optional = true }
+bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = true }
+
 # feat:with_mimalloc
 mimalloc = { version = "0.1", optional = true, default-features = false }
 
@@ -71,6 +75,17 @@ default = ["reports", "compressed_harnesses"]
 reports = ["askama", "lcov", "syntect"]
 with_mimalloc = ["mimalloc"]
 compressed_harnesses = ["zstd"]
+concolic = []
+concolic_bitwuzla = ["bitwuzla", "concolic"]
+concolic_z3 = ["z3", "concolic"]
+concolic_debug_verify = []
+full = [
+    "reports",
+    "compressed_harnesses",
+    "concolic_z3",
+    "concolic_bitwuzla",
+    "with_mimalloc",
+]
 
 
 [profile.dev.package."cranelift"]
