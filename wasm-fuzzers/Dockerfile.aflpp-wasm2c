@@ -17,7 +17,7 @@ RUN apt-get install -y \
     git sed rsync
 
 # Compile and install AFL++
-RUN git clone https://github.com/AFLplusplus/AFLplusplus/
+RUN git clone https://github.com/AFLplusplus/AFLplusplus/ && git -C AFLplusplus checkout v4.21c
 WORKDIR /AFLplusplus
 RUN make NO_NYX=1 IS_DOCKER=1 install
 
