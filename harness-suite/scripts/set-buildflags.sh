@@ -9,7 +9,7 @@ TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi
 
 
 # export CCFLAGS="-g -gdwarf-5 -gembed-source -O0 -flto -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION"
-export CCFLAGS="-g -gdwarf-5 -gembed-source -O2 -flto -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION"
+export CCFLAGS="-g -gdwarf-5 -gembed-source -O2 -flto=thin -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION"
 
 export CFLAGS="$CFLAGS $TARGET_FLAGS $CCFLAGS"
 export CXXFLAGS="$CXXFLAGS $TARGET_FLAGS $CCFLAGS -fno-exceptions"

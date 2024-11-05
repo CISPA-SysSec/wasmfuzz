@@ -1,0 +1,62 @@
+diff --git a/fuzz/bignum.c b/fuzz/bignum.c
+index 08da6fb..3fff3e4 100644
+--- a/fuzz/bignum.c
++++ b/fuzz/bignum.c
+@@ -80,6 +80,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+ 
+     success = BN_cmp(b4, b5) == 0;
+     if (!success) {
++	/*
+         BN_print_fp(stdout, b1);
+         putchar('\n');
+         BN_print_fp(stdout, b2);
+@@ -90,6 +91,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+         putchar('\n');
+         BN_print_fp(stdout, b5);
+         putchar('\n');
++	*/
+     }
+ 
+  done:
+diff --git a/fuzz/bndiv.c b/fuzz/bndiv.c
+index d9467b5..2aab54b 100644
+--- a/fuzz/bndiv.c
++++ b/fuzz/bndiv.c
+@@ -94,6 +94,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+ 
+     success = success && BN_cmp(b5, b1) == 0;
+     if (!success) {
++	/*
+         BN_print_fp(stdout, b1);
+         putchar('\n');
+         BN_print_fp(stdout, b2);
+@@ -111,6 +112,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+                && (BN_is_negative(b4) || BN_is_zero(b4)),
+                BN_cmp(b5, b1));
+         puts("----\n");
++	*/
+     }
+ 
+  done:
+diff --git a/fuzz/server.c b/fuzz/server.c
+index d058f1c..04bbdb3 100644
+--- a/fuzz/server.c
++++ b/fuzz/server.c
+@@ -571,7 +571,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+     bio_buf = BIO_new(BIO_s_mem());
+     OPENSSL_assert((size_t)BIO_write(bio_buf, ECDSAPrivateKeyPEM, sizeof(ECDSAPrivateKeyPEM)) == sizeof(ECDSAPrivateKeyPEM));
+     ecdsakey = PEM_read_bio_ECPrivateKey(bio_buf, NULL, NULL, NULL);
+-    ERR_print_errors_fp(stderr);
++    // ERR_print_errors_fp(stderr);
+     OPENSSL_assert(ecdsakey != NULL);
+     BIO_free(bio_buf);
+     pkey = EVP_PKEY_new();
+@@ -595,7 +595,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+     bio_buf = BIO_new(BIO_s_mem());
+     OPENSSL_assert((size_t)BIO_write(bio_buf, DSAPrivateKeyPEM, sizeof(DSAPrivateKeyPEM)) == sizeof(DSAPrivateKeyPEM));
+     dsakey = PEM_read_bio_DSAPrivateKey(bio_buf, NULL, NULL, NULL);
+-    ERR_print_errors_fp(stderr);
++    // ERR_print_errors_fp(stderr);
+     OPENSSL_assert(dsakey != NULL);
+     BIO_free(bio_buf);
+     pkey = EVP_PKEY_new();

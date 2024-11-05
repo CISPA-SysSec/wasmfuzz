@@ -1,0 +1,22 @@
+diff --git a/Configurations/10-main.conf b/Configurations/10-main.conf
+index cba57b4..264be91 100644
+--- a/Configurations/10-main.conf
++++ b/Configurations/10-main.conf
+@@ -1948,6 +1948,17 @@ my %targets = (
+         multilib         => "64",
+     },
+ 
++##### WebAssembly via WASI
++    "wasm32-wasi" => {
++        inherit_from => ["BASE_unix"],
++        CC => "clang",
++        CXX => "clang++",
++        cflags => add("--target=wasm32-wasi"),
++        cxxflags => add("--target=wasm32-wasi"),
++        lib_cppflags => add("-DL_ENDIAN"),
++        bn_ops => "THIRTY_TWO_BIT",
++    },
++
+ ##### VxWorks for various targets
+     "vxworks-ppc60x" => {
+         inherit_from     => [ "BASE_unix" ],

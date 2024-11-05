@@ -1,0 +1,44 @@
+diff --git a/fuzz/hashtable.c b/fuzz/hashtable.c
+index 38d2295076..1bf42c2434 100644
+--- a/fuzz/hashtable.c
++++ b/fuzz/hashtable.c
+@@ -133,11 +133,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+      * 1 byte to detect the operation to perform, 2 bytes
+      * for the lookup key, and 8 bytes of value
+      */
+-    if (len < 11) {
+-        skipped_values++;
+-        return -1;
+-    }
+-
++    while (len >= 11) {
+     /*
+      * parse out our operation flags and key
+      */
+@@ -322,15 +318,6 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+         break;
+ 
+     case OP_FLUSH:
+-        /*
+-         * only flush the table rarely 
+-         */
+-        if ((flushes % 100000) != 1) {
+-            skipped_values++;
+-            flushes++;
+-            return 0;
+-        }
+-
+         /*
+          * lock the table
+          */
+@@ -382,6 +369,10 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+         return -1;
+     }
+ 
++        len -= 11;
++        buf += 11;
++    }
++
+     return 0;
+ }
+ 

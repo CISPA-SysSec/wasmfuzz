@@ -19,5 +19,5 @@ make -C programs fuzz -j6 # make -j30 blows up :/
 
 FUZZERS=$(find programs/fuzz/ -executable -iname "fuzz_*" -printf "%f\n")
 for F in $FUZZERS; do
-    cp programs/fuzz/$F /out/mbedtls_$F.wasm
+    cp programs/fuzz/$F /out/mbedtls-$F.wasm
 done
