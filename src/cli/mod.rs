@@ -14,6 +14,8 @@ use crate::{
 };
 
 mod cmin;
+#[cfg(feature = "concolic")]
+mod concolic_explore;
 #[cfg(feature = "reports")]
 pub(crate) mod cov_html;
 #[cfg(feature = "reports")]
@@ -66,12 +68,29 @@ pub(crate) enum Subcommand {
         #[clap(flatten)]
         i: InstrumentationOpts,
     },
+    /// Collect concolic traces for each input and try to flip branches for new coverage
+    #[cfg(feature = "concolic")]
+    ConcolicExplore {
+        program: String,
+        inputs: Vec<String>,
+        #[clap(long)]
+        dir: Option<String>,
+    },
     /// Run various fuzzing configurations as an ensemble.
     Fuzz(crate::fuzzer::orc::CliOpts),
     /// Remove uninteresting inputs from corups.
     Cmin(cmin::CminOpts),
     /// Watch directory for new entries and report total coverage over time.
     MonitorCov(monitor_cov::MonitorCovOpts),
+    #[cfg(feature = "concolic_bitwuzla")]
+    CheckConcolic {
+        program: String,
+        input: String,
+    },
+    ShowConcolic {
+        program: String,
+        input: String,
+    },
     /// Collect line coverage from debug information.
     #[cfg(feature = "reports")]
     Lcov(lcov::LcovOpts),
@@ -261,6 +280,35 @@ pub(crate) fn main() {
                 )
             }
         }
+        #[cfg(feature = "concolic")]
+        Subcommand::ConcolicExplore {
+            program,
+            inputs,
+            dir,
+        } => {
+            let mod_spec = parse_program(&PathBuf::from(&program));
+
+            let concolic_provider = crate::concolic::ConcolicProvider::new(Some(mod_spec.clone()));
+            let mut explorer =
+                concolic_explore::ConcolicExplorer::new(mod_spec, &concolic_provider);
+            let dir = dir.map(|dir| crate::fuzzer::FuzzOpts::resolve_corpus_dir(dir, &program));
+            let input_paths = gather_inputs_paths(&dir, &inputs, true);
+            if input_paths.is_empty() {
+                for i in 5..10 {
+                    let inp = vec![b'x'; 1 << i];
+                    explorer.feed(inp);
+                }
+            }
+            for path in input_paths {
+                let input = std::fs::read(&path).unwrap();
+                explorer.feed(input);
+            }
+            while explorer.has_work() {
+                explorer.work();
+            }
+            dbg!(explorer.traces.len());
+            dbg!(explorer.new_finds);
+        }
         Subcommand::CorpusInfo {
             program,
             dir,
@@ -347,6 +395,95 @@ pub(crate) fn main() {
         Subcommand::Cmin(opts) => {
             let mod_spec = parse_program(&PathBuf::from(&opts.program));
             cmin::run(mod_spec, opts);
+        }
+
+        #[cfg(feature = "concolic_bitwuzla")]
+        Subcommand::CheckConcolic { program, input } => {
+            if cfg!(not(feature = "concolic_debug_verify")) {
+                println!("[WARN] check-concolic without concolic_debug_verify feature");
+            }
+
+            let mod_spec = parse_program(&PathBuf::from(&program));
+            let mut stats = Stats::default();
+            let mut sess = JitFuzzingSession::builder(mod_spec.clone())
+                .feedback(FeedbackOptions::minimal_code_coverage())
+                .tracing(TracingOptions {
+                    concolic: true,
+                    ..TracingOptions::default()
+                })
+                .build();
+            sess.initialize(&mut stats);
+
+            let input = std::fs::read(input).unwrap();
+            assert!(input.len() <= crate::TEST_CASE_SIZE_LIMIT);
+            sess.run_tracing_fresh(&input, &mut stats).unwrap();
+
+            let context = sess
+                .tracing_stage
+                .instance
+                .as_ref()
+                .unwrap()
+                .vmctx
+                .concolic
+                .clone();
+            use crate::fuzzer::exhaustive::QueuedInputMutation;
+            println!("running ConcolicOptimisticBitwuzla");
+            let mut solver = crate::fuzzer::exhaustive::ConcolicOptimisticBitwuzla::new(
+                &input,
+                context.compact_to_trace(&input),
+                mod_spec.clone(),
+            );
+            let mut _inp = input.clone();
+            while solver.has_next() {
+                solver.next(&mut _inp);
+                if !solver.revert(&mut _inp) {
+                    _inp.copy_from_slice(&input);
+                }
+            }
+
+            println!("running ConcolicFlipPathsWithBitwuzla");
+            let mut solver = crate::fuzzer::exhaustive::ConcolicFlipPathsWithBitwuzla::new(
+                &input,
+                context.compact_to_trace(&input),
+                mod_spec,
+            );
+            let mut _inp = input.clone();
+            while solver.has_next() {
+                solver.next(&mut _inp);
+                if !solver.revert(&mut _inp) {
+                    _inp.copy_from_slice(&input);
+                }
+            }
+        }
+        Subcommand::ShowConcolic { program, input } => {
+            let mod_spec = parse_program(&PathBuf::from(&program));
+            let mut stats = Stats::default();
+            let mut sess = JitFuzzingSession::builder(mod_spec)
+                .feedback(FeedbackOptions::nothing())
+                .tracing(TracingOptions {
+                    concolic: true,
+                    ..TracingOptions::default()
+                })
+                .build();
+            // sess.initialize(&mut stats);
+
+            let input = std::fs::read(input).unwrap();
+            assert!(input.len() <= crate::TEST_CASE_SIZE_LIMIT);
+            sess.run_tracing_fresh(&input, &mut stats).unwrap();
+
+            let context = sess
+                .tracing_stage
+                .instance
+                .as_ref()
+                .unwrap()
+                .vmctx
+                .concolic
+                .clone();
+
+            let trace = context.compact_to_trace(&input);
+            for ev in &trace.events {
+                trace.symvals.debug_event(ev);
+            }
         }
 
         Subcommand::MonitorCov(opts) => monitor_cov::run(opts),

@@ -1,4 +1,5 @@
 pub mod builtins;
+pub mod concolic;
 pub mod control;
 pub mod feedback;
 pub mod function;
@@ -402,12 +403,18 @@ impl CompilationOptions {
         let &TracingOptions {
             cmplog: compare_log,
             stdout,
+            concolic,
         } = &self.tracing;
         if compare_log { s += "[cmplog]" }
         if stdout { s += "[stdout]" }
+        if concolic { s += "[concolic]" }
         if &s[s.len()-1..] == " " { s += "<none>" }
         s += ")";
         s
+    }
+
+    pub(crate) fn is_concolic(&self) -> bool {
+        self.kind == CompilationKind::Tracing && self.tracing.concolic
     }
 }
 
@@ -514,6 +521,7 @@ impl FeedbackOptions {
 pub(crate) struct TracingOptions {
     pub cmplog: bool,
     pub stdout: bool,
+    pub concolic: bool,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Default)]

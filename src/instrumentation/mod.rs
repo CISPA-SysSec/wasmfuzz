@@ -151,7 +151,7 @@ pub struct InstrCtx<'a, 'b, 'c, 'd, 'e> {
     pub state: &'d mut FuncTranslator<'b, 'c>,
 }
 
-impl<'a, 'b, 'c, 'd, 'e> InstrCtx<'a, 'b, 'c, 'd, 'e> {
+impl InstrCtx<'_, '_, '_, '_, '_> {
     fn instance_meta<K: Hash, V: Default + 'static>(&mut self, key: K) -> &mut V {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);

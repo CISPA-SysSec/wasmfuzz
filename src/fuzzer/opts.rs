@@ -186,6 +186,8 @@ pub(crate) struct StrategyOpts {
     pub cmin_after_corpus_additions: u64,
     #[clap(long, default_value = "false")]
     pub exhaustive_stage: FlagBool,
+    #[clap(long, default_value = "false")]
+    pub use_concolic: FlagBool,
     #[clap(long, value_parser=cli_parse_humancount, default_value="750m")]
     pub instruction_limit: Option<u64>,
     // Reset VMContext's memory for deterministic (re-)execution
