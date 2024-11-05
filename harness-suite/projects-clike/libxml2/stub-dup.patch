@@ -1,0 +1,16 @@
+diff --git a/xmlIO.c b/xmlIO.c
+index 4f9b514..1186236 100644
+--- a/xmlIO.c
++++ b/xmlIO.c
+@@ -1142,7 +1142,11 @@ xmlOutputDefaultOpen(xmlOutputBufferPtr buf, const char *filename,
+     (void) compression;
+ 
+     if (!strcmp(filename, "-")) {
++#ifdef __wasi__
++        fd = -1;
++#else
+         fd = dup(STDOUT_FILENO);
++#endif
+ 
+         if (fd < 0)
+             return(xmlIOErr(errno));

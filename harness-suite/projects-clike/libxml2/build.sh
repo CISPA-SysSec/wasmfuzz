@@ -13,6 +13,7 @@ export V=1
 ./autogen.sh \
     --disable-shared \
     --without-debug \
+    --without-threads \
     --without-http \
     --without-python \
     --without-zlib --without-lzma \

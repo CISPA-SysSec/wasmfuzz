@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/djc/askama.git "$PROJECT/repo" aa283846a5eb1fcce69ed9ce49e36f066dada03f
+git clone-rev.sh https://github.com/djc/askama.git "$PROJECT/repo" a7e108cd76a2a89dfdf0dfb87b1286ec3a523f08

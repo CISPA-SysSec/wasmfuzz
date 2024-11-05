@@ -17,7 +17,7 @@ parser.add_argument('--init-toolchain', action='store_true')
 args = parser.parse_args()
 
 WASM_V2 = True
-RUSTUP_TOOLCHAIN = "nightly-2024-09-22"
+RUSTUP_TOOLCHAIN = "nightly-2024-10-16"
 TARGET_TRIPLE = "wasm32-wasip1"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
