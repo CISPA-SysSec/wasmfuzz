@@ -6,11 +6,15 @@ projects-clike-wip = ${sort ${dir ${wildcard projects-clike-wip/*/}}}
 projects = $(projects-rust) $(projects-clike)
 all-projects = $(projects) $(projects-rust-wip) $(projects-clike-wip)
 
-# TODO: make help?
-
 .PHONY: all working $(all-projects)
 all: working
 working: $(projects)
 
-$(all-projects): $@/*
+$(all-projects): dummy/.build $@/*
 	./make-one.py $@
+
+# Note: This target is a prerequisite for all other harnesses
+#       such that a concurrent make run only builds the Dockerfile once
+dummy/.build: scripts/* Dockerfile
+	./make-one.py dummy
+	@touch $@

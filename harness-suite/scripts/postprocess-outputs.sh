@@ -1,7 +1,10 @@
 #!/bin/bash
 
-file-rename 's/_fuzzer//' /out/*.wasm
-file-rename 's/-fuzzer//' /out/*.wasm
+
+if [ "$(ls -A '/out/')" ]; then
+    file-rename 's/_fuzzer//' /out/*.wasm
+    file-rename 's/-fuzzer//' /out/*.wasm
+fi
 
 for module in /out/*.wasm;
 do
