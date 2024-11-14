@@ -6,18 +6,15 @@ use std::{sync::Arc, time::Instant};
 use crate::simple_bus::MessageBus;
 use libafl::corpus::CorpusId;
 use libafl::inputs::UsesInput;
-use libafl::mutators::StdMOptMutator;
-use libafl::stages::StageId;
+use libafl::mutators::{havoc_mutations, StdMOptMutator};
+use libafl::observers::CmplogBytes;
+use libafl::stages::{HasCurrentStageId, StageId};
 use libafl::state::{HasSolutions, State, Stoppable};
 use libafl::{
     corpus::{Corpus, HasCurrentCorpusId, InMemoryCorpus, Testcase},
     inputs::{BytesInput, HasMutatorBytes},
-    mutators::{
-        scheduled::{havoc_mutations, StdScheduledMutator},
-        Mutator,
-    },
+    mutators::{scheduled::StdScheduledMutator, Mutator},
     observers::{CmpValues, CmpValuesMetadata},
-    stages::HasCurrentStage,
     state::{HasCorpus, HasMaxSize, HasRand},
     HasMetadata,
 };
@@ -288,11 +285,20 @@ impl Worker {
             // }
 
             fn cmplog_to_cmpvalues(el: &CmpLog) -> CmpValues {
+                fn make_cmplog_bytes(data: &[u8]) -> CmplogBytes {
+                    let mut buf = [0; 32];
+                    let len = std::cmp::min(data.len(), 32);
+                    buf[..len].copy_from_slice(data);
+                    CmplogBytes::from_buf_and_len(buf, len as u8)
+                }
                 match el {
-                    &CmpLog::U16(a, b) => CmpValues::U16((a, b)),
-                    &CmpLog::U32(a, b) => CmpValues::U32((a, b)),
-                    &CmpLog::U64(a, b) => CmpValues::U64((a, b)),
-                    CmpLog::Memcmp(a, b) => CmpValues::Bytes((a.clone(), b.clone())),
+                    // TODO: track if values are const
+                    &CmpLog::U16(a, b) => CmpValues::U16((a, b, false)),
+                    &CmpLog::U32(a, b) => CmpValues::U32((a, b, false)),
+                    &CmpLog::U64(a, b) => CmpValues::U64((a, b, false)),
+                    CmpLog::Memcmp(a, b) => {
+                        CmpValues::Bytes((make_cmplog_bytes(a), make_cmplog_bytes(b)))
+                    }
                 }
             }
 
@@ -333,20 +339,14 @@ impl Worker {
 
         println!("starting with {} corpus entries...", self.corpus.count());
 
-        // let mutations = havoc_mutations();
         let mutations = havoc_mutations(); // .merge(tokens_mutations());
         let mutations = (super::i2s_patches::I2SRandReplace, mutations);
 
         let mut mutator: Box<dyn Mutator<BytesInput, Self>> = if *self.opts.x.mopt {
-            Box::new(StdMOptMutator::new(self, mutations, 3, 7)?)
+            Box::new(StdMOptMutator::new::<(), _>(self, mutations, 3, 7)?)
         } else {
             Box::new(StdScheduledMutator::with_max_stack_pow(mutations, 1)) // default is six max_iterations
         };
-
-        // let power = PowerMutationalStage::new(mutator, PowerSchedule::FAST, &edges_observer);
-        // A minimization+queue policy to get testcasess from the corpus
-        //let scheduler =
-        //    IndexesLenTimeMinimizerCorpusScheduler::new(PowerQueueCorpusScheduler::new());
 
         let mut input = BytesInput::new(
             self.corpus
@@ -427,7 +427,7 @@ impl Worker {
                 let corp_count = self.corpus.count();
                 // TODO(tuning): stacking prob is low?
                 if corp_count > 0 && self.rand.next() & 1 == 0 {
-                    let corpus_idx = self.rand.below(corp_count);
+                    let corpus_idx = self.rand.below(corp_count.try_into().unwrap());
                     let corpus_idx = self.corpus.nth(sticky_input.unwrap_or(corpus_idx));
                     input.drain(..);
                     input.extend(
@@ -536,7 +536,7 @@ impl Worker {
                 .unwrap();
             dir.shuffle(&mut self.rand);
             for entry in dir {
-                if self.opts.x.corpus_drop_pct as usize > self.rand.below(101) {
+                if self.opts.x.corpus_drop_pct as usize > self.rand.below(101.try_into().unwrap()) {
                     println!(
                         "{:?}: Dropped by chance ({}%)",
                         entry, self.opts.x.corpus_drop_pct
@@ -625,8 +625,9 @@ impl Worker {
         corpus_idxs.shuffle(&mut self.rand);
 
         for idx in corpus_idxs {
-            let drop_by_chance =
-                is_periodic && self.opts.x.corpus_cmin_drop_pct > self.rand.below(100) as u64;
+            let drop_by_chance = is_periodic
+                && self.opts.x.corpus_cmin_drop_pct
+                    > self.rand.below(100.try_into().unwrap()) as u64;
             if drop_by_chance {
                 dropped_randomly += 1;
                 to_remove.push(idx);
@@ -730,8 +731,8 @@ impl HasCurrentCorpusId for Worker {
     }
 }
 
-impl HasCurrentStage for Worker {
-    fn set_current_stage_idx(&mut self, idx: StageId) -> Result<(), libafl::Error> {
+impl HasCurrentStageId for Worker {
+    fn set_current_stage_id(&mut self, idx: StageId) -> Result<(), libafl::Error> {
         // ensure we are in the right frame
         if self.stage_depth != self.stage_id_stack.len() {
             return Err(libafl::Error::illegal_state(
@@ -742,7 +743,7 @@ impl HasCurrentStage for Worker {
         Ok(())
     }
 
-    fn clear_stage(&mut self) -> Result<(), libafl::Error> {
+    fn clear_stage_id(&mut self) -> Result<(), libafl::Error> {
         self.stage_id_stack.pop();
         // ensure we are in the right frame
         if self.stage_depth != self.stage_id_stack.len() {
@@ -753,7 +754,7 @@ impl HasCurrentStage for Worker {
         Ok(())
     }
 
-    fn current_stage_idx(&self) -> Result<Option<StageId>, libafl::Error> {
+    fn current_stage_id(&self) -> Result<Option<StageId>, libafl::Error> {
         Ok(self.stage_id_stack.get(self.stage_depth).copied())
     }
 

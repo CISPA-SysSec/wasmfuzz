@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.219"
-wasm-encoder = "0.219"
+wasmparser = "0.220"
+wasm-encoder = "0.220"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive"] }
 md5 = "0.7"
@@ -39,11 +39,11 @@ object = { version = "0.36", default-features = false, features = [
     "wasm",
 ] }
 ouroboros = "0.18.3"
-libafl = { git = "https://github.com/AFLplusplus/LibAFL", rev = "6df1b34375d76e23d285149513de662f1fc879ab", default-features = false, features = [
+libafl = { version = "0.14", default-features = false, features = [
     "std",
     "rand_trait",
 ] }
-libafl_bolts = { git = "https://github.com/AFLplusplus/LibAFL", rev = "6df1b34375d76e23d285149513de662f1fc879ab" }
+libafl_bolts = "0.14"
 wasmtime = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "wasmfuzz-fuzzing24-prelim", default-features = false, features = [
     "runtime",
 ] }

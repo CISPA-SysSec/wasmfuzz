@@ -8,7 +8,7 @@ use libafl::{
     state::{HasCorpus, HasMaxSize, HasRand},
     Error, HasMetadata,
 };
-use libafl_bolts::{rands::Rand, Named};
+use libafl_bolts::{rands::Rand, AsSlice, HasLen, Named};
 
 /// A `I2SRandReplace` [`Mutator`] replaces a random matching input-2-state comparison operand with the other.
 /// It needs a valid [`CmpValuesMetadata`] in the state.
@@ -22,10 +22,10 @@ where
 {
     #[allow(clippy::too_many_lines)]
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
-        let size = input.bytes().len();
-        if size == 0 {
+        if input.is_empty() {
             return Ok(MutationResult::Skipped);
         }
+        let size = input.bytes().len().try_into().unwrap();
 
         let cmps_len = {
             let &Some(id) = state.corpus().current() else {
@@ -41,7 +41,7 @@ where
             if meta.list.is_empty() {
                 return Ok(MutationResult::Skipped);
             }
-            meta.list.len()
+            meta.list.len().try_into().unwrap()
         };
         let idx = state.rand_mut().below(cmps_len);
 
@@ -171,8 +171,9 @@ where
                 'outer: for i in off..len {
                     let mut size = core::cmp::min(v.0.len(), len - i);
                     while size != 0 {
-                        if v.0[0..size] == input.bytes()[i..i + size] {
-                            input.bytes_mut()[i..i + size].copy_from_slice(&v.1[0..size]);
+                        if v.0.as_slice()[0..size] == input.bytes()[i..i + size] {
+                            input.bytes_mut()[i..i + size]
+                                .copy_from_slice(&v.1.as_slice()[0..size]);
                             result = MutationResult::Mutated;
                             break 'outer;
                         }
@@ -180,8 +181,9 @@ where
                     }
                     size = core::cmp::min(v.1.len(), len - i);
                     while size != 0 {
-                        if v.1[0..size] == input.bytes()[i..i + size] {
-                            input.bytes_mut()[i..i + size].copy_from_slice(&v.1[0..size]);
+                        if v.1.as_slice()[0..size] == input.bytes()[i..i + size] {
+                            input.bytes_mut()[i..i + size]
+                                .copy_from_slice(&v.1.as_slice()[0..size]);
                             result = MutationResult::Mutated;
                             break 'outer;
                         }
