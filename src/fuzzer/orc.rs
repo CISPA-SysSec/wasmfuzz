@@ -50,12 +50,14 @@ pub(crate) struct CliOpts {
 pub(crate) enum Experiment {
     UseBusInputs,
     SwarmFocusEdge,
+    NoSnapshot,
 }
 impl std::str::FromStr for Experiment {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "use-bus-inputs" => Self::UseBusInputs,
+            "no-snapshot" => Self::NoSnapshot,
             "swarm-focus-edge" => Self::SwarmFocusEdge,
             _ => return Err("unknown Experiment".to_owned()),
         })
@@ -403,6 +405,7 @@ impl Orchestrator {
             let swarm = SwarmConfig::from_instruction_limit(instruction_limit);
             // First config: no additional feedback guidance.
             let mut opts = FeedbackOptions::minimal_code_coverage();
+            opts.cmpcov_hamming = true;
             if self.config_epoch > 0 {
                 opts.edge_shortest_trace = true;
             }

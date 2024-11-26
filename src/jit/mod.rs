@@ -586,6 +586,13 @@ impl JitStage {
             self.inp_ptr = None;
         }
 
+        if !self.run_from_snapshot {
+            let instance = self.instance.as_mut().unwrap();
+            if instance.vmctx.tainted {
+                instance.vmctx.reset(spec);
+            }
+        }
+
         if self.inp_ptr.is_none() {
             let instance = self.instance.as_mut().unwrap();
             // println!("reset vmctx because inp_ptr is_none {:?}", self.kind);
