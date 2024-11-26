@@ -3,7 +3,7 @@ set -e
 target="$1"
 name=`basename $1`
 
-source prepare-wasm2c-fuzzer.sh "$1"
+source prepare-w2c2-fuzzer.sh "$1"
 
 clang -O2 -fsanitize=fuzzer -g -o "$name-libfuzzer" $CC_CMD
 

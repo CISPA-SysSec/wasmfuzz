@@ -1,6 +1,12 @@
+# ubuntu:24.04 is rustc 1.75
+# ubuntu:24.10 is rustc 1.80
+# libafl needs 1.82 for `&raw const GLOBAL_MUT`
+
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y wget
-RUN wget -nv "https://github.com/CISPA-SysSec/wasmfuzz/releases/download/initial-commit/wasmfuzz-`uname -m`-unknown-linux-gnu.2.31" -O /usr/bin/wasmfuzz && chmod +x /usr/bin/wasmfuzz
+RUN apt-get update && apt-get install -y rustup git clang
+RUN rustup toolchain add 1.82 || true # Note: rustup complains: rustup is not installed at '/root/.cargo'
+RUN git clone https://github.com/CISPA-SysSec/wasmfuzz && git -C wasmfuzz checkout e38755bb7175723e9e4b1ecf4eb33d0be2324e1d
+RUN cargo install --no-default-features --path /wasmfuzz && ln -s /root/.cargo/bin/wasmfuzz /usr/bin/
 COPY wasmfuzz.sh /usr/bin/
 RUN chmod +x /usr/bin/wasmfuzz.sh
 RUN mkdir -p /seeds/ && echo -n "YELLOW SUBMARINE" > /seeds/seed && mkdir -p /corpus/

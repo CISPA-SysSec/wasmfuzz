@@ -129,7 +129,7 @@ void Z_wasi_snapshot_preview1Z_proc_exit(struct Z_wasi_snapshot_preview1_instanc
 #ifdef STANDALONE
 int main(int argc, char **argv) {
 
-  unsigned char buf[64];
+  unsigned char buf[65536];
   ssize_t       len;
   int           fd = 0;
   if (argc > 1) fd = open(argv[1], O_RDONLY);

@@ -1,0 +1,7 @@
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y wget
+RUN wget -nv "https://github.com/CISPA-SysSec/wasmfuzz/releases/download/initial-commit/wasmfuzz-`uname -m`-unknown-linux-gnu.2.31" -O /usr/bin/wasmfuzz && chmod +x /usr/bin/wasmfuzz
+COPY wasmfuzz.sh /usr/bin/
+RUN chmod +x /usr/bin/wasmfuzz.sh
+RUN mkdir -p /seeds/ && echo -n "YELLOW SUBMARINE" > /seeds/seed && mkdir -p /corpus/
+ENTRYPOINT [ "wasmfuzz.sh" ]
