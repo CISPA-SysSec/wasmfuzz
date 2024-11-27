@@ -288,7 +288,7 @@ impl Worker {
                 fn make_cmplog_bytes(data: &[u8]) -> CmplogBytes {
                     let mut buf = [0; 32];
                     let len = std::cmp::min(data.len(), 32);
-                    buf[..len].copy_from_slice(data);
+                    buf[..len].copy_from_slice(&data[..len]);
                     CmplogBytes::from_buf_and_len(buf, len as u8)
                 }
                 match el {
