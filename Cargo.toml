@@ -39,11 +39,11 @@ object = { version = "0.36", default-features = false, features = [
     "wasm",
 ] }
 ouroboros = "0.18.3"
-libafl = { version = "0.14", default-features = false, features = [
+libafl = { version = "0.14.1", default-features = false, features = [
     "std",
     "rand_trait",
 ] }
-libafl_bolts = "0.14"
+libafl_bolts = "0.14.1"
 wasmtime = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "wasmfuzz-fuzzing24-prelim", default-features = false, features = [
     "runtime",
 ] }

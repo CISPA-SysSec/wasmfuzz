@@ -343,7 +343,7 @@ impl Worker {
         let mutations = (super::i2s_patches::I2SRandReplace, mutations);
 
         let mut mutator: Box<dyn Mutator<BytesInput, Self>> = if *self.opts.x.mopt {
-            Box::new(StdMOptMutator::new::<(), _>(self, mutations, 3, 7)?)
+            Box::new(StdMOptMutator::new(self, mutations, 3, 7)?)
         } else {
             Box::new(StdScheduledMutator::with_max_stack_pow(mutations, 1)) // default is six max_iterations
         };

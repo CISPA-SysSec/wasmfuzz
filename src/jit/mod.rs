@@ -1059,7 +1059,7 @@ impl RunResult {
     }
 
     pub(crate) fn is_crash(&self) -> bool {
-        self.trap_kind.as_ref().map_or(false, |x| {
+        self.trap_kind.as_ref().is_some_and(|x| {
             debug_assert!(x.is_coverage_trap() || x.is_short_circuit() || x.is_crash());
             x.is_crash()
         })

@@ -402,7 +402,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
     // Check if current instruction insertion spot is unreachable
     pub(crate) fn dead(&self, bcx: &FunctionBuilder) -> bool {
         bcx.current_block()
-            .map_or(false, |block| self.dead_bbs.contains(&block))
+            .is_some_and(|block| self.dead_bbs.contains(&block))
     }
 
     pub(crate) fn mark_dead(&mut self, bcx: &mut FunctionBuilder) {
