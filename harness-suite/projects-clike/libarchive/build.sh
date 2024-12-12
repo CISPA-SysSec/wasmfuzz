@@ -2,9 +2,10 @@
 set -e +x
 source set-buildflags.sh
 
-# TODO: not sure why flto breaks stuff for this particular target
-export CFLAGS="${CFLAGS/-flto /}"
 
+# Note: LTO support is somewhat broken as of wasi-sdk 25. Linking fails with a
+# missing __libc_calloc symbol error for this particular target.
+export CFLAGS="${CFLAGS/-flto=thin /}"
 
 cd "$PROJECT/libxml2"
 
