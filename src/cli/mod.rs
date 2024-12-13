@@ -328,6 +328,7 @@ pub(crate) fn main() {
             sess.initialize(&mut stats);
 
             // TODO: track steps/fuel per input?
+            // Note: It would be nice to have a "time-to-input" column here!
             let mut csv_out = std::fs::File::create(csv_out).unwrap();
             writeln!(
                 csv_out,

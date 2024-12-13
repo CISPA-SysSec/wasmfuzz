@@ -31,7 +31,7 @@ for F in $FUZZERS; do
 
     $CC $CCFLAGS \
         $F.o fuzz.o \
-        -o /out/libxml2_$F.wasm \
+        -o /out/libxml2-$F.wasm \
         $LIB_FUZZING_ENGINE \
         ../.libs/libxml2.a -Wl,-Bstatic -Wl,-Bdynamic
 done

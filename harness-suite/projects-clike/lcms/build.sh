@@ -25,5 +25,5 @@ for F in $FUZZERS; do
     $CC $CFLAGS -Iinclude \
         $F.c src/.libs/liblcms2.a \
         $LIB_FUZZING_ENGINE \
-        -o "/out/$F.wasm"
+        -o "/out/lcms-$F.wasm"
 done
