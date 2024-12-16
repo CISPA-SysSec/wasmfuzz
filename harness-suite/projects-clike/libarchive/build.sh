@@ -34,12 +34,12 @@ cmake . -DWASI_SDK_PREFIX="${WASI_SDK_PREFIX}" \
 make -j$(nproc) archive_static
 
 $CXX $CXXFLAGS -Ilibarchive \
-    ./contrib/oss-fuzz/libarchive_fuzzer.cc -o /out/libarchive_fuzzer_libarchive.wasm \
+    ./contrib/oss-fuzz/libarchive_fuzzer.cc -o /out/libarchive-upstream.wasm \
     $LIB_FUZZING_ENGINE \
     ./libarchive/libarchive.a /tmp/libxml2.a
 
 
 $CXX $CXXFLAGS -Ilibarchive \
-    "$PROJECT/libarchive_fuzzer.cc" -o /out/libarchive_fuzzer_oss_fuzz.wasm \
+    "$PROJECT/libarchive_fuzzer.cc" -o /out/libarchive-ossfuzz.wasm \
     $LIB_FUZZING_ENGINE \
     ./libarchive/libarchive.a /tmp/libxml2.a

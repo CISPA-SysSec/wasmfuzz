@@ -51,12 +51,12 @@ for fuzzer in "${webp_c_fuzzers[@]}"; do
   $CC $CFLAGS -Isrc -I. "tests/fuzzer/${fuzzer}.c" \
     "${webp_libs[@]}" \
     $LIB_FUZZING_ENGINE \
-    -o "/out/libwebp_${fuzzer}.wasm"
+    -o "/out/libwebp-${fuzzer}.wasm"
 done
 
 for fuzzer in "${webp_cxx_fuzzers[@]}"; do
   $CXX $CXXFLAGS -Isrc -I. "tests/fuzzer/${fuzzer}.cc" \
     "${webp_libs[@]}" \
     $LIB_FUZZING_ENGINE \
-    -o "/out/libwebp_${fuzzer}.wasm"
+    -o "/out/libwebp-${fuzzer}.wasm"
 done

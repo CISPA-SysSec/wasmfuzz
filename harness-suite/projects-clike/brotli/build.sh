@@ -15,4 +15,4 @@ make brotlicommon brotlidec
 $CC $CFLAGS -std=c99 -I. -I./c/include \
     c/fuzz/decode_fuzzer.c ./libbrotlidec.a ./libbrotlicommon.a \
     $LIB_FUZZING_ENGINE \
-    -o /out/brotli_decode_fuzzer.wasm
+    -o /out/brotli-decode_fuzzer.wasm

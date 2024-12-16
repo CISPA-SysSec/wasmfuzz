@@ -21,4 +21,4 @@ $CXX $CXXFLAGS -std=c++11 -I. \
     contrib/oss-fuzz/libpng_read_fuzzer.cc .libs/libpng16.a \
     $LIB_FUZZING_ENGINE \
     -lz \
-    -o /out/libpng_read_fuzzer.wasm
+    -o /out/libpng-read_fuzzer.wasm

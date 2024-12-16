@@ -16,4 +16,4 @@ make libpcre2-8.la .libs/libpcre2-fuzzsupport.a -j"$(nproc)"
 $CC $CFLAGS $FUZZ_LDFLAGS -o pcre2fuzzcheck \
     .libs/libpcre2-fuzzsupport.a .libs/libpcre2-8.a
 
-cp pcre2fuzzcheck /out/pcre2_fuzzcheck.wasm
+cp pcre2fuzzcheck /out/pcre2-fuzzcheck.wasm

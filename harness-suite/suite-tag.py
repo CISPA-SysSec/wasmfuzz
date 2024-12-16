@@ -15,12 +15,16 @@ args = parser.parse_args()
 assert Path(args.harness_dir).exists()
 harness_dir = Path(args.harness_dir)
 corpus_dir = Path(args.corpus_dir)
+harness_paths = sorted(list(harness_dir.glob("*.wasm")))
 
 from collections import Counter, defaultdict
 
 from enum import Enum
 class Tag(Enum):
     FUZZBENCH = "fuzzbench"
+
+    SUITE = "suite"
+    SUITE_BUGBENCH = "suite-bugbench"
 
     LANG_C = "lang-c"
     LANG_CPP = "lang-cpp"
@@ -29,16 +33,16 @@ class Tag(Enum):
     CRASHING = "crashing"
 
     SLOW = "slow"
+    FAST = "fast"
     SHALLOW = "shallow"
     BIG = "big"
     PROGRESS_24H = "progress-24h"
 
     # TODO: manually tag these
     BUGGY_HARNESS_UPSTREAM = "buggy-harness-upstream"
+    WASM_SPECIFIC_CRASH = "wasm-specific-crash"
     BUGGY_PORT = "buggy-port"
     BUGGY_PROJECT = "buggy-project"
-    TODO_REPORT = "todo-report"
-    TODO_INVESTIGATE = "todo-investigate"
 
 
 tags = defaultdict(set)
@@ -46,7 +50,7 @@ tags = defaultdict(set)
 
 def tag_compilers():
     producers_ctr = Counter()
-    for harness in harness_dir.glob("*.wasm"):
+    for harness in harness_paths:
 
         producers = subprocess.check_output(["llvm-readelf", "--string-dump", "producers", harness]).decode()
         producers = [x.split("] ")[1] for x in producers.splitlines() if x.startswith("[")]
@@ -84,7 +88,7 @@ def tag_manually(harness, rev, *manual_tags):
 
     # Verify that the revision matches
     try:
-        git_metadata = subprocess.check_output(["llvm-objcopy", "--dump-section", "git-metadata.csv=-", harness])
+        git_metadata = subprocess.check_output(["llvm-objcopy", "--dump-section", "git-metadata.csv=-", harness_dir / harness])
     except Exception as e:
         print(e)
         return
@@ -138,7 +142,7 @@ def tag_from_corpus():
         )
 
 
-    for harness in harness_dir.glob("*.wasm"):
+    for harness in harness_paths:
         snapshots = sorted(list(corpus_dir.glob(f"{harness.stem}/snapshot-*.csv")), key=snapshot_path_to_minutes)
         if not snapshots:
             print("[WARN] corpus not found for harness", harness)
@@ -146,7 +150,7 @@ def tag_from_corpus():
 
         harness = harness.name
         summaries = [snapshot_summary(x) for x in snapshots]
-        pprint(summaries)
+        # pprint(summaries)
 
         # Check that crashing harnesses were tagged properly
         if summaries[-1]["crashes"]:
@@ -164,11 +168,13 @@ def tag_from_corpus():
         if summaries[-1]["total_edges"] > 2000:
             tags[harness].add(Tag.BIG)
 
-        if summaries[-1]["max_execs_us"] > 0.1e6: # 0.1 seconds
+        if summaries[-1]["max_execs_us"] > 100_000: # 100ms
             tags[harness].add(Tag.SLOW)
+        if summaries[-1]["max_execs_us"] < 200: # 0.2ms -> at least 500 execs/s
+            tags[harness].add(Tag.FAST)
 
         # Did we make meaningful progress between the last two snapshots?
-        if len(summaries) >= 2 and summaries[-1]["total_edges"] >= summaries[-2]["total_edges"] * 1.1:
+        if len(summaries) >= 2 and snapshot_path_to_minutes(snapshots[-1]) >= 60*4 and summaries[-1]["total_edges"] >= summaries[-2]["total_edges"] * 1.1:
             tags[harness].add(Tag.PROGRESS_24H)
 
 
@@ -197,21 +203,83 @@ tag_fuzzbench([
     "zlib-uncompress.wasm",
 ])
 
+
+# TODO: report
 tag_manually("libbzip2-rs-decompress_chunked.wasm", "10b667e381e643547bd3bb45133526e4956c8b53",
-             Tag.CRASHING, Tag.BUGGY_PROJECT, Tag.TODO_REPORT)
+             Tag.CRASHING, Tag.BUGGY_PROJECT)
 tag_manually("libbzip2-rs-compress.wasm", "10b667e381e643547bd3bb45133526e4956c8b53",
              Tag.CRASHING, Tag.BUGGY_HARNESS_UPSTREAM)
+
+
+# Testcase: "corpus/ron-arbitrary/snapshot-0d-4h-0m/6a00cd7cb30a93b1c32b792ec8eb94e7"
+# [STDOUT] thread '<unnamed>' panicked at fuzz_targets/bench/lib.rs:95:22:
+# [STDOUT] [...]
+# TODO: investigate
+tag_manually("ron-arbitrary.wasm", "ea6b40619c92a9663883cf7c45c0876734a2fcf5", Tag.CRASHING, Tag.WASM_SPECIFIC_CRASH)
+
+# Testcase: "corpus/naga-glsl_parser/snapshot-0d-4h-0m/9f5b3471275f3fb4062fa21cf8ddc44f"
+# [STDOUT] thread '<unnamed>' panicked at /projects/naga/repo/src/front/glsl/lex.rs:35:42:
+# [STDOUT] called `Result::unwrap()` on an `Err` value: (UnexpectedCharacter, Location { start: 0, end: 0, line: 1 })
+# [STDOUT] note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+# execution trapped with Abort(UnreachableReached) which indicates that the target crashed
+tag_manually("naga-glsl_parser.wasm", "d0f28c0b1a3c772e55e68db1c47eff5131cb6732", Tag.CRASHING, Tag.BUGGY_PROJECT)
+
+# Testcase: "corpus/naga-ir/snapshot-0d-4h-0m/12bab600aed093a09b37434636a936e2"
+# [STDOUT] thread '<unnamed>' panicked at /projects/naga/repo/src/valid/analyzer.rs:1004:82:
+# [STDOUT] index out of bounds: the len is 1 but the index is 3132799673
+# [STDOUT] note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+# execution trapped with Abort(UnreachableReached) which indicates that the target crashed
+tag_manually("naga-ir.wasm", "d0f28c0b1a3c772e55e68db1c47eff5131cb6732", Tag.CRASHING, Tag.BUGGY_PROJECT)
+
+
+# rust-analyzer's syntax crate crashes instantly with the native fuzzing setup...
+tag_manually("rust-analyzer-reparse.wasm", "8dd53a3a46adffdc7928bbfabab90d6348c9a089", Tag.CRASHING, Tag.BUGGY_PROJECT)
+tag_manually("rust-analyzer-parser.wasm", "8dd53a3a46adffdc7928bbfabab90d6348c9a089", Tag.CRASHING, Tag.BUGGY_PROJECT)
+
+# Testcase: "corpus/symphonia-decode_any/snapshot-0d-4h-0m/b702b178e273440a992dacbd6ec6e6b7"
+# [STDOUT] thread '<unnamed>' panicked at rustlib/src/rust/library/core/src/iter/adapters/step_by.rs:35:9:
+# [STDOUT] assertion failed: step != 0
+# reproduces upstream almost instantly
+tag_manually("symphonia-decode_any.wasm", "f1a0df4fcb34712b5750b3bfca251e31fa523d38", Tag.CRASHING, Tag.BUGGY_PROJECT)
+
+# corpus/zip2-fuzz_write/snapshot-0d-4h-0m/fcc11081e972f970ef563a73b57183ee
+# execution trapped with Cranelift(HeapOutOfBounds) in fuzz_write::do_operation after deduplicate_paths
+# TODO: investigate
+tag_manually("zip2-fuzz_write.wasm", "TODO", Tag.CRASHING)
+
+# Unresolved virtual call in ossl_rand_drbg_new -> abort in `undefined_stub`
+tag_manually("openssl-provider.wasm", "3d3bb26a13dcc67f99e66de6a44ae9ced117f64b",
+             Tag.CRASHING, Tag.BUGGY_PORT)
 
 tag_from_corpus()
 
 tag_compilers()
+
+suite = set()
+suite_bugbench = set()
+for harness in harness_paths:
+    harness = harness.name
+    t = tags[harness]
+    if Tag.SHALLOW in t: continue
+
+    if Tag.CRASHING in t:
+        t.add(Tag.SUITE_BUGBENCH)
+        suite_bugbench.add(harness)
+    elif Tag.PROGRESS_24H in t or Tag.BIG in t:
+        t.add(Tag.SUITE)
+        suite.add(harness)
+
+print("Tag.SUITE:")
+pprint(suite)
+print("Tag.SUITE_BUGBENCH:")
+pprint(suite_bugbench)
 
 with open('tags.csv', 'w') as csvfile:
     fieldnames = ["harness"] + [t.value for t in Tag]
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
     writer.writeheader()
-    for harness in harness_dir.glob("*.wasm"):
+    for harness in harness_paths:
         harness = harness.name
         d = {t.value: int(t in tags[harness]) for t in Tag}
         d["harness"] = harness
