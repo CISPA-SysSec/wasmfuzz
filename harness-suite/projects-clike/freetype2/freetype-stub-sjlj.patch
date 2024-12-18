@@ -1,0 +1,32 @@
+diff --git a/include/freetype/config/ftstdlib.h b/include/freetype/config/ftstdlib.h
+index a6812ae..aeb4ac2 100644
+--- a/include/freetype/config/ftstdlib.h
++++ b/include/freetype/config/ftstdlib.h
+@@ -163,6 +163,8 @@
+    */
+ 
+ 
++#ifndef __wasi__
++
+ #include <setjmp.h>
+ 
+ #define ft_jmp_buf     jmp_buf  /* note: this cannot be a typedef since  */
+@@ -172,6 +174,18 @@
+ #define ft_longjmp     longjmp
+ #define ft_setjmp( b ) setjmp( *(ft_jmp_buf*) &(b) ) /* same thing here */
+ 
++#else
++
++void wasmfuzz_exit_testcase(void)
++   __attribute__((__noreturn__))
++   __attribute__((__import_module__("wasmfuzz"), __import_name__("exit_testcase")));
++
++#define ft_jmp_buf    int
++#define ft_longjmp( a, b ) (void)a, (void)b, wasmfuzz_exit_testcase()
++#define ft_setjmp( b ) (void)b, 0
++
++#endif
++
+ 
+   /* The following is only used for debugging purposes, i.e., if   */
+   /* `FT_DEBUG_LEVEL_ERROR` or `FT_DEBUG_LEVEL_TRACE` are defined. */

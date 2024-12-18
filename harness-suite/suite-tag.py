@@ -16,6 +16,7 @@ assert Path(args.harness_dir).exists()
 harness_dir = Path(args.harness_dir)
 corpus_dir = Path(args.corpus_dir)
 harness_paths = sorted(list(harness_dir.glob("*.wasm")))
+harnesses = [x.name for x in harness_paths]
 
 from collections import Counter, defaultdict
 
@@ -50,13 +51,12 @@ tags = defaultdict(set)
 
 def tag_compilers():
     producers_ctr = Counter()
-    for harness in harness_paths:
-
-        producers = subprocess.check_output(["llvm-readelf", "--string-dump", "producers", harness]).decode()
+    for harness_path in harness_paths:
+        producers = subprocess.check_output(["llvm-readelf", "--string-dump", "producers", harness_path]).decode()
         producers = [x.split("] ")[1] for x in producers.splitlines() if x.startswith("[")]
         producers_ctr.update(producers)
 
-        harness = harness.name
+        harness = harness_path.name
         if ".Rust" in producers:
             tags[harness].add(Tag.LANG_RUST)
 
@@ -102,6 +102,7 @@ def tag_manually(harness, rev, *manual_tags):
 
 
 
+total_edges = {}
 def tag_from_corpus():
     if not corpus_dir.is_dir():
         print("[WARN] missing harness corpi, can't tag crashes, complexity, progress")
@@ -142,14 +143,15 @@ def tag_from_corpus():
         )
 
 
-    for harness in harness_paths:
-        snapshots = sorted(list(corpus_dir.glob(f"{harness.stem}/snapshot-*.csv")), key=snapshot_path_to_minutes)
+    for harness_path in harness_paths:
+        snapshots = sorted(list(corpus_dir.glob(f"{harness_path.stem}/snapshot-*.csv")), key=snapshot_path_to_minutes)
         if not snapshots:
-            print("[WARN] corpus not found for harness", harness)
+            print("[WARN] corpus not found for harness", harness_path)
             continue
 
-        harness = harness.name
+        harness = harness_path.name
         summaries = [snapshot_summary(x) for x in snapshots]
+        total_edges[harness] = summaries[-1]["total_edges"]
         # pprint(summaries)
 
         # Check that crashing harnesses were tagged properly
@@ -159,13 +161,13 @@ def tag_from_corpus():
             tags[harness].add(Tag.CRASHING)
         else:
             if Tag.CRASHING in tags[harness]:
-                print(f"[WARN] harness was tagged as crashing we don't have a crashing input")
+                print(f"[WARN] harness {harness!r} was tagged as crashing but we don't have a crashing input")
 
         # Are there inputs that trigger sufficiently different amounts of coverage?
         if summaries[-1]["max_edges"] - summaries[-1]["min_edges"] < summaries[-1]["max_edges"] / 3 or summaries[-1]["entries"] < 500:
             tags[harness].add(Tag.SHALLOW)
 
-        if summaries[-1]["total_edges"] > 2000:
+        if summaries[-1]["total_edges"] > 4000:
             tags[harness].add(Tag.BIG)
 
         if summaries[-1]["max_execs_us"] > 100_000: # 100ms
@@ -174,7 +176,7 @@ def tag_from_corpus():
             tags[harness].add(Tag.FAST)
 
         # Did we make meaningful progress between the last two snapshots?
-        if len(summaries) >= 2 and snapshot_path_to_minutes(snapshots[-1]) >= 60*4 and summaries[-1]["total_edges"] >= summaries[-2]["total_edges"] * 1.1:
+        if len(summaries) >= 3 and snapshot_path_to_minutes(snapshots[-1]) >= 60*4 and summaries[-1]["total_edges"] >= summaries[-3]["total_edges"] * 1.3:
             tags[harness].add(Tag.PROGRESS_24H)
 
 
@@ -223,6 +225,8 @@ tag_manually("ron-arbitrary.wasm", "ea6b40619c92a9663883cf7c45c0876734a2fcf5", T
 # [STDOUT] note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 # execution trapped with Abort(UnreachableReached) which indicates that the target crashed
 tag_manually("naga-glsl_parser.wasm", "d0f28c0b1a3c772e55e68db1c47eff5131cb6732", Tag.CRASHING, Tag.BUGGY_PROJECT)
+tag_manually("naga-wgsl_parser.wasm", "d0f28c0b1a3c772e55e68db1c47eff5131cb6732", Tag.CRASHING, Tag.BUGGY_PROJECT)
+tag_manually("naga-spv_parser.wasm", "d0f28c0b1a3c772e55e68db1c47eff5131cb6732", Tag.CRASHING, Tag.BUGGY_PROJECT)
 
 # Testcase: "corpus/naga-ir/snapshot-0d-4h-0m/12bab600aed093a09b37434636a936e2"
 # [STDOUT] thread '<unnamed>' panicked at /projects/naga/repo/src/valid/analyzer.rs:1004:82:
@@ -250,22 +254,46 @@ tag_manually("zip2-fuzz_write.wasm", "TODO", Tag.CRASHING)
 # Unresolved virtual call in ossl_rand_drbg_new -> abort in `undefined_stub`
 tag_manually("openssl-provider.wasm", "3d3bb26a13dcc67f99e66de6a44ae9ced117f64b",
              Tag.CRASHING, Tag.BUGGY_PORT)
+# Their harness builds on global mutable state to reach coverage. We patch the
+# harness to do multiple iterations but something's not quite right apparently.
+tag_manually("openssl-hashtable.wasm", "3d3bb26a13dcc67f99e66de6a44ae9ced117f64b",
+             Tag.CRASHING, Tag.BUGGY_PORT)
+
+# Goblin's PE parser is a bit crash-prone.
+tag_manually("goblin-parse.wasm", "617775898fdfd0b843b2e937c80e455cf6f2a637", Tag.CRASHING, Tag.BUGGY_PROJECT)
+
+# JIT-TRACE: entering _204_ruff_python_parser::parser::expression::<impl ruff_python_parser::parser::Parser>::parse_atom::hab656e63ebc4e656 (Tracing(<none>, [stdout]))
+# JIT-TRACE: entering _200_ruff_python_parser::parser::Parser::bump::h0a7d407e407cc458 (Tracing(<none>, [stdout]))
+# execution trapped with Cranelift(HeapOutOfBounds) which indicates that the target crashed
+# TODO: investigate
+tag_manually("ruff-ruff_parse_simple.wasm", "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9", Tag.CRASHING, Tag.BUGGY_PORT)
+tag_manually("ruff-ruff_parse_idempotency.wasm", "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9", Tag.CRASHING, Tag.BUGGY_PORT)
+tag_manually("ruff-ruff_formatter_idempotency.wasm", "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9", Tag.CRASHING, Tag.BUGGY_PORT)
 
 tag_from_corpus()
 
 tag_compilers()
 
+group_largest = set()
+group_max_total = defaultdict(lambda: 0)
+for harness in harnesses:
+    key = harness.split(".")[0].split("-")[0]
+    group_max_total[key] = max(group_max_total[key], total_edges.get(harness, 0))
+for harness in harnesses:
+    key = harness.split(".")[0].split("-")[0]
+    if total_edges.get(harness, 0) >= group_max_total[key]:
+        group_largest.add(harness)
+
 suite = set()
 suite_bugbench = set()
-for harness in harness_paths:
-    harness = harness.name
+for harness in harnesses:
     t = tags[harness]
     if Tag.SHALLOW in t: continue
 
     if Tag.CRASHING in t:
         t.add(Tag.SUITE_BUGBENCH)
         suite_bugbench.add(harness)
-    elif Tag.PROGRESS_24H in t or Tag.BIG in t:
+    elif Tag.PROGRESS_24H in t or Tag.FUZZBENCH in t or Tag.BIG in t and harness in group_largest:
         t.add(Tag.SUITE)
         suite.add(harness)
 
@@ -279,8 +307,7 @@ with open('tags.csv', 'w') as csvfile:
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
     writer.writeheader()
-    for harness in harness_paths:
-        harness = harness.name
+    for harness in harnesses:
         d = {t.value: int(t in tags[harness]) for t in Tag}
         d["harness"] = harness
         writer.writerow(d)

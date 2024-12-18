@@ -203,6 +203,7 @@ pub(crate) fn main() {
                     ..TracingOptions::default()
                 })
                 .debug(trace, verbose_jit)
+                .instruction_limit(Some(2_000_000_000))
                 .build();
             sess.initialize(&mut stats);
 
@@ -223,11 +224,15 @@ pub(crate) fn main() {
                 }
 
                 if let Some(trap_kind) = res {
-                    println!(
-                        "execution trapped with {:?} which indicates that the target crashed",
-                        trap_kind
-                    );
-                    break;
+                    if trap_kind.is_crash() {
+                        println!(
+                            "execution trapped with {:?} which indicates that the target crashed",
+                            trap_kind
+                        );
+                        break;
+                    } else {
+                        println!("execution stopped with {:?} ", trap_kind);
+                    }
                 }
             }
         }
@@ -324,6 +329,7 @@ pub(crate) fn main() {
                     live_edges: true,
                     ..FeedbackOptions::nothing()
                 })
+                .instruction_limit(Some(2_000_000_000))
                 .build();
             sess.initialize(&mut stats);
 
