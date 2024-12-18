@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/near/borsh-rs.git "$PROJECT/repo" b416d111b9380a76f23c42b83b06266b332fbf50
+git clone-rev.sh https://github.com/near/borsh-rs.git "$PROJECT/repo" 0dc09cd4d5cf7a95686d044222557df106a62e1c
 git -C "$PROJECT/repo" apply "$PROJECT/0001-cargo-fuzz.patch"
