@@ -10,7 +10,7 @@ name = proj_path.stem
 tag = f"wasmfuzz-builder-{name}"
 cid = f"{tag}-extract"
 
-PODMAN = "podman" if shutil.which("podman") else "docker"
+PODMAN = os.environ.get("PODMAN", "podman" if shutil.which("podman") else "docker")
 
 subprocess.run([
     PODMAN, "build",

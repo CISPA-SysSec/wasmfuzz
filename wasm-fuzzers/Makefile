@@ -1,5 +1,6 @@
-PODMAN_BUILD := podman build --cache-ttl=72h
-FUZZERS := libfuzzer-wasm2c libfuzzer-w2c2 aflpp-wasm2c aflpp-w2c2 libafl-libfuzzer-wasm2c wasmfuzz wafl fuzzm
+PODMAN_BUILD ?= podman build --cache-ttl=72h
+FUZZERS := libfuzzer-wasm2c libfuzzer-w2c2 aflpp-wasm2c aflpp-w2c2 libafl-libfuzzer-wasm2c wasmfuzz wasmfuzz-rel wafl
+# fuzzm
 
 .PHONY: all $(FUZZERS) wasm-fuzzers-wasm2c-base wasm-fuzzers-w2c2-base
 # $(addprefix wasm-fuzzers-,$(FUZZERS))

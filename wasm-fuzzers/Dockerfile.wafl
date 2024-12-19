@@ -38,7 +38,7 @@ RUN ninja && ninja install && \
     patchelf --add-needed /usr/local/lib/libWAVM.so /usr/local/bin/wavm
 
 WORKDIR /
-COPY wafl.sh shim-for-wafl.sh /usr/bin/
-RUN chmod +x /usr/bin/wafl.sh /usr/bin/shim-for-wafl.sh
+COPY wafl.sh shim-for-wafl.sh run-afl-fuzz.sh /usr/bin/
+RUN chmod +x /usr/bin/wafl.sh /usr/bin/shim-for-wafl.sh /usr/bin/run-afl-fuzz.sh
 RUN mkdir -p /seeds/ && echo -n "YELLOW SUBMARINE" > /seeds/seed && mkdir -p /corpus/
 ENTRYPOINT [ "wafl.sh" ]

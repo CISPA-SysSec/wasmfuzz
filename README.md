@@ -78,7 +78,7 @@ Note: We have not evaluated the effectiveness of these passes yet.
 - Exits if a crash is found
 - No core pinning
 - Does not support LibAFL-style network scaling (we use simple ad-hoc in-process message passing and structure sharing, no `llmp`)
-- Only partial support of WebAssembly 2.0 features. (Does not support the _Component Model_)
+- No support for the WebAssembly 2.0 _Component Model_.
 
 ## Harness Suite ([./harness-suite/](./harness-suite/))
 
@@ -91,6 +91,8 @@ Building these requires a Docker/Podman and Python installation. Use `make -C ha
 - Currently builds 18 C/C++ and 29 Rust projects. This includes 6 out of the 19 [fuzzbench targets](https://github.com/google/fuzzbench/tree/e72f5bb91bfafd98752fff29e3a961494b85a321/benchmarks) at the moment.
 
 - Optimized builds with full debug info: Harness modules also contain their source code so we can emit coverage reports without any additional files.
+
+We target the [Lime1](https://github.com/WebAssembly/tool-conventions/blob/main/Lime.md#lime1) series of WebAssembly, which is WebAssembly 1.0 in combination with a few standardized post-1.0 features like the `bulk-memory-opt` extension.
 
 
 ## WASM Variants of Other Fuzzers ([./wasm-fuzzers/](./wasm-fuzzers/))

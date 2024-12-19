@@ -22,10 +22,8 @@ WORKDIR /AFLplusplus
 RUN make NO_NYX=1 IS_DOCKER=1 install
 
 WORKDIR /
-COPY afl++-w2c2.sh /usr/bin/
-RUN chmod +x /usr/bin/afl++-w2c2.sh
-ENV AFL_SKIP_CPUFREQ=1
-ENV AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+COPY afl++-w2c2.sh run-afl-fuzz.sh /usr/bin/
+RUN chmod +x /usr/bin/afl++-w2c2.sh /usr/bin/run-afl-fuzz.sh
 
 RUN mkdir -p /seeds/ && echo -n "YELLOW SUBMARINE" > /seeds/seed && mkdir -p /corpus/
 ENTRYPOINT [ "afl++-w2c2.sh" ]
