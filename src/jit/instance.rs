@@ -46,6 +46,7 @@ impl ModuleInstance {
 
     // TODO: Verify that ABI matches? ABI mismatches can be hard to track down!
     pub(crate) fn enter<R, F: Fn(*mut VMContext) -> R>(&mut self, f: F) -> Result<R, TrapKind> {
+        tracyrs::zone!("ModuleInstance::enter");
         assert!(!self.vmctx.tainted);
         self.vmctx.fuel = self.vmctx.fuel_init;
         let mut res = None;
@@ -92,6 +93,7 @@ impl ModuleInstance {
 
     // TODO(perf): mutate directly in the instance's memory to avoid write_input call?
     pub(crate) fn write_input(&mut self, pos: usize, buf: &[u8]) {
+        tracyrs::zone!("ModuleInstance::write_input");
         // std::fs::write("/tmp/input.bin", buf);
         self.vmctx.input_ptr = pos as u32;
         self.vmctx.input_size = buf.len();

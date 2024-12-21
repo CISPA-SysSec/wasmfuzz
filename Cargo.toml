@@ -70,6 +70,10 @@ syntect = { version = "5.1", optional = true }
 zstd = { version = "0.13.1", optional = true }
 
 
+# enable via feat:tracy
+tracyrs = { git = "https://github.com/Mrmaxmeier/tracyrs.git", default-features = false }
+
+
 [features]
 default = ["reports", "compressed_harnesses"]
 reports = ["askama", "lcov", "syntect"]
@@ -79,6 +83,7 @@ concolic = []
 concolic_bitwuzla = ["bitwuzla", "concolic"]
 concolic_z3 = ["z3", "concolic"]
 concolic_debug_verify = []
+tracy = ["tracyrs/tracy_enable"]
 full = [
     "reports",
     "compressed_harnesses",

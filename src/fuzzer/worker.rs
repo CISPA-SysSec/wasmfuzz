@@ -67,6 +67,7 @@ impl Worker {
         idx: usize,
         orc: Option<super::orc::OrchestratorHandle>,
     ) -> Self {
+        tracyrs::zone!("Worker::new");
         let rng_seed = opts.rng_seed.unwrap_or_else(current_nanos);
         let rand = StdRand::with_seed(rng_seed);
 
@@ -162,6 +163,7 @@ impl Worker {
     // save input to our corpus if it produces _entirely_ new coverage
     // (=> this should be the first time we run the input)
     fn on_corpus(&mut self, input: &[u8], is_seed: bool) -> Result<InputVerdict, libafl::Error> {
+        tracyrs::zone!("Worker::on_corpus");
         if !*self.opts.x.run_from_snapshot {
             let res = self.sess.run_reusable(input, false, &mut self.stats);
             if res.is_crash() {
@@ -190,6 +192,7 @@ impl Worker {
 
     // (unconditionally) save this input to our corpus
     fn add_to_corpus(&mut self, input: &[u8], is_seed: bool) -> Result<(), libafl::Error> {
+        tracyrs::zone!("Worker::add_to_corpus");
         let mut testcase: Testcase<BytesInput> = Testcase::new(input.into());
         self.gather_trace_metadata(input, &mut testcase);
         self.corpus.add(testcase)?;
@@ -228,6 +231,7 @@ impl Worker {
     // TODO: defer tracing? some corpus inputs are not kept around for long
     //       => tracing these could become expensive?
     fn gather_trace_metadata(&mut self, input: &[u8], testcase: &mut Testcase<BytesInput>) {
+        tracyrs::zone!("Worker::gather_trace_metadata");
         if *self.opts.x.use_cmplog {
             let _ = self.sess.run_tracing_fresh(input, &mut self.stats);
             let feedback = self.sess.tracing_stage.feedback();
@@ -362,6 +366,7 @@ impl Worker {
         let mut sticky_cooldown = 0u32;
         const A_FEW_EXECS: u32 = 4096; // We want these to complete in < ~1ms
         loop {
+            tracyrs::zone!("Worker loop");
             let mut interesting = false;
 
             let mut exhaustive_queue = std::mem::take(&mut self.exhaustive_queue);
@@ -525,6 +530,7 @@ impl Worker {
     }
 
     fn initialize_corpus(&mut self) -> Result<(), CrashOrLibAFLError> {
+        tracyrs::zone!("Worker::initialize_corpus");
         self.corpus = InMemoryCorpus::new();
 
         // Note: The highest-seen approach leaves an average of log(N) * #metric intermediate
@@ -574,6 +580,7 @@ impl Worker {
     }
 
     fn run_input(&mut self, input: &[u8]) -> Result<InputVerdict, libafl::Error> {
+        tracyrs::zone!("Worker::run_input");
         assert!(input.len() <= self.sess.swarm.input_alloc_size());
         let res = self.sess.run(input, &mut self.stats);
         if res.is_crash() {
@@ -609,6 +616,7 @@ impl Worker {
     }
 
     pub(crate) fn inmemory_cmin(&mut self, is_periodic: bool) -> bool {
+        tracyrs::zone!("Worker::inmemory_cmin");
         if is_periodic {
             println!(
                 "starting periodic in-memory cmin with {} entries",

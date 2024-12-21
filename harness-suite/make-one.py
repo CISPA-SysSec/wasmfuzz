@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import subprocess
 import shutil
+import os
 
 assert sys.argv[1:], "USAGE: make-one.py projects-x/y"
 proj_path = Path(sys.argv[1])

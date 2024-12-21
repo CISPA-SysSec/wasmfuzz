@@ -188,6 +188,7 @@ impl ReportInfo {
     }
 
     pub(crate) fn process_line_coverage(&mut self, sess: &JitFuzzingSession) {
+        tracyrs::zone!("ReportInfo::process_line_coverage");
         let mod_spec = self.mod_spec.clone();
         let mut instrumented_offsets = BTreeSet::new();
         let mut covered_offsets = BTreeSet::new();
@@ -250,6 +251,7 @@ impl ReportInfo {
     }
 
     pub(crate) fn write_html_report(&self, output_path: &PathBuf) {
+        tracyrs::zone!("ReportInfo::write_html_report");
         let mut files = Vec::new();
         // let mut covered: Vec<_> = covered.into_iter().collect();
         // covered.sort_by_cached_key(|(key, _)| (!key.starts_with('/'), key.clone()));
@@ -296,6 +298,7 @@ impl ReportInfo {
 
         let ss = SyntaxSet::load_defaults_newlines();
         for (file, _file) in files.iter().zip(self.files.iter()) {
+            tracyrs::zone!("ReportInfo render file cov report");
             print!(
                 "emitting html cov for: {}{}\r",
                 file.relative_filename,
