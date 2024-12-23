@@ -9,9 +9,11 @@ pub mod memory;
 pub mod misc;
 pub mod module;
 pub mod numeric;
+pub mod signals;
 pub mod tracing;
 pub mod util;
 pub mod vmcontext;
+
 use std::{
     collections::BTreeSet,
     fmt,

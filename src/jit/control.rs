@@ -402,7 +402,9 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             let oob = bcx
                 .ins()
                 .icmp(IntCC::UnsignedGreaterThanOrEqual, callee_idx, bounds);
-            bcx.ins().trapnz(oob, ir::TrapCode::TableOutOfBounds);
+
+            bcx.ins()
+                .trapnz(oob, state.trap_abort(AbortCode::TableOutOfBounds));
 
             let callee_idx = bcx.ins().sextend(I64, callee_idx);
             let callee_offset = bcx.ins().imul_imm(callee_idx, 8);

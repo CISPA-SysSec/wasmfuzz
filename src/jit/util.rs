@@ -1,5 +1,5 @@
-use cranelift::prelude::MemFlags;
 use cranelift::codegen::ir;
+use cranelift::prelude::MemFlags;
 use wasmparser::ValType;
 
 pub(crate) fn wasm2ty(ty: &ValType) -> ir::Type {

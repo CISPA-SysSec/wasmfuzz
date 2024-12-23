@@ -1,7 +1,5 @@
 use std::cell::RefCell;
 
-use wasmtime::vm::{raise_trap, TrapReason};
-
 use crate::{
     concolic::ConcolicContext,
     cow_memory::{CowResetMapping, ResettableMapping, RestoreDirtyLKMMapping},
@@ -9,6 +7,7 @@ use crate::{
 };
 
 use super::feedback::FeedbackContext;
+use super::signals::{raise_trap, TrapReason};
 
 #[repr(C)]
 pub(crate) struct VMContext {
@@ -168,7 +167,7 @@ impl VMContext {
         if self.fuel >= delta {
             self.fuel -= delta;
         } else {
-            unsafe { raise_trap(TrapReason::Wasm(wasmtime::Trap::OutOfFuel)) };
+            unsafe { raise_trap(TrapReason::OutOfFuel) };
         }
     }
 }

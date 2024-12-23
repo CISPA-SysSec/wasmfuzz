@@ -86,7 +86,7 @@ fn instrument_bb_fuel(state: &mut FuncTranslator, bcx: &mut FunctionBuilder, loc
     let fuel = bcx.ins().load(I64, MemFlags::trusted(), vmctx, 8 + 8);
 
     let is_lt = bcx.ins().icmp_imm(IntCC::UnsignedLessThan, fuel, bb_size);
-    let trap_code = state.get_trap_code(TrapKind::OutOfFuel(location));
+    let trap_code = state.get_trap_code(TrapKind::OutOfFuel(Some(location)));
     bcx.ins().trapnz(is_lt, trap_code);
 
     let fuel = bcx.ins().iadd_imm(fuel, -bb_size);

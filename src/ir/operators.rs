@@ -190,8 +190,8 @@ pub(crate) enum ParametricInstruction {
     Select,
 }
 
-#[allow(unused)]
 #[derive(Debug)]
+#[allow(unused)]
 pub(crate) enum TableInstruction {
     TableGet(u32),
     TableSet(u32),
