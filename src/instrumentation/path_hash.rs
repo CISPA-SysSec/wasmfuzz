@@ -20,8 +20,9 @@ fn hash_to_u64<T: std::hash::Hash>(val: T) -> u64 {
 }
 
 pub(crate) struct HashBitset {
-    entries: BitBox,
-    new_coverage: Box<bool>,
+    pub entries: BitBox,
+    pub saved: BitBox,
+    pub new_coverage: Box<bool>,
 }
 impl HashBitset {
     pub fn new_for_elems(count: usize, blowup_factor: usize) -> Self {
@@ -32,16 +33,23 @@ impl HashBitset {
         assert!(size.is_power_of_two());
         let entries = BitVec::repeat(false, size).into_boxed_bitslice();
         Self {
+            saved: entries.clone(),
             entries,
             new_coverage: Box::new(false),
         }
     }
 
     pub fn update_and_scan(&mut self) -> bool {
-        std::mem::take(&mut self.new_coverage)
+        let new_cov_hint = *std::mem::take(&mut self.new_coverage);
+        new_cov_hint && super::union_bitboxes(&mut self.saved, &self.entries)
     }
 
     pub fn reset(&mut self) {
+        self.entries.fill(false);
+        self.saved.fill(false);
+    }
+
+    pub fn reset_keep_saved(&mut self) {
         self.entries.fill(false);
     }
 

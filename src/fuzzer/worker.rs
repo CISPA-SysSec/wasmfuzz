@@ -1,3 +1,4 @@
+use crate::instrumentation::InstrumentationSnapshot;
 use crate::jit::tracing::CmpLog;
 use crate::HashSet;
 use std::collections::VecDeque;
@@ -49,7 +50,7 @@ pub(crate) struct Worker {
     bus: Arc<MessageBus<Message>>,
     bus_rx: crossbeam_channel::Receiver<Message>,
     metadata: SerdeAnyMap,
-    sess: JitFuzzingSession,
+    pub(crate) sess: JitFuzzingSession,
     exhaustive_queue: VecDeque<Box<dyn QueuedInputMutation>>,
     pub(crate) schedule: WorkerSchedule,
     last_crasher: Option<Vec<u8>>,
@@ -160,8 +161,8 @@ impl Worker {
         worker
     }
 
-    // save input to our corpus if it produces _entirely_ new coverage
-    // (=> this should be the first time we run the input)
+    // Save input to our corpus if it produces new coverage
+    // Note: this should be the first time we run the input
     fn on_corpus(&mut self, input: &[u8], is_seed: bool) -> Result<InputVerdict, libafl::Error> {
         tracyrs::zone!("Worker::on_corpus");
         if !*self.opts.x.run_from_snapshot {
@@ -194,6 +195,12 @@ impl Worker {
     fn add_to_corpus(&mut self, input: &[u8], is_seed: bool) -> Result<(), libafl::Error> {
         tracyrs::zone!("Worker::add_to_corpus");
         let mut testcase: Testcase<BytesInput> = Testcase::new(input.into());
+
+        self.sess.reset_pass_coverage_keep_saved();
+        let _ = self.sess.run(input, &mut self.stats);
+        let coverage_snapshot = InstrumentationSnapshot::from(&self.sess.passes);
+        testcase.metadata_map_mut().insert(coverage_snapshot);
+
         self.gather_trace_metadata(input, &mut testcase);
         self.corpus.add(testcase)?;
         if self.opts.verbose_corpus {
@@ -623,14 +630,14 @@ impl Worker {
                 self.corpus.count()
             );
         }
-        self.sess.reset_pass_coverage();
-        self.sess.initialize(&mut self.stats);
 
         let mut corpus_idxs = self.corpus.ids().collect::<Vec<_>>();
         let mut to_remove = Vec::new();
         let mut dropped_randomly = 0;
 
         corpus_idxs.shuffle(&mut self.rand);
+
+        let mut cov_acc = InstrumentationSnapshot::empty_from(&self.sess.passes);
 
         for idx in corpus_idxs {
             let drop_by_chance = is_periodic
@@ -642,9 +649,11 @@ impl Worker {
                 continue;
             }
             let testcase = self.corpus.get(idx).unwrap().borrow();
-            let input = testcase.input().as_ref().unwrap().bytes();
-            let res = self.sess.run_reusable_fresh(input, false, &mut self.stats);
-            if !res.novel_coverage {
+            let cov_snapshot = testcase
+                .metadata_map()
+                .get::<InstrumentationSnapshot>()
+                .expect("missing coverage snapshot in corpus testcase metadata");
+            if !cov_acc.update_with(cov_snapshot) {
                 to_remove.push(idx);
             }
         }
@@ -654,6 +663,18 @@ impl Worker {
         to_remove.reverse();
         for &idx in &to_remove {
             self.corpus_mut().remove(idx).unwrap();
+        }
+
+        if dropped_randomly != 0 {
+            // coverage might have reduced by dropping random inputs!
+            self.sess.reset_pass_coverage();
+            self.sess.initialize(&mut self.stats);
+
+            for idx in self.corpus.ids() {
+                let testcase = self.corpus.get(idx).unwrap().borrow();
+                let input = testcase.input().as_ref().unwrap().bytes();
+                let _ = self.sess.run_reusable_fresh(input, false, &mut self.stats);
+            }
         }
 
         if is_periodic {

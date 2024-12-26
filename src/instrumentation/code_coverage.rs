@@ -9,9 +9,9 @@ use crate::{
 use super::{CodeCovInstrumentationPass, Edge, FuncIdx, InstrCtx};
 
 pub(crate) struct CoverageBitset<K: Ord + Clone> {
-    keys: Box<[K]>,
-    entries: BitBox,
-    saved: BitBox,
+    pub keys: Box<[K]>,
+    pub entries: BitBox,
+    pub saved: BitBox,
 }
 impl<K: Ord + Clone> CoverageBitset<K> {
     pub fn new(keys: &[K]) -> Self {
@@ -33,20 +33,16 @@ impl<K: Ord + Clone> CoverageBitset<K> {
 
     pub fn update_and_scan(&mut self) -> bool {
         tracyrs::zone!("CoverageBitset::update_and_scan");
-        let is_update = self
-            .entries
-            .domain()
-            .zip(self.saved.domain())
-            .any(|(e, s)| (e & !s) != 0);
-        if is_update {
-            self.saved |= &self.entries;
-        }
-        is_update
+        super::union_bitboxes(&mut self.saved, &self.entries)
     }
 
     pub fn reset(&mut self) {
         self.entries.fill(false);
         self.saved.fill(false);
+    }
+
+    pub fn reset_keep_saved(&mut self) {
+        self.entries.fill(false);
     }
 
     fn instrument<P: CodeCovInstrumentationPass>(&self, key: &K, ctx: InstrCtx, _pass: &P) {

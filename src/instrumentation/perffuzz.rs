@@ -27,18 +27,7 @@ impl EdgeHitsInAFunctionPass {
 impl KVInstrumentationPass for EdgeHitsInAFunctionPass {
     type Key = Edge;
     type Value = Maximize<u32>;
-
-    fn shortcode(&self) -> &'static str {
-        "perffuzz-edges-in-function"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("perffuzz-edges-in-function");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         let mut edges: Vec<_> = super::iter_edges(spec).collect();
@@ -162,22 +151,7 @@ impl PerffuzzFunctionPass {
 impl KVInstrumentationPass for PerffuzzFunctionPass {
     type Key = FuncIdx;
     type Value = Maximize<u32>;
-
-    fn shortcode(&self) -> &'static str {
-        "perffuzz-function"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("perffuzz-function");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_funcs(spec)
@@ -208,22 +182,7 @@ impl PerffuzzBBPass {
 impl KVInstrumentationPass for PerffuzzBBPass {
     type Key = Location;
     type Value = Maximize<u32>;
-
-    fn shortcode(&self) -> &'static str {
-        "perffuzz-bbs"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("perffuzz-bbs");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_bbs(spec)
@@ -254,22 +213,7 @@ impl PerffuzzEdgePass {
 impl KVInstrumentationPass for PerffuzzEdgePass {
     type Key = Edge;
     type Value = Maximize<u32>;
-
-    fn shortcode(&self) -> &'static str {
-        "perffuzz-edges"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("perffuzz-edges");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_edges(spec)
@@ -299,22 +243,7 @@ impl FunctionRecursionDepthPass {
 impl KVInstrumentationPass for FunctionRecursionDepthPass {
     type Key = FuncIdx;
     type Value = Maximize<u32>;
-
-    fn shortcode(&self) -> &'static str {
-        "func-rec-depth"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("func-rec-depth");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_funcs(spec)

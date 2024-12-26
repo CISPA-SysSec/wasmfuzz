@@ -111,20 +111,13 @@ impl CmpCoveragePass {
 impl KVInstrumentationPass for CmpCoveragePass {
     type Key = Location;
     type Value = Minimize<u8>;
+    super::traits::impl_kv_instrumentation_pass!();
 
     fn shortcode(&self) -> &'static str {
         match self.kind {
             CmpCovKind::Hamming => "cmpcov-hamming",
             CmpCovKind::AbsDist => "cmpcov-absdist",
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
     }
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {

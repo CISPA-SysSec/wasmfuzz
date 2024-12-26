@@ -808,7 +808,7 @@ pub(crate) struct JitFuzzingSession {
     debug_trace: bool,
     verbose: bool,
     pub(crate) swarm: SwarmConfig,
-    passes: Passes,
+    pub(crate) passes: Passes,
 }
 
 impl JitFuzzingSession {
@@ -919,12 +919,9 @@ impl JitFuzzingSession {
         stats.wall_reusable_ns += start.elapsed().as_nanos() as u64;
         let novel_coverage_passes = self.scan_passes_for_coverage();
 
-        // discard coverage if short circuit trap
+        // optionally discard coverage if short circuit trap
         if let Some(trap_kind) = &trap_kind {
             if trap_kind.is_short_circuit() && self.swarm.discard_short_circuit_coverage {
-                // FIXME: this doesn't make sense.
-                // timeouts will drive out-of-swarm coverage here..
-                // if matches!(trap_kind, TrapKind::SwarmShortCircuit(_)) {
                 return RunResult {
                     trap_kind: Some(trap_kind.clone()),
                     novel_coverage: false,
@@ -1000,6 +997,7 @@ impl JitFuzzingSession {
     }
 
     fn scan_passes_for_coverage(&mut self) -> Vec<&'static str> {
+        tracyrs::zone!("JitFuzzingSession::scan_passes_for_coverage");
         let mut res = Vec::new();
         for pass in self.passes.iter_mut() {
             if pass.update_and_scan_coverage() {
@@ -1010,8 +1008,16 @@ impl JitFuzzingSession {
     }
 
     pub(crate) fn reset_pass_coverage(&mut self) {
+        tracyrs::zone!("JitFuzzingSession::reset_pass_coverage");
         for pass in self.passes.iter_mut() {
             pass.reset_coverage();
+        }
+    }
+
+    pub(crate) fn reset_pass_coverage_keep_saved(&mut self) {
+        tracyrs::zone!("JitFuzzingSession::reset_pass_coverage_keep_saved");
+        for pass in self.passes.iter_mut() {
+            pass.reset_coverage_keep_saved();
         }
     }
 

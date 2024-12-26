@@ -5,7 +5,7 @@ use crate::ir::Location;
 use crate::jit::module::TrapKind;
 use crate::jit::SwarmConfig;
 
-use super::{Edge, ErasedInstrumentationPass, FuncIdx, InstrCtx};
+use super::{CovSnapshot, Edge, ErasedInstrumentationPass, FuncIdx, InstrCtx};
 
 #[derive(Clone, PartialEq)]
 enum MUKey {
@@ -222,4 +222,8 @@ impl ErasedInstrumentationPass for SwarmShortCircuitPass {
     }
 
     fn reset_coverage(&mut self) {}
+    fn reset_coverage_keep_saved(&mut self) {}
+    fn snapshot_coverage(&self) -> CovSnapshot {
+        CovSnapshot::Noop
+    }
 }

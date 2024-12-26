@@ -68,18 +68,7 @@ impl MemoryOpAddressRangePass {
 impl KVInstrumentationPass for MemoryOpAddressRangePass {
     type Key = Location;
     type Value = ValueRange;
-
-    fn shortcode(&self) -> &'static str {
-        "memory-op-addr-range"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("memory-op-addr-range");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Location> {
         iter_memory(true, false, true, spec)
@@ -127,18 +116,7 @@ impl MemoryLoadValRangePass {
 impl KVInstrumentationPass for MemoryLoadValRangePass {
     type Key = Location;
     type Value = ValueRange;
-
-    fn shortcode(&self) -> &'static str {
-        "memory-load-profile"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("memory-load-profile");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Location> {
         iter_memory(true, false, false, spec)
@@ -173,18 +151,7 @@ impl MemoryStoreValRangePass {
 impl KVInstrumentationPass for MemoryStoreValRangePass {
     type Key = Location;
     type Value = ValueRange;
-
-    fn shortcode(&self) -> &'static str {
-        "memory-store-profile"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("memory-store-profile");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Location> {
         iter_memory(true, false, false, spec)
@@ -219,18 +186,7 @@ impl MemoryStorePrevValRangePass {
 impl KVInstrumentationPass for MemoryStorePrevValRangePass {
     type Key = Location;
     type Value = ValueRange;
-
-    fn shortcode(&self) -> &'static str {
-        "memory-store-profile"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("memory-store-profile");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Location> {
         iter_memory(false, true, false, spec)

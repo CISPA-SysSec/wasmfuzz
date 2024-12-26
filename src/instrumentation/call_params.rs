@@ -34,18 +34,7 @@ impl CallParamsRangePass {
 impl KVInstrumentationPass for CallParamsRangePass {
     type Key = CallArgument;
     type Value = ValueRange;
-
-    fn shortcode(&self) -> &'static str {
-        "call-params-range"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("call-params-range");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         use crate::ir::{ControlInstruction, WFOperator};
@@ -147,18 +136,7 @@ impl CallParamsSetPass {
 impl KVInstrumentationPass for CallParamsSetPass {
     type Key = CallArgument;
     type Value = ValueSet<8>;
-
-    fn shortcode(&self) -> &'static str {
-        "call-params-set"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("call-params-set");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         CallParamsRangePass::generate_keys(spec)
@@ -220,18 +198,7 @@ impl GlobalsRangePass {
 impl KVInstrumentationPass for GlobalsRangePass {
     type Key = Location;
     type Value = ValueRange;
-
-    fn shortcode(&self) -> &'static str {
-        "globals-range"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("globals-range");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         use crate::ir::{VariableInstruction, WFOperator};

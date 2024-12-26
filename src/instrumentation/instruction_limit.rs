@@ -90,20 +90,7 @@ impl FunctionShortestExecutionTracePass {
 impl KVInstrumentationPass for FunctionShortestExecutionTracePass {
     type Key = FuncIdx;
     type Value = Minimize<u64>;
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
-
-    fn shortcode(&self) -> &'static str {
-        "func-shortest-trace"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
+    super::traits::impl_kv_instrumentation_pass!("func-shortest-trace");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_funcs(spec)
@@ -133,20 +120,7 @@ impl FunctionLongestExecutionTracePass {
 impl KVInstrumentationPass for FunctionLongestExecutionTracePass {
     type Key = FuncIdx;
     type Value = Maximize<u64>;
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
-
-    fn shortcode(&self) -> &'static str {
-        "func-longest-trace"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
+    super::traits::impl_kv_instrumentation_pass!("func-longest-trace");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_funcs(spec)
@@ -180,20 +154,7 @@ impl EdgeShortestExecutionTracePass {
 impl KVInstrumentationPass for EdgeShortestExecutionTracePass {
     type Key = Edge;
     type Value = Minimize<u64>;
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
-
-    fn shortcode(&self) -> &'static str {
-        "edge-shortest-trace"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
+    super::traits::impl_kv_instrumentation_pass!("edge-shortest-trace");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_edges(spec)
