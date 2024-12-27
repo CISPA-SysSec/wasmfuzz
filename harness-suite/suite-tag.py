@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
 import subprocess
-from pathlib import Path
-from pprint import pprint
 import argparse
 import csv
 import io
+
+from pathlib import Path
+from pprint import pprint
+from collections import Counter, defaultdict
+from enum import Enum
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--harness-dir', default="./out/")
@@ -18,9 +21,7 @@ corpus_dir = Path(args.corpus_dir)
 harness_paths = sorted(list(harness_dir.glob("*.wasm")))
 harnesses = [x.name for x in harness_paths]
 
-from collections import Counter, defaultdict
 
-from enum import Enum
 class Tag(Enum):
     FUZZBENCH = "fuzzbench"
 
@@ -44,10 +45,10 @@ class Tag(Enum):
     WASM_SPECIFIC_CRASH = "wasm-specific-crash"
     BUGGY_PORT = "buggy-port"
     BUGGY_PROJECT = "buggy-project"
+    REQUIRES_SJLJ = "requires-sjlj"
 
 
 tags = defaultdict(set)
-
 
 def tag_compilers():
     producers_ctr = Counter()
@@ -175,7 +176,7 @@ def tag_from_corpus():
         if summaries[-1]["max_execs_us"] < 200: # 0.2ms -> at least 500 execs/s
             tags[harness].add(Tag.FAST)
 
-        # Did we make meaningful progress between the last two snapshots?
+        # Did we make meaningful progress in the last two snapshots?
         if len(summaries) >= 3 and snapshot_path_to_minutes(snapshots[-1]) >= 60*4 and summaries[-1]["total_edges"] >= summaries[-3]["total_edges"] * 1.3:
             tags[harness].add(Tag.PROGRESS_24H)
 
@@ -187,7 +188,6 @@ tag_fuzzbench([
     "freetype2-ftfuzzer.wasm",
     # "harfbuzz-hb-shape-fuzzer.wasm",
     # "jsoncpp-fuzzer.wasm",
-    # "lcms-cms_transform_fuzzer.wasm",
     "lcms-cms_transform.wasm",
     # "libjpeg-turbo-fuzzer.wasm",
     # "libpcap-fuzz-both.wasm",
@@ -270,6 +270,16 @@ tag_manually("ruff-ruff_parse_simple.wasm", "5c537b6dbbb8c3cd9ff13869fb2817f81b6
 tag_manually("ruff-ruff_parse_idempotency.wasm", "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9", Tag.CRASHING, Tag.BUGGY_PORT)
 tag_manually("ruff-ruff_formatter_idempotency.wasm", "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9", Tag.CRASHING, Tag.BUGGY_PORT)
 
+# TODO: wasmfuzz doesn't find these crashes
+tag_manually("ruff-ruff_formatter_validity.wasm", "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9", Tag.CRASHING, Tag.SUITE_BUGBENCH)
+tag_manually("image_script_hdr.wasm", "TODO", Tag.CRASHING, Tag.SUITE_BUGBENCH)
+tag_manually("jxl-oxide-libfuzzer-decode.wasm", "TODO", Tag.CRASHING, Tag.SUITE_BUGBENCH)
+
+for proj in {"libpng", "freetype2", "jsoncpp"}:
+    for harness in harnesses:
+        if harness.startswith(proj):
+            tags[harness].add(Tag.REQUIRES_SJLJ)
+
 tag_from_corpus()
 
 tag_compilers()
@@ -284,23 +294,27 @@ for harness in harnesses:
     if total_edges.get(harness, 0) >= group_max_total[key]:
         group_largest.add(harness)
 
-suite = set()
-suite_bugbench = set()
 for harness in harnesses:
     t = tags[harness]
+
+    # These harnesses aren't useful for evaluation since there doesn't seem to
+    # be enough different code-paths to explore.
     if Tag.SHALLOW in t: continue
+    # The other WebAssembly fuzzers in our evaluation can't handle our
+    # SetJump/LongJump harnesses since they are not snapshot-based and exiting
+    # fuzz test cases would leak memory or corrupt state.
+    if Tag.REQUIRES_SJLJ in t: continue
 
     if Tag.CRASHING in t:
         t.add(Tag.SUITE_BUGBENCH)
-        suite_bugbench.add(harness)
-    elif Tag.PROGRESS_24H in t or Tag.FUZZBENCH in t or Tag.BIG in t and harness in group_largest:
+    elif Tag.PROGRESS_24H in t or Tag.FUZZBENCH in t or (Tag.BIG in t and harness in group_largest):
         t.add(Tag.SUITE)
-        suite.add(harness)
+
 
 print("Tag.SUITE:")
-pprint(suite)
+pprint(sorted({k for k, v in tags.items() if Tag.SUITE in v}))
 print("Tag.SUITE_BUGBENCH:")
-pprint(suite_bugbench)
+pprint(sorted({k for k, v in tags.items() if Tag.SUITE_BUGBENCH in v}))
 
 with open('tags.csv', 'w') as csvfile:
     fieldnames = ["harness"] + [t.value for t in Tag]
