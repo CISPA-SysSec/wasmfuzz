@@ -31,7 +31,10 @@ pub(crate) struct HashBitset {
 }
 impl HashBitset {
     pub fn new_for_elems(count: usize, blowup_factor: usize) -> Self {
-        Self::new_with_size(((count + 1) * blowup_factor).next_power_of_two())
+        let size = (count + 1) * blowup_factor;
+        // limit size to 128kb. we might have thousands of trace metadatas in the corpus.
+        let size = size.min(100_000);
+        Self::new_with_size(size.next_power_of_two())
     }
 
     pub fn new_with_size(size: usize) -> Self {
@@ -215,7 +218,7 @@ impl FuncPathHashPass {
             .filter(|x| key_filter(&Location::from(*x)))
             .collect::<HashSet<_>>();
         Self {
-            coverage: HashBitset::new_for_elems(keys.len(), 1024),
+            coverage: HashBitset::new_for_elems(keys.len(), 64),
             keys,
         }
     }
@@ -264,7 +267,7 @@ impl EdgePathHashPass {
             .filter(|x| key_filter(&Location::from(*x)))
             .collect::<HashSet<_>>();
         Self {
-            coverage: HashBitset::new_for_elems(keys.len(), 1024),
+            coverage: HashBitset::new_for_elems(keys.len(), 64),
             keys,
         }
     }
