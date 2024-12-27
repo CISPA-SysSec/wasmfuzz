@@ -19,6 +19,11 @@ fn hash_to_u64<T: std::hash::Hash>(val: T) -> u64 {
     hasher.finish()
 }
 
+/*
+SAFETY: The underlying storage areas of `entries` and `new_coverage` are baked into the JIT
+compilation artifact. This means that they can't be moved until the JIT artifacts are discarded.
+It might be worthwhile to explicitly wrap them in a Pin.
+*/
 pub(crate) struct HashBitset {
     pub entries: BitBox,
     pub saved: BitBox,
@@ -40,7 +45,7 @@ impl HashBitset {
     }
 
     pub fn update_and_scan(&mut self) -> bool {
-        let new_cov_hint = *std::mem::take(&mut self.new_coverage);
+        let new_cov_hint = std::mem::take(self.new_coverage.as_mut());
         new_cov_hint && super::union_bitboxes(&mut self.saved, &self.entries)
     }
 
