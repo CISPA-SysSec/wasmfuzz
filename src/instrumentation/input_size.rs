@@ -3,6 +3,7 @@ use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
 
+use super::Location;
 use super::{
     feedback_lattice::Minimize, AssociatedCoverageArray, FuncIdx, InstrCtx, KVInstrumentationPass,
 };
@@ -21,10 +22,18 @@ pub(crate) struct InputSizePass {
 }
 
 impl InputSizePass {
-    pub(crate) fn new(metric: InputComplexityMetric, spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(
+        metric: InputComplexityMetric,
+        spec: &ModuleSpec,
+        key_filter: F,
+    ) -> Self {
         Self {
             metric,
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }

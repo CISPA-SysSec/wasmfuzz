@@ -16,10 +16,18 @@ pub(crate) struct CmpCoveragePass {
 }
 
 impl CmpCoveragePass {
-    pub(crate) fn new(kind: CmpCovKind, spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(
+        kind: CmpCovKind,
+        spec: &ModuleSpec,
+        key_filter: F,
+    ) -> Self {
         Self {
             kind,
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(key_filter)
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 

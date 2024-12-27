@@ -24,9 +24,13 @@ pub(crate) struct CallParamsRangePass {
 }
 
 impl CallParamsRangePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(x.clone())))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -126,9 +130,13 @@ pub(crate) struct CallParamsSetPass {
 }
 
 impl CallParamsSetPass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(x.clone())))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -188,9 +196,13 @@ pub(crate) struct GlobalsRangePass {
 }
 
 impl GlobalsRangePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }

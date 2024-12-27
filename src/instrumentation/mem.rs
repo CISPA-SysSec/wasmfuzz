@@ -58,9 +58,13 @@ pub(crate) struct MemoryOpAddressRangePass {
 }
 
 impl MemoryOpAddressRangePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(key_filter)
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -106,9 +110,13 @@ pub(crate) struct MemoryLoadValRangePass {
 }
 
 impl MemoryLoadValRangePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(key_filter)
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -141,9 +149,13 @@ pub(crate) struct MemoryStoreValRangePass {
 }
 
 impl MemoryStoreValRangePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(key_filter)
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -176,9 +188,13 @@ pub(crate) struct MemoryStorePrevValRangePass {
 }
 
 impl MemoryStorePrevValRangePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }

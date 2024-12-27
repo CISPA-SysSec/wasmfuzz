@@ -3,6 +3,7 @@ use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
 
+use super::Location;
 use super::{
     feedback_lattice::{Maximize, Minimize},
     AssociatedCoverageArray, Edge, FeedbackLattice, FeedbackLatticeCodegen, FuncIdx, InstrCtx,
@@ -80,9 +81,13 @@ pub(crate) struct FunctionShortestExecutionTracePass {
 }
 
 impl FunctionShortestExecutionTracePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -110,9 +115,13 @@ pub(crate) struct FunctionLongestExecutionTracePass {
 }
 
 impl FunctionLongestExecutionTracePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -144,9 +153,13 @@ pub(crate) struct EdgeShortestExecutionTracePass {
 }
 
 impl EdgeShortestExecutionTracePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }

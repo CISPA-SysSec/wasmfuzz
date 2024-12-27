@@ -112,7 +112,7 @@ pub(crate) trait CodeCovInstrumentationPass {
 
     instrumentation_hook_fn_defs!(empty);
 
-    fn new(spec: &ModuleSpec) -> Self
+    fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self
     where
         Self: Sized;
 

@@ -7,7 +7,7 @@ use cranelift::module::{DataDescription, DataId, Module};
 use crate::jit::vmcontext::VMContext;
 use crate::{ir::ModuleSpec, jit::CompilationKind, HashSet};
 
-use super::{Edge, FuncIdx, HashBitsetInstrumentationPass, InstrCtx};
+use super::{Edge, FuncIdx, HashBitsetInstrumentationPass, InstrCtx, Location};
 
 fn hash_to_u64<T: std::hash::Hash>(val: T) -> u64 {
     use std::hash::Hasher;
@@ -208,8 +208,10 @@ pub(crate) struct FuncPathHashPass {
 }
 
 impl FuncPathHashPass {
-    pub fn new(spec: &ModuleSpec) -> Self {
-        let keys = super::iter_funcs(spec).collect::<HashSet<_>>();
+    pub fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
+        let keys = super::iter_funcs(spec)
+            .filter(|x| key_filter(&Location::from(*x)))
+            .collect::<HashSet<_>>();
         Self {
             coverage: HashBitset::new_for_elems(keys.len(), 1024),
             keys,
@@ -255,8 +257,10 @@ pub(crate) struct EdgePathHashPass {
 }
 
 impl EdgePathHashPass {
-    pub fn new(spec: &ModuleSpec) -> Self {
-        let keys = super::iter_edges(spec).collect::<HashSet<_>>();
+    pub fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
+        let keys = super::iter_edges(spec)
+            .filter(|x| key_filter(&Location::from(*x)))
+            .collect::<HashSet<_>>();
         Self {
             coverage: HashBitset::new_for_elems(keys.len(), 1024),
             keys,

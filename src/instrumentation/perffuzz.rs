@@ -17,9 +17,13 @@ pub(crate) struct EdgeHitsInAFunctionPass {
 }
 
 impl EdgeHitsInAFunctionPass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -141,9 +145,13 @@ pub(crate) struct PerffuzzFunctionPass {
 }
 
 impl PerffuzzFunctionPass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -172,9 +180,13 @@ pub(crate) struct PerffuzzBBPass {
 }
 
 impl PerffuzzBBPass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(key_filter)
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -203,9 +215,13 @@ pub(crate) struct PerffuzzEdgePass {
 }
 
 impl PerffuzzEdgePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -233,9 +249,13 @@ pub(crate) struct FunctionRecursionDepthPass {
 }
 
 impl FunctionRecursionDepthPass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
