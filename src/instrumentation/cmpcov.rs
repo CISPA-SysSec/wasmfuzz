@@ -62,7 +62,7 @@ impl CmpCoveragePass {
     ) -> ir::Value {
         use ir::types::*;
         match value_ty {
-            F32 => {
+            ir::types::F32 => {
                 let diff = bcx.ins().fsub(value_a, value_b);
                 // IEEE 754 binary32 layout:
                 // 1 sign 8 exponent 23 fraction
@@ -72,7 +72,7 @@ impl CmpCoveragePass {
                 let val = bcx.ins().ushr_imm(val, 24);
                 bcx.ins().ireduce(I8, val)
             }
-            F64 => {
+            ir::types::F64 => {
                 let diff = bcx.ins().fsub(value_a, value_b);
                 // IEEE 754 binary64 layout:
                 // 1 sign 11 exponent 52 fraction
@@ -84,7 +84,7 @@ impl CmpCoveragePass {
                 let val = bcx.ins().smin(val, u8_max);
                 bcx.ins().ireduce(I8, val)
             }
-            I32 | I64 => {
+            ir::types::I32 | ir::types::I64 => {
                 // Note: is this correct?
                 let smaller = bcx.ins().smin(value_a, value_b);
                 let bigger = bcx.ins().smax(value_a, value_b);

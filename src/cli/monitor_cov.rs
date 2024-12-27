@@ -71,6 +71,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
     let mut stats = Stats::default();
     let mut sess = JitFuzzingSession::builder(mod_spec.clone())
         .feedback(FeedbackOptions::minimal_code_coverage())
+        .instruction_limit(Some(2_000_000_000))
         .build();
     sess.initialize(&mut stats);
     let mut corpus = HashSet::default();

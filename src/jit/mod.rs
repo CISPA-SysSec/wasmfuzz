@@ -155,7 +155,7 @@ impl Stats {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Default)]
+#[derive(Clone, Hash, PartialEq, Eq, Default)]
 pub(crate) struct SwarmConfig {
     pub discard_short_circuit_coverage: bool,
 
@@ -181,6 +181,55 @@ impl SwarmConfig {
     pub(crate) fn input_alloc_size(&self) -> usize {
         // self.input_size_limit.unwrap_or(4096) as usize
         u16::MAX as usize
+    }
+}
+
+impl std::fmt::Debug for SwarmConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let SwarmConfig {
+            discard_short_circuit_coverage,
+            avoid_functions,
+            avoid_bbs,
+            avoid_edges,
+            must_include_functions,
+            must_include_bbs,
+            must_include_edges,
+            input_size_limit,
+            instruction_limit,
+            memory_limit_pages,
+        } = self;
+        let mut f = f.debug_struct("SwarmConfig");
+        let mut skipped = false;
+        fn field<V: std::fmt::Debug + Default + PartialEq>(
+            f: &mut std::fmt::DebugStruct,
+            name: &str,
+            value: &V,
+        ) -> bool {
+            let is_default = value == &V::default();
+            if !is_default {
+                f.field(name, value);
+            }
+            is_default
+        }
+        skipped |= field(
+            &mut f,
+            "discard_short_circuit_coverage",
+            discard_short_circuit_coverage,
+        );
+        skipped |= field(&mut f, "avoid_functions", avoid_functions);
+        skipped |= field(&mut f, "avoid_bbs", avoid_bbs);
+        skipped |= field(&mut f, "avoid_edges", avoid_edges);
+        skipped |= field(&mut f, "must_include_functions", must_include_functions);
+        skipped |= field(&mut f, "must_include_bbs", must_include_bbs);
+        skipped |= field(&mut f, "must_include_edges", must_include_edges);
+        skipped |= field(&mut f, "input_size_limit", input_size_limit);
+        skipped |= field(&mut f, "instruction_limit", instruction_limit);
+        skipped |= field(&mut f, "memory_limit_pages", memory_limit_pages);
+        if skipped {
+            f.finish_non_exhaustive()
+        } else {
+            f.finish()
+        }
     }
 }
 
@@ -455,7 +504,7 @@ pub(crate) enum CompilationKind {
     Tracing,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct FeedbackOptions {
     pub live_funcs: bool,
     pub live_bbs: bool,
@@ -541,6 +590,26 @@ impl FeedbackOptions {
             func_longest_trace: true,
             path_hash_func: true,
             path_hash_edge: true,
+        }
+    }
+}
+
+impl std::fmt::Debug for FeedbackOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut f = f.debug_struct("FeedbackOptions");
+        let v = serde_json::to_value(&self).unwrap();
+        let mut skipped = false;
+        for (k, v) in v.as_object().unwrap() {
+            if v.as_bool().unwrap() {
+                f.field(k, &true);
+            } else {
+                skipped = true;
+            }
+        }
+        if skipped {
+            f.finish_non_exhaustive()
+        } else {
+            f.finish()
         }
     }
 }

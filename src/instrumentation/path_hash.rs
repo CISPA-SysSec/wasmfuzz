@@ -36,6 +36,7 @@ impl HashBitset {
 
     pub fn new_with_size(size: usize) -> Self {
         assert!(size.is_power_of_two());
+        assert!(size > 0);
         let entries = BitVec::repeat(false, size).into_boxed_bitslice();
         Self {
             saved: entries.clone(),
@@ -92,6 +93,7 @@ impl HashBitset {
         mut ctx: InstrCtx,
         pass: &P,
     ) {
+        assert!(std::ptr::eq(self as *const _, pass.coverage() as *const _));
         let data = get_hash_var(pass, &mut ctx);
         let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
         let hash_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
@@ -140,7 +142,7 @@ impl HashBitset {
         let contrib = hash_to_u64(contrib) as u32 as i64;
         let contrib = ctx.bcx.ins().iconst(ir::types::I32, contrib);
 
-        let new_cov_ptr = pass.coverage().new_coverage.as_ref() as *const _;
+        let new_cov_ptr = self.new_coverage.as_ref() as *const _;
         let new_cov_ptr = ctx.state.host_ptr(ctx.bcx, new_cov_ptr as *const _);
         let bitslice_ptr = ctx
             .state

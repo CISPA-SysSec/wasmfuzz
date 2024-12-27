@@ -31,7 +31,8 @@ pub(crate) struct CliOpts {
     pub timeout: Option<Duration>,
     #[clap(long)]
     pub cores: Option<usize>,
-    // Delay thread startup in multi-core setting. Can help with peak memory usage / tames the thundering herd.
+    // Delay thread startup in multi-core setting.
+    // Can help with peak memory usage and tames the thundering herd.
     #[clap(long, default_value = "100ms")]
     pub stagger_cores: Duration,
 
@@ -685,12 +686,26 @@ pub(crate) struct Config {
     pub timeout: std::time::Duration,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct OrcPassesGen {
     pub swarm: SwarmConfig,
     pub opts: FeedbackOptions,
     pub spec: Arc<ModuleSpec>,
     pub covered_functions: Option<HashSet<FuncIdx>>,
+}
+
+impl std::fmt::Debug for OrcPassesGen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrcPassesGen")
+            .field("swarm", &"...")
+            .field("opts", &self.opts)
+            .field("spec", &self.spec)
+            .field(
+                "covered_functions",
+                &self.covered_functions.as_ref().map(|x| x.len()),
+            )
+            .finish()
+    }
 }
 
 impl PassesGen for OrcPassesGen {
