@@ -31,8 +31,17 @@ pub(crate) const MEMORY_PAGES_LIMIT: u32 = 1024 * 16; // ~1GB, make configurable
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum AbortCode {
+    // Explicit `unreachable`
     UnreachableReached,
+    // Wasm-related traps
+    TableOutOfBounds,
     Unimplemented,
+    // Cranelift traps
+    StackOverflow,
+    HeapOutOfBounds,
+    IntegerOverflow,
+    IntegerDivisionByZero,
+    BadConversionToInteger,
 }
 
 fn main() {

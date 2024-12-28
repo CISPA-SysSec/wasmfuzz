@@ -108,7 +108,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             heap: None,
             options,
             passes: Some(passes),
-            trapcodes: Vec::new(),
+            trapcodes: vec![],
             caller: None,
             slot: HashMap::default(),
             sigrefs: HashMap::default(),
@@ -780,7 +780,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 self.trapcodes.push(kind);
                 self.trapcodes.len() - 1
             });
-        TrapCode::User(idx.try_into().unwrap())
+        TrapCode::user((idx + 1).try_into().unwrap()).unwrap()
     }
 
     pub(crate) fn trap_abort(&mut self, abort: AbortCode) -> TrapCode {

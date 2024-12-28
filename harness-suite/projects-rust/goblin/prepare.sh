@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/m4b/goblin.git "$PROJECT/repo" 617775898fdfd0b843b2e937c80e455cf6f2a637
+git clone-rev.sh https://github.com/m4b/goblin.git "$PROJECT/repo" 48da3d867b47173b19072b30bd3ef21e7d0215ba

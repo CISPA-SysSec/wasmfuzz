@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/silnrsi/graphite "$PROJECT/repo" 6f4e6a755fd35d51429b70d08eb673a24d209dd6
+git clone-rev.sh https://github.com/silnrsi/graphite "$PROJECT/repo" 6768ea92b89ed2505a3624208c42ce05e417496c

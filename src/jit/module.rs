@@ -17,25 +17,21 @@ use super::{instance::ModuleInstance, util::wasm2tys, vmcontext::VMContext, Comp
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TrapKind {
-    #[allow(unused)]
-    Coverage {
-        location: Location,
-        pass: String,
-    },
+    Coverage { location: Location, pass: String },
     Abort(AbortCode),
-    Cranelift(ir::TrapCode),
     SwarmShortCircuit(Location),
-    OutOfFuel(Location),
+    OutOfFuel(Option<Location>),
+    MemoryOutOfBounds,
     ExitTestcase(Location),
 }
+
 impl TrapKind {
     pub(crate) fn loc(&self) -> Option<Location> {
         match self {
-            Self::Abort(_) | Self::Cranelift(_) => None,
-            Self::SwarmShortCircuit(loc) | Self::OutOfFuel(loc) | Self::ExitTestcase(loc) => {
-                Some(*loc)
-            }
+            Self::MemoryOutOfBounds | Self::Abort(_) => None,
+            Self::SwarmShortCircuit(loc) | Self::ExitTestcase(loc) => Some(*loc),
             Self::Coverage { location, .. } => Some(*location),
+            Self::OutOfFuel(loc) => *loc,
         }
     }
 
@@ -44,7 +40,7 @@ impl TrapKind {
         let name = match self {
             Self::Abort(AbortCode::UnreachableReached) => "abort-unreachable".red(),
             Self::Abort(_) => "abort/unk".red(),
-            Self::Cranelift(_) => "cranelift".red(),
+            Self::MemoryOutOfBounds => "abort/mem-oob".red(),
             Self::SwarmShortCircuit(_) => "swarm-short-circuit".green(),
             Self::OutOfFuel(_) => "out-of-fuel".cyan(),
             Self::ExitTestcase(_) => "exit-testcase".cyan(),
@@ -69,7 +65,7 @@ impl TrapKind {
     }
 
     pub(crate) fn is_crash(&self) -> bool {
-        matches!(self, Self::Abort(_) | Self::Cranelift(_))
+        matches!(self, Self::Abort(_))
     }
 
     pub(crate) fn is_coverage_trap(&self) -> bool {
@@ -273,9 +269,18 @@ impl<'s> ModuleTranslator<'s> {
             let func_ptr = self.module.get_finalized_function(func_id) as usize;
             for trap in traps {
                 let ptr = func_ptr + trap.offset as usize;
+                use TrapCode as TC;
+                use TrapKind as TK;
                 let trap = match trap.code {
-                    TrapCode::User(user) => trapcodes[user as usize].clone(),
-                    _ => TrapKind::Cranelift(trap.code),
+                    TC::STACK_OVERFLOW => TK::Abort(AbortCode::StackOverflow),
+                    TC::HEAP_OUT_OF_BOUNDS => TK::Abort(AbortCode::HeapOutOfBounds),
+                    TC::INTEGER_OVERFLOW => TK::Abort(AbortCode::IntegerOverflow),
+                    TC::INTEGER_DIVISION_BY_ZERO => TK::Abort(AbortCode::IntegerDivisionByZero),
+                    TC::BAD_CONVERSION_TO_INTEGER => TK::Abort(AbortCode::BadConversionToInteger),
+                    _ => {
+                        assert!(!TC::non_user_traps().contains(&trap.code));
+                        trapcodes[trap.code.as_raw().get() as usize - 1].clone()
+                    }
                 };
                 trap_pc_registry.insert(ptr, trap);
             }

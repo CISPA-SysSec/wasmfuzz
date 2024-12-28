@@ -1,7 +1,7 @@
-use crate::{ir::Location, HashMap};
+use crate::{jit::signals::TrapReason, HashMap};
 
+use super::signals::catch_traps;
 use cranelift::jit::JITModule;
-use wasmtime::vm::{catch_traps, TrapReason};
 
 use super::{module::TrapKind, vmcontext::VMContext, CompilationOptions};
 
@@ -24,9 +24,6 @@ impl ModuleInstance {
         code_size: usize,
         options: CompilationOptions,
     ) -> Self {
-        // NB: The trap we're returning in get_wasm_trap here is arbitrary.
-        // We're resolving traps separately based on trap pc address.
-        wasmtime::vm::init_traps(|_| Some(wasmtime::Trap::AlwaysTrapAdapter), true); // (crate::module::GlobalModuleRegistry::is_wasm_pc);
         Self {
             vmctx,
             module,
@@ -49,46 +46,33 @@ impl ModuleInstance {
         tracyrs::zone!("ModuleInstance::enter");
         assert!(!self.vmctx.tainted);
         self.vmctx.fuel = self.vmctx.fuel_init;
-        let mut res = None;
-        let res_ref = &mut res;
         let vmctx_ptr = (&mut *self.vmctx) as *mut VMContext;
-        let signal_handler = None;
-        let callee = std::ptr::null_mut(); // We're not using wasmtime's VMContexts
-        let runtime_res = unsafe {
-            // Safety: closure shouldn't and doesn't capture any Drops
-            //         vmctx_ptr needs to be valid and ABI should match
-            catch_traps(signal_handler, false, false, callee, |_| {
-                *res_ref = Some(f(vmctx_ptr));
-            })
-        };
-        match runtime_res {
-            Ok(()) => Ok(res.unwrap()),
-            Err(trap) => match trap.reason {
-                TrapReason::Jit {
-                    pc,
-                    faulting_addr,
-                    trap: _,
-                } => {
-                    let Some(trap) = self.trap_pc_registry.get(&pc) else {
-                        let pos = self.vmctx.input_ptr as usize;
-                        let len = self.vmctx.input_size;
-                        let buf = &self.vmctx.heap()[pos..pos + len];
-                        std::fs::write("/tmp/input.bin", buf).unwrap();
-                        panic!("trapped at unknown pc {pc:#x} faulting_addr={faulting_addr:?}")
-                    };
-                    self.vmctx.tainted = true;
-                    Err(trap.clone())
-                }
-                TrapReason::Wasm(wasmtime::Trap::OutOfFuel) => {
-                    self.vmctx.tainted = true;
-                    Err(TrapKind::OutOfFuel(Location {
-                        function: 0,
-                        index: 0,
-                    }))
-                }
-                _ => panic!("unexpected trap: {trap:?}"),
-            },
-        }
+        // Safety: closure shouldn't and doesn't capture any Drops
+        //         vmctx_ptr needs to be valid and ABI should match
+        let res = unsafe { catch_traps(|| f(vmctx_ptr)) };
+        res.map_err(|info| match info.reason {
+            Some(TrapReason::MemoryOutOfBounds) => {
+                self.vmctx.tainted = true;
+                TrapKind::MemoryOutOfBounds
+            }
+            Some(TrapReason::OutOfFuel) => {
+                self.vmctx.tainted = true;
+                TrapKind::OutOfFuel(None)
+            }
+            None => {
+                let pc = info.pc;
+                let faulting_addr = info.faulting_addr;
+                let Some(trap) = self.trap_pc_registry.get(&pc) else {
+                    let pos = self.vmctx.input_ptr as usize;
+                    let len = self.vmctx.input_size;
+                    let buf = &self.vmctx.heap()[pos..pos + len];
+                    std::fs::write("/tmp/input.bin", buf).unwrap();
+                    panic!("trapped at unknown pc {pc:#x} faulting_addr={faulting_addr:?}")
+                };
+                self.vmctx.tainted = true;
+                trap.clone()
+            }
+        })
     }
 
     // TODO(perf): mutate directly in the instance's memory to avoid write_input call?

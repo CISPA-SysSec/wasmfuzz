@@ -1,7 +1,8 @@
 use codegen::ir;
 use cranelift::codegen::isa::CallConv;
 use cranelift::prelude::*;
-use wasmtime::vm::{raise_trap, TrapReason};
+
+use super::signals::{raise_trap, TrapReason};
 
 use super::{vmcontext::VMContext, FuncTranslator};
 
@@ -16,11 +17,10 @@ pub(crate) unsafe extern "C" fn builtin_memory_grow(delta: u32, vmctx: *mut VMCo
             "builtin_memory_grow({}) exceeds hard limit. current_size={}",
             delta, vmctx.heap_pages
         );
-        // raise_trap(TrapReason::Wasm(wasmtime::Trap::StackOverflow));
         return u32::MAX;
     }
     if vmctx.heap_pages.saturating_add(delta) > vmctx.heap_pages_limit_soft {
-        raise_trap(TrapReason::Wasm(wasmtime::Trap::OutOfFuel));
+        raise_trap(TrapReason::OutOfFuel);
     }
     vmctx.builtin_consume_fuel(delta as u64);
     let old = vmctx.heap_pages;
@@ -45,7 +45,7 @@ pub(crate) unsafe extern "C" fn builtin_memory_fill(
         .heap()
         .get_mut(dest as usize..dest as usize + len as usize)
     else {
-        raise_trap(TrapReason::Wasm(wasmtime::Trap::MemoryOutOfBounds));
+        raise_trap(TrapReason::MemoryOutOfBounds)
     };
 
     buf.fill(val as u8);
@@ -67,7 +67,7 @@ pub(crate) unsafe extern "C" fn builtin_memory_copy(
         heap.get(dst_pos..dst_pos + len),
         heap.get(src_pos..src_pos + len),
     ) else {
-        raise_trap(TrapReason::Wasm(wasmtime::Trap::MemoryOutOfBounds));
+        raise_trap(TrapReason::MemoryOutOfBounds)
     };
 
     heap.copy_within(src_pos..(src_pos + len), dst_pos);
@@ -82,7 +82,7 @@ pub(crate) unsafe extern "C" fn builtin_random_get(dest: u32, len: u32, vmctx: *
         .heap()
         .get_mut(dest as usize..dest as usize + len as usize)
     else {
-        raise_trap(TrapReason::Wasm(wasmtime::Trap::MemoryOutOfBounds));
+        raise_trap(TrapReason::MemoryOutOfBounds)
     };
     use libafl_bolts::rands::XorShift64Rand;
     use rand::RngCore;

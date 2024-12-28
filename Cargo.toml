@@ -7,14 +7,14 @@ edition = "2021"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.220"
-wasm-encoder = "0.220"
+wasmparser = "0.221"
+wasm-encoder = "0.221"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive"] }
 md5 = "0.7"
 rand = "0.8"
 bitvec = "1.0.1"
-target-lexicon = "0.12"
+target-lexicon = "0.13"
 speedy = "0.8"
 colored = "2.1"
 anyhow = "1.0"
@@ -44,15 +44,14 @@ libafl = { version = "0.14.1", default-features = false, features = [
     "rand_trait",
 ] }
 libafl_bolts = "0.14.1"
-wasmtime = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "wasmfuzz-fuzzing24-prelim", default-features = false, features = [
-    "runtime",
-] }
-cranelift = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "wasmfuzz-fuzzing24-prelim", features = [
+# cranelift is ~0.114
+cranelift = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "cranelift-jit-reserve-vmem-area", features = [
     "jit",
     "module",
     "native",
     "frontend",
 ] }
+libc = "0.2.158"
 
 # feat:concolic
 z3 = { version = "0.12.1", optional = true }
