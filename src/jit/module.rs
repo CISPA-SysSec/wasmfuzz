@@ -199,7 +199,7 @@ impl<'s> ModuleTranslator<'s> {
     }
 
     pub(crate) fn compile_to_instance(mut self, passes: &mut Passes) -> ModuleInstance {
-        tracyrs::zone!("ModTrans::compile_to_instance");
+        tracy_full::zone!("ModTrans::compile_to_instance");
         let spec = self.spec;
         let options = self.options.clone();
         let mut pass_meta = HashMap::default();
@@ -317,7 +317,7 @@ impl<'s> ModuleTranslator<'s> {
         func_sigs: &HashMap<u32, Signature>,
         pass_meta: &mut HashMap<u64, Box<dyn Any>>,
     ) -> FunctionArtifacts {
-        tracyrs::zone!("ModTrans::emit_function");
+        tracy_full::zone!("ModTrans::emit_function");
         let func_id = func_ids[&func.idx];
 
         ctx.func.signature = func_sigs[&func.idx].clone();

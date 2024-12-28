@@ -32,7 +32,7 @@ impl<K: Ord + Clone> CoverageBitset<K> {
     }
 
     pub fn update_and_scan(&mut self) -> bool {
-        tracyrs::zone!("CoverageBitset::update_and_scan");
+        tracy_full::zone!("CoverageBitset::update_and_scan");
         super::union_bitboxes(&mut self.saved, &self.entries)
     }
 

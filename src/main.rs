@@ -23,6 +23,10 @@ mod with_mimalloc {
     static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 }
 
+#[cfg(feature = "tracy")]
+#[global_allocator]
+static ALLOC: tracy_full::alloc::GlobalAllocator = tracy_full::alloc::GlobalAllocator::new();
+
 // Note: This is a hard limit, the CLI has its own default.
 pub(crate) const TEST_CASE_SIZE_LIMIT: usize = u16::MAX as usize; // 64kb
 

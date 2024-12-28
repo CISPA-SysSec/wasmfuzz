@@ -1096,7 +1096,7 @@ impl JitFuzzingSession {
     }
 
     fn scan_passes_for_coverage(&mut self) -> Vec<&'static str> {
-        tracyrs::zone!("JitFuzzingSession::scan_passes_for_coverage");
+        tracy_full::zone!("JitFuzzingSession::scan_passes_for_coverage");
         let mut res = Vec::new();
         for pass in self.passes.iter_mut() {
             if pass.update_and_scan_coverage() {
@@ -1107,14 +1107,14 @@ impl JitFuzzingSession {
     }
 
     pub(crate) fn reset_pass_coverage(&mut self) {
-        tracyrs::zone!("JitFuzzingSession::reset_pass_coverage");
+        tracy_full::zone!("JitFuzzingSession::reset_pass_coverage");
         for pass in self.passes.iter_mut() {
             pass.reset_coverage();
         }
     }
 
     pub(crate) fn reset_pass_coverage_keep_saved(&mut self) {
-        tracyrs::zone!("JitFuzzingSession::reset_pass_coverage_keep_saved");
+        tracy_full::zone!("JitFuzzingSession::reset_pass_coverage_keep_saved");
         for pass in self.passes.iter_mut() {
             pass.reset_coverage_keep_saved();
         }

@@ -122,7 +122,7 @@ pub struct CowResetMapping {
 
 impl CowResetMapping {
     pub fn new(accessible_size: usize, mapping_size: usize) -> Self {
-        tracyrs::zone!("CowResetMapping::new");
+        tracy_full::zone!("CowResetMapping::new");
         let page_size = rustix::param::page_size();
         assert!(accessible_size <= mapping_size);
         assert_eq!(mapping_size & (page_size - 1), 0);
@@ -171,7 +171,7 @@ impl CowResetMapping {
 
 impl Drop for CowResetMapping {
     fn drop(&mut self) {
-        tracyrs::zone!("CowResetMapping::drop");
+        tracy_full::zone!("CowResetMapping::drop");
         unsafe {
             rustix::mm::munmap(self.ptr, self.mapping_size).expect("failed to deallocate mapping")
         };
@@ -204,7 +204,7 @@ impl ResettableMapping for CowResetMapping {
     }
 
     fn snapshot(&mut self) {
-        tracyrs::zone!("CowResetMapping::snapshot");
+        tracy_full::zone!("CowResetMapping::snapshot");
         // NOTE: this is incredibly perfn't, but there doesn't seem to be an API to commit dirty pages only?
         // might need to use a second non-private mapping for the (persistent) writes?
         let slice: &[u8] =
@@ -216,10 +216,10 @@ impl ResettableMapping for CowResetMapping {
     fn restore(&mut self) {
         // prefer straight memcpy for small-ish restores
         if self.accessible_size <= 128 << 10 {
-            tracyrs::zone!("CowResetMapping::restore memcpy");
+            tracy_full::zone!("CowResetMapping::restore memcpy");
             unsafe { self.ptr.copy_from(self.ref_ptr, self.accessible_size) };
         } else {
-            tracyrs::zone!("CowResetMapping::restore madvise");
+            tracy_full::zone!("CowResetMapping::restore madvise");
             unsafe {
                 rustix::mm::madvise(
                     self.ptr,
@@ -232,7 +232,7 @@ impl ResettableMapping for CowResetMapping {
     }
 
     fn resize(&mut self, accessible_size: usize) {
-        tracyrs::zone!("CowResetMapping::resize");
+        tracy_full::zone!("CowResetMapping::resize");
         // eprintln!("CowResetMapping::resize {} -> {} pages", self.accessible_size / 4096, accessible_size / 4096);
         assert!(accessible_size <= self.mapping_size);
         // Commit the accessible size.

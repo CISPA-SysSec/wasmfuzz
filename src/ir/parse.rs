@@ -336,7 +336,7 @@ impl ModuleSpec {
     }
 
     pub(crate) fn parse(filename: &str, module_binary: &[u8]) -> Result<Self, BinaryReaderError> {
-        tracyrs::zone!("ModuleSpec::parse");
+        tracy_full::zone!("ModuleSpec::parse");
         let func_names = Self::parse_func_names(module_binary)?;
 
         let mut func_tyidxs = Self::parse_import_tyidxs(module_binary)?;

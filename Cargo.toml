@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = []
 license = "Apache-2.0 OR MIT"
 edition = "2021"
+rust-version = "1.83"
 
 [dependencies]
 wat = "1.0"
@@ -70,7 +71,11 @@ zstd = { version = "0.13.1", optional = true }
 
 
 # enable via feat:tracy
-tracyrs = { git = "https://github.com/Mrmaxmeier/tracyrs.git", default-features = false }
+tracy_full = "1.10.0"
+# tracy_full = { path = "../_others/tracy_full", default-features = false, features = [
+# 	"system-tracing", "context-switch-tracing", "sampling", "code-transfer",
+#         "broadcast", "callstack-inlines", # "crash-handler" 
+# ] }
 
 
 [features]
@@ -82,7 +87,7 @@ concolic = []
 concolic_bitwuzla = ["bitwuzla", "concolic"]
 concolic_z3 = ["z3", "concolic"]
 concolic_debug_verify = []
-tracy = ["tracyrs/tracy_enable"]
+tracy = ["tracy_full/enable"]
 full = [
     "reports",
     "compressed_harnesses",

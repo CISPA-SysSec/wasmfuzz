@@ -295,7 +295,7 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
     }
 
     pub fn update_and_scan(&mut self) -> bool {
-        tracyrs::zone!("AssociatedCoverageArray::update_and_scan");
+        tracy_full::zone!("AssociatedCoverageArray::update_and_scan");
         self.entries
             .iter()
             .zip(self.saved.iter_mut())

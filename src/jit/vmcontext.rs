@@ -108,7 +108,7 @@ impl VMContext {
     }
 
     pub(crate) fn snapshot(&mut self) {
-        tracyrs::zone!("VMContext::snapshot");
+        tracy_full::zone!("VMContext::snapshot");
         assert!(!self.tainted);
         self.globals_snapshot.copy_from_slice(&self.globals);
         self.heap_pages_snapshot = self.heap_pages;
@@ -117,7 +117,7 @@ impl VMContext {
     }
 
     pub(crate) fn restore(&mut self) {
-        tracyrs::zone!("VMContext::restore");
+        tracy_full::zone!("VMContext::restore");
         self.globals.copy_from_slice(&self.globals_snapshot);
         self.heap_pages = self.heap_pages_snapshot;
         self.heap_alloc.restore();
@@ -130,7 +130,7 @@ impl VMContext {
     }
 
     pub(crate) fn reset(&mut self, from: &ModuleSpec) {
-        tracyrs::zone!("VMContext::reset");
+        tracy_full::zone!("VMContext::reset");
         self.input_ptr = 0;
         self.input_size = 0;
         self.heap_pages = from.initial_mem_pages as u32;
