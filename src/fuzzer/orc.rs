@@ -31,7 +31,8 @@ pub(crate) struct CliOpts {
     pub timeout: Option<Duration>,
     #[clap(long)]
     pub cores: Option<usize>,
-    // Delay thread startup in multi-core setting. Can help with peak memory usage / tames the thundering herd.
+    // Delay thread startup in multi-core setting.
+    // Can help with peak memory usage and tames the thundering herd.
     #[clap(long, default_value = "100ms")]
     pub stagger_cores: Duration,
 
@@ -414,6 +415,7 @@ impl Orchestrator {
                     opts,
                     spec: self.module.clone(),
                     swarm: swarm.clone(),
+                    covered_functions: None,
                 },
                 swarm,
                 timeout,
@@ -589,6 +591,10 @@ impl Orchestrator {
                 opts,
                 spec: self.module.clone(),
                 swarm: swarm.clone(),
+                covered_functions: self.coverage_is_saturated().then(|| {
+                    let pass = self.codecov_sess.get_pass::<FunctionCoveragePass>();
+                    pass.coverage.iter_covered_keys().collect()
+                }),
             },
             swarm,
             timeout,
@@ -600,10 +606,9 @@ impl Orchestrator {
         if now.duration_since(self.start).as_secs_f32() < 5.0 {
             false
         } else {
-            dbg!(now
-                .duration_since(self.start)
-                .min(std::time::Duration::from_secs(30)))
-                < dbg!(now.duration_since(self.last_func_find)).mul_f32(2.)
+            now.duration_since(self.start)
+                .min(std::time::Duration::from_secs(30))
+                < now.duration_since(self.last_func_find).mul_f32(2.)
         }
     }
 
@@ -681,11 +686,26 @@ pub(crate) struct Config {
     pub timeout: std::time::Duration,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct OrcPassesGen {
     pub swarm: SwarmConfig,
     pub opts: FeedbackOptions,
     pub spec: Arc<ModuleSpec>,
+    pub covered_functions: Option<HashSet<FuncIdx>>,
+}
+
+impl std::fmt::Debug for OrcPassesGen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrcPassesGen")
+            .field("swarm", &"...")
+            .field("opts", &self.opts)
+            .field("spec", &self.spec)
+            .field(
+                "covered_functions",
+                &self.covered_functions.as_ref().map(|x| x.len()),
+            )
+            .finish()
+    }
 }
 
 impl PassesGen for OrcPassesGen {
@@ -726,9 +746,17 @@ impl PassesGen for OrcPassesGen {
             };
         }
 
-        add_pass!(live_funcs, FunctionCoveragePass::new(&self.spec));
-        add_pass!(live_bbs, BBCoveragePass::new(&self.spec));
-        add_pass!(live_edges, EdgeCoveragePass::new(&self.spec));
+        // We don't really need to add coverage instrumentation to functions
+        // that have not been covered yet if it looks like coverage has settled.
+        // This reduces compilation time (~ -30%) and improve performance (~ -25%) by reducing bitmap sizes.
+        let key_filter = |loc: &Location| match &self.covered_functions {
+            Some(x) => x.contains(&FuncIdx(loc.function)),
+            None => true,
+        };
+
+        add_pass!(live_funcs, FunctionCoveragePass::new(&self.spec, |_| true));
+        add_pass!(live_bbs, BBCoveragePass::new(&self.spec, key_filter));
+        add_pass!(live_edges, EdgeCoveragePass::new(&self.spec, key_filter));
 
         macro_rules! add_pass {
             ($cond:expr, $pass:expr) => {
@@ -740,55 +768,85 @@ impl PassesGen for OrcPassesGen {
 
         add_pass!(
             cmpcov_hamming,
-            CmpCoveragePass::new(CmpCovKind::Hamming, &self.spec)
+            CmpCoveragePass::new(CmpCovKind::Hamming, &self.spec, key_filter)
         );
         add_pass!(
             cmpcov_absdist,
-            CmpCoveragePass::new(CmpCovKind::AbsDist, &self.spec)
+            CmpCoveragePass::new(CmpCovKind::AbsDist, &self.spec, key_filter)
         );
 
         add_pass!(
             func_input_size,
-            InputSizePass::new(InputComplexityMetric::Size, &self.spec)
+            InputSizePass::new(InputComplexityMetric::Size, &self.spec, key_filter)
         );
         add_pass!(
             func_input_size_cyclic,
-            InputSizePass::new(InputComplexityMetric::ByteDiversity, &self.spec)
+            InputSizePass::new(InputComplexityMetric::ByteDiversity, &self.spec, key_filter)
         );
         add_pass!(
             func_input_size_color,
-            InputSizePass::new(InputComplexityMetric::DeBruijn, &self.spec)
+            InputSizePass::new(InputComplexityMetric::DeBruijn, &self.spec, key_filter)
         );
 
-        add_pass!(perffuzz_func, PerffuzzFunctionPass::new(&self.spec));
-        add_pass!(perffuzz_func, FunctionRecursionDepthPass::new(&self.spec));
-        add_pass!(perffuzz_bb, PerffuzzBBPass::new(&self.spec));
-        add_pass!(perffuzz_edge, EdgeHitsInAFunctionPass::new(&self.spec));
-        add_pass!(perffuzz_edge_global, PerffuzzEdgePass::new(&self.spec));
+        add_pass!(
+            perffuzz_func,
+            PerffuzzFunctionPass::new(&self.spec, key_filter)
+        );
+        add_pass!(
+            perffuzz_func,
+            FunctionRecursionDepthPass::new(&self.spec, key_filter)
+        );
+        add_pass!(perffuzz_bb, PerffuzzBBPass::new(&self.spec, key_filter));
+        add_pass!(
+            perffuzz_edge,
+            EdgeHitsInAFunctionPass::new(&self.spec, key_filter)
+        );
+        add_pass!(
+            perffuzz_edge_global,
+            PerffuzzEdgePass::new(&self.spec, key_filter)
+        );
 
-        add_pass!(memory_op_value, MemoryLoadValRangePass::new(&self.spec));
-        add_pass!(memory_op_value, MemoryStoreValRangePass::new(&self.spec));
-        add_pass!(memory_op_address, MemoryOpAddressRangePass::new(&self.spec));
+        add_pass!(
+            memory_op_value,
+            MemoryLoadValRangePass::new(&self.spec, key_filter)
+        );
+        add_pass!(
+            memory_op_value,
+            MemoryStoreValRangePass::new(&self.spec, key_filter)
+        );
+        add_pass!(
+            memory_op_address,
+            MemoryOpAddressRangePass::new(&self.spec, key_filter)
+        );
         add_pass!(
             memory_store_prev_value,
-            MemoryStorePrevValRangePass::new(&self.spec)
+            MemoryStorePrevValRangePass::new(&self.spec, key_filter)
         );
 
-        add_pass!(call_value_profile, CallParamsRangePass::new(&self.spec));
-        add_pass!(call_value_profile, CallParamsSetPass::new(&self.spec));
-        add_pass!(call_value_profile, GlobalsRangePass::new(&self.spec));
+        add_pass!(
+            call_value_profile,
+            CallParamsRangePass::new(&self.spec, key_filter)
+        );
+        add_pass!(
+            call_value_profile,
+            CallParamsSetPass::new(&self.spec, key_filter)
+        );
+        add_pass!(
+            call_value_profile,
+            GlobalsRangePass::new(&self.spec, key_filter)
+        );
 
         add_pass!(
             func_shortest_trace,
-            FunctionShortestExecutionTracePass::new(&self.spec)
+            FunctionShortestExecutionTracePass::new(&self.spec, key_filter)
         );
         add_pass!(
             edge_shortest_trace,
-            EdgeShortestExecutionTracePass::new(&self.spec)
+            EdgeShortestExecutionTracePass::new(&self.spec, key_filter)
         );
         add_pass!(
             func_longest_trace,
-            FunctionLongestExecutionTracePass::new(&self.spec)
+            FunctionLongestExecutionTracePass::new(&self.spec, key_filter)
         );
 
         macro_rules! add_pass {
@@ -799,8 +857,14 @@ impl PassesGen for OrcPassesGen {
             };
         }
 
-        add_pass!(path_hash_func, FuncPathHashPass::new(&self.spec));
-        add_pass!(path_hash_edge, EdgePathHashPass::new(&self.spec));
+        add_pass!(
+            path_hash_func,
+            FuncPathHashPass::new(&self.spec, key_filter)
+        );
+        add_pass!(
+            path_hash_edge,
+            EdgePathHashPass::new(&self.spec, key_filter)
+        );
 
         if !self.swarm.avoid_functions.is_empty()
             || !self.swarm.avoid_edges.is_empty()

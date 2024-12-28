@@ -24,9 +24,13 @@ pub(crate) struct CallParamsRangePass {
 }
 
 impl CallParamsRangePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(x.clone())))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -34,18 +38,7 @@ impl CallParamsRangePass {
 impl KVInstrumentationPass for CallParamsRangePass {
     type Key = CallArgument;
     type Value = ValueRange;
-
-    fn shortcode(&self) -> &'static str {
-        "call-params-range"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("call-params-range");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         use crate::ir::{ControlInstruction, WFOperator};
@@ -137,9 +130,13 @@ pub(crate) struct CallParamsSetPass {
 }
 
 impl CallParamsSetPass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(x.clone())))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -147,18 +144,7 @@ impl CallParamsSetPass {
 impl KVInstrumentationPass for CallParamsSetPass {
     type Key = CallArgument;
     type Value = ValueSet<8>;
-
-    fn shortcode(&self) -> &'static str {
-        "call-params-set"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("call-params-set");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         CallParamsRangePass::generate_keys(spec)
@@ -210,9 +196,13 @@ pub(crate) struct GlobalsRangePass {
 }
 
 impl GlobalsRangePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -220,18 +210,7 @@ impl GlobalsRangePass {
 impl KVInstrumentationPass for GlobalsRangePass {
     type Key = Location;
     type Value = ValueRange;
-
-    fn shortcode(&self) -> &'static str {
-        "globals-range"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!("globals-range");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         use crate::ir::{VariableInstruction, WFOperator};

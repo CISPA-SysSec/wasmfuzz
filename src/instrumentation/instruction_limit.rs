@@ -3,6 +3,7 @@ use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
 
+use super::Location;
 use super::{
     feedback_lattice::{Maximize, Minimize},
     AssociatedCoverageArray, Edge, FeedbackLattice, FeedbackLatticeCodegen, FuncIdx, InstrCtx,
@@ -80,9 +81,13 @@ pub(crate) struct FunctionShortestExecutionTracePass {
 }
 
 impl FunctionShortestExecutionTracePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -90,20 +95,7 @@ impl FunctionShortestExecutionTracePass {
 impl KVInstrumentationPass for FunctionShortestExecutionTracePass {
     type Key = FuncIdx;
     type Value = Minimize<u64>;
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
-
-    fn shortcode(&self) -> &'static str {
-        "func-shortest-trace"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
+    super::traits::impl_kv_instrumentation_pass!("func-shortest-trace");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_funcs(spec)
@@ -123,9 +115,13 @@ pub(crate) struct FunctionLongestExecutionTracePass {
 }
 
 impl FunctionLongestExecutionTracePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -133,20 +129,7 @@ impl FunctionLongestExecutionTracePass {
 impl KVInstrumentationPass for FunctionLongestExecutionTracePass {
     type Key = FuncIdx;
     type Value = Maximize<u64>;
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
-
-    fn shortcode(&self) -> &'static str {
-        "func-longest-trace"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
+    super::traits::impl_kv_instrumentation_pass!("func-longest-trace");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_funcs(spec)
@@ -170,9 +153,13 @@ pub(crate) struct EdgeShortestExecutionTracePass {
 }
 
 impl EdgeShortestExecutionTracePass {
-    pub(crate) fn new(spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -180,20 +167,7 @@ impl EdgeShortestExecutionTracePass {
 impl KVInstrumentationPass for EdgeShortestExecutionTracePass {
     type Key = Edge;
     type Value = Minimize<u64>;
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        &self.coverage
-    }
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
-
-    fn shortcode(&self) -> &'static str {
-        "edge-shortest-trace"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
+    super::traits::impl_kv_instrumentation_pass!("edge-shortest-trace");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
         super::iter_edges(spec)

@@ -9,9 +9,9 @@ use crate::{
 use super::{CodeCovInstrumentationPass, Edge, FuncIdx, InstrCtx};
 
 pub(crate) struct CoverageBitset<K: Ord + Clone> {
-    keys: Box<[K]>,
-    entries: BitBox,
-    saved: BitBox,
+    pub keys: Box<[K]>,
+    pub entries: BitBox,
+    pub saved: BitBox,
 }
 impl<K: Ord + Clone> CoverageBitset<K> {
     pub fn new(keys: &[K]) -> Self {
@@ -33,20 +33,16 @@ impl<K: Ord + Clone> CoverageBitset<K> {
 
     pub fn update_and_scan(&mut self) -> bool {
         tracyrs::zone!("CoverageBitset::update_and_scan");
-        let is_update = self
-            .entries
-            .domain()
-            .zip(self.saved.domain())
-            .any(|(e, s)| (e & !s) != 0);
-        if is_update {
-            self.saved |= &self.entries;
-        }
-        is_update
+        super::union_bitboxes(&mut self.saved, &self.entries)
     }
 
     pub fn reset(&mut self) {
         self.entries.fill(false);
         self.saved.fill(false);
+    }
+
+    pub fn reset_keep_saved(&mut self) {
+        self.entries.fill(false);
     }
 
     fn instrument<P: CodeCovInstrumentationPass>(&self, key: &K, ctx: InstrCtx, _pass: &P) {
@@ -100,9 +96,18 @@ pub(crate) struct EdgeCoveragePass {
 
 impl CodeCovInstrumentationPass for EdgeCoveragePass {
     type Key = Edge;
-    fn new(spec: &ModuleSpec) -> Self {
+    fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: CoverageBitset::new(&super::iter_edges(spec).collect::<Vec<_>>()),
+            coverage: CoverageBitset::new(
+                &super::iter_edges(spec)
+                    .filter(|x| {
+                        key_filter(&Location {
+                            function: x.function,
+                            index: x.from.0,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 
@@ -133,9 +138,18 @@ pub(crate) struct FunctionCoveragePass {
 
 impl CodeCovInstrumentationPass for FunctionCoveragePass {
     type Key = FuncIdx;
-    fn new(spec: &ModuleSpec) -> Self {
+    fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: CoverageBitset::new(&super::iter_funcs(spec).collect::<Vec<_>>()),
+            coverage: CoverageBitset::new(
+                &super::iter_funcs(spec)
+                    .filter(|x| {
+                        key_filter(&Location {
+                            function: x.0,
+                            index: 0,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 
@@ -168,9 +182,11 @@ pub(crate) struct BBCoveragePass {
 impl CodeCovInstrumentationPass for BBCoveragePass {
     type Key = Location;
 
-    fn new(spec: &ModuleSpec) -> Self {
+    fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
         Self {
-            coverage: CoverageBitset::new(&super::iter_bbs(spec).collect::<Vec<_>>()),
+            coverage: CoverageBitset::new(
+                &super::iter_bbs(spec).filter(key_filter).collect::<Vec<_>>(),
+            ),
         }
     }
 

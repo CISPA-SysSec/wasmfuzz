@@ -5,8 +5,8 @@ use cranelift::codegen::ir::{self, Type, Value};
 use crate::ir::{Location, ModuleSpec};
 
 use super::{
-    code_coverage::CoverageBitset, path_hash::HashBitset, AssociatedCoverageArray, Edge,
-    ErasedInstrumentationPassHelper, FeedbackLattice, FuncIdx, InstrCtx,
+    code_coverage::CoverageBitset, path_hash::HashBitset, AssociatedCoverageArray, CovSnapshot,
+    Edge, ErasedInstrumentationPassHelper, FeedbackLattice, FuncIdx, InstrCtx,
 };
 
 macro_rules! _def {
@@ -52,18 +52,36 @@ macro_rules! instrumentation_hook_fn_defs {
     };
 }
 
+macro_rules! impl_kv_instrumentation_pass {
+    () => {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self as &dyn std::any::Any
+        }
+        fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
+            &self.coverage
+        }
+        fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
+            &mut self.coverage
+        }
+    };
+    ($shortcode:literal) => {
+        fn shortcode(&self) -> &'static str {
+            $shortcode
+        }
+        crate::instrumentation::traits::impl_kv_instrumentation_pass!();
+    };
+}
+pub(crate) use impl_kv_instrumentation_pass;
+
 pub(crate) trait KVInstrumentationPass {
     type Key: Into<Location> + Ord + Clone; // = Location
-    type Value: FeedbackLattice;
+    type Value: FeedbackLattice + 'static;
 
     /// Returns a short string (<12 chars) that describes this specific pass
     fn shortcode(&self) -> &'static str;
 
     fn as_any(&self) -> &dyn Any;
-
-    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
-        unimplemented!()
-    }
+    fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value>;
     fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value>;
 
     fn generate_keys(_modspec: &ModuleSpec) -> impl Iterator<Item = Self::Key>
@@ -79,6 +97,12 @@ pub(crate) trait KVInstrumentationPass {
     fn reset_coverage(&mut self) {
         self.coverage_mut().reset()
     }
+    fn reset_coverage_keep_saved(&mut self) {
+        self.coverage_mut().reset_keep_saved()
+    }
+    fn snapshot_coverage(&self) -> CovSnapshot {
+        self.coverage().snapshot()
+    }
 
     instrumentation_hook_fn_defs!(empty);
 }
@@ -88,7 +112,7 @@ pub(crate) trait CodeCovInstrumentationPass {
 
     instrumentation_hook_fn_defs!(empty);
 
-    fn new(spec: &ModuleSpec) -> Self
+    fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self
     where
         Self: Sized;
 
@@ -105,6 +129,12 @@ pub(crate) trait CodeCovInstrumentationPass {
     }
     fn reset_coverage(&mut self) {
         self.coverage_mut().reset()
+    }
+    fn reset_coverage_keep_saved(&mut self) {
+        self.coverage_mut().reset_keep_saved()
+    }
+    fn snapshot_coverage(&self) -> CovSnapshot {
+        CovSnapshot::BitBox(self.coverage().entries.clone())
     }
 
     fn as_any(&self) -> &dyn Any;
@@ -126,6 +156,12 @@ pub(crate) trait HashBitsetInstrumentationPass {
     fn reset_coverage(&mut self) {
         self.coverage_mut().reset()
     }
+    fn reset_coverage_keep_saved(&mut self) {
+        self.coverage_mut().reset_keep_saved()
+    }
+    fn snapshot_coverage(&self) -> CovSnapshot {
+        CovSnapshot::BitBox(self.coverage().entries.clone())
+    }
 
     fn as_any(&self) -> &dyn Any;
 }
@@ -135,6 +171,8 @@ pub trait ErasedInstrumentationPass {
 
     fn update_and_scan_coverage(&mut self) -> bool;
     fn reset_coverage(&mut self);
+    fn reset_coverage_keep_saved(&mut self);
+    fn snapshot_coverage(&self) -> CovSnapshot;
     fn shortcode(&self) -> &'static str;
     fn as_any(&self) -> &dyn Any;
 }
@@ -168,6 +206,8 @@ impl<K: Ord + Into<Location> + Clone + 'static, V: FeedbackLattice + 'static>
     instrumentation_hook_fn_defs!(dispatch);
     dispatch!(update_and_scan_coverage(&mut self) -> bool);
     dispatch!(reset_coverage(&mut self) -> ());
+    dispatch!(reset_coverage_keep_saved(&mut self) -> ());
+    dispatch!(snapshot_coverage(&self) -> CovSnapshot);
     dispatch!(shortcode(&self) -> &'static str);
     dispatch!(as_any(&self) -> &dyn Any);
 }

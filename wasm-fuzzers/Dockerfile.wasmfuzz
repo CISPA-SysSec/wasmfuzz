@@ -2,10 +2,12 @@
 # ubuntu:24.10 is rustc 1.80
 # ubuntu:25.04 is rustc 1.81
 # libafl needs 1.82 for `&raw const GLOBAL_MUT`
+
 FROM ubuntu:24.04 AS builder
 RUN apt-get update && apt-get install -y rustup git clang
 RUN rustup toolchain add 1.82 --no-self-update
-RUN git clone https://github.com/CISPA-SysSec/wasmfuzz && git -C wasmfuzz checkout ac17ec0ce7cfd7d5988cf6bb76418b3219def4fe
+ARG COMMIT="74d05874d2d85cc0921cda9c03dbe1de77df0ea3"
+RUN git clone https://github.com/CISPA-SysSec/wasmfuzz && git -C wasmfuzz checkout "$COMMIT"
 RUN cargo install --locked --no-default-features --path /wasmfuzz
 
 FROM ubuntu:24.04

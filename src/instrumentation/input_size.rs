@@ -3,6 +3,7 @@ use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
 
+use super::Location;
 use super::{
     feedback_lattice::Minimize, AssociatedCoverageArray, FuncIdx, InstrCtx, KVInstrumentationPass,
 };
@@ -21,10 +22,18 @@ pub(crate) struct InputSizePass {
 }
 
 impl InputSizePass {
-    pub(crate) fn new(metric: InputComplexityMetric, spec: &ModuleSpec) -> Self {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(
+        metric: InputComplexityMetric,
+        spec: &ModuleSpec,
+        key_filter: F,
+    ) -> Self {
         Self {
             metric,
-            coverage: AssociatedCoverageArray::new(&Self::generate_keys(spec).collect::<Vec<_>>()),
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -32,10 +41,7 @@ impl InputSizePass {
 impl KVInstrumentationPass for InputSizePass {
     type Key = FuncIdx;
     type Value = Minimize<u16>;
-
-    fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value> {
-        &mut self.coverage
-    }
+    super::traits::impl_kv_instrumentation_pass!();
 
     fn shortcode(&self) -> &'static str {
         match self.metric {
@@ -43,10 +49,6 @@ impl KVInstrumentationPass for InputSizePass {
             InputComplexityMetric::ByteDiversity => "input-size-diversity",
             InputComplexityMetric::DeBruijn => "input-size-debruijn",
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
     }
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {

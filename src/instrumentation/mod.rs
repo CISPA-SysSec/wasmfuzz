@@ -146,6 +146,94 @@ impl Passes {
     }
 }
 
+pub(crate) trait ErasedCovSnapshot {
+    fn clear(&mut self);
+    fn update_with(&mut self, other: &dyn ErasedCovSnapshot) -> bool;
+    fn as_any(&self) -> &dyn Any;
+}
+
+#[derive(libafl_bolts::SerdeAny)]
+pub(crate) enum CovSnapshot {
+    Noop,
+    BitBox(bitvec::boxed::BitBox),
+    Erased(Box<dyn ErasedCovSnapshot>),
+}
+
+impl std::fmt::Debug for CovSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Noop => write!(f, "Noop"),
+            Self::BitBox(arg0) => f.debug_tuple("BitBox").field(arg0).finish(),
+            Self::Erased(_) => f.debug_tuple("Erased").finish_non_exhaustive(),
+        }
+    }
+}
+
+impl serde::Serialize for CovSnapshot {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        unimplemented!()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for CovSnapshot {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        unimplemented!()
+    }
+}
+
+impl CovSnapshot {
+    pub fn clear(&mut self) {
+        match self {
+            CovSnapshot::Noop => {}
+            CovSnapshot::BitBox(v) => v.fill(false),
+            CovSnapshot::Erased(erased) => erased.clear(),
+        }
+    }
+
+    pub fn update_with(&mut self, other: &CovSnapshot) -> bool {
+        match (self, other) {
+            (CovSnapshot::Noop, CovSnapshot::Noop) => false,
+            (CovSnapshot::BitBox(s), CovSnapshot::BitBox(o)) => union_bitboxes(s, o),
+            (CovSnapshot::Erased(s), CovSnapshot::Erased(o)) => s.update_with(&**o),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, libafl_bolts::SerdeAny)]
+pub(crate) struct InstrumentationSnapshot {
+    snapshots: Vec<CovSnapshot>,
+}
+impl InstrumentationSnapshot {
+    pub(crate) fn from(passes: &Passes) -> Self {
+        InstrumentationSnapshot {
+            snapshots: passes.iter().map(|pass| pass.snapshot_coverage()).collect(),
+        }
+    }
+
+    pub(crate) fn empty_from(passes: &Passes) -> Self {
+        let mut res = Self::from(passes);
+        for el in &mut res.snapshots {
+            el.clear();
+        }
+        res
+    }
+
+    pub(crate) fn update_with(&mut self, cov_snapshot: &InstrumentationSnapshot) -> bool {
+        let mut res = false;
+        for (s, o) in self.snapshots.iter_mut().zip(cov_snapshot.snapshots.iter()) {
+            res |= s.update_with(o);
+        }
+        res
+    }
+}
+
 pub struct InstrCtx<'a, 'b, 'c, 'd, 'e> {
     pub bcx: &'a mut cranelift::prelude::FunctionBuilder<'e>,
     pub state: &'d mut FuncTranslator<'b, 'c>,
@@ -223,6 +311,10 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
         self.saved.fill(V::bottom());
     }
 
+    pub fn reset_keep_saved(&mut self) {
+        self.entries.fill(V::bottom());
+    }
+
     pub fn saved_val(&self, key: &K) -> V {
         let index = self.keys.binary_search(key).unwrap();
         self.saved[index].clone()
@@ -238,6 +330,37 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
     }
     pub fn iter_saved(&self) -> impl Iterator<Item = (&K, &V)> {
         self.keys.iter().zip(self.saved.iter())
+    }
+
+    fn snapshot(&self) -> CovSnapshot
+    where
+        V: 'static,
+    {
+        struct LatticeBox<V: FeedbackLattice + 'static>(Box<[V]>);
+        impl<V: FeedbackLattice + 'static> ErasedCovSnapshot for LatticeBox<V> {
+            fn clear(&mut self) {
+                self.0.fill(V::bottom());
+            }
+            fn update_with(&mut self, other: &dyn ErasedCovSnapshot) -> bool {
+                if let Some(other) = other.as_any().downcast_ref::<Self>() {
+                    other
+                        .0
+                        .iter()
+                        .zip(self.0.iter_mut())
+                        .fold(false, |mut res, (a, b)| {
+                            res |= b.is_extended_by(a);
+                            *b = b.unify(a);
+                            res
+                        })
+                } else {
+                    false
+                }
+            }
+            fn as_any(&self) -> &dyn Any {
+                self as &dyn Any
+            }
+        }
+        CovSnapshot::Erased(Box::new(LatticeBox(self.entries.clone())))
     }
 }
 
@@ -354,4 +477,12 @@ fn iter_cmp_instrs(spec: &ModuleSpec) -> impl Iterator<Item = Location> + '_ {
                 _ => None,
             })
     })
+}
+
+pub(crate) fn union_bitboxes(a: &mut bitvec::boxed::BitBox, b: &bitvec::boxed::BitBox) -> bool {
+    let is_update = a.domain().zip(b.domain()).any(|(a, b)| (b & !a) != 0);
+    if is_update {
+        *a |= b;
+    }
+    is_update
 }

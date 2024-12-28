@@ -7,7 +7,7 @@ use cranelift::module::{DataDescription, DataId, Module};
 use crate::jit::vmcontext::VMContext;
 use crate::{ir::ModuleSpec, jit::CompilationKind, HashSet};
 
-use super::{Edge, FuncIdx, HashBitsetInstrumentationPass, InstrCtx};
+use super::{Edge, FuncIdx, HashBitsetInstrumentationPass, InstrCtx, Location};
 
 fn hash_to_u64<T: std::hash::Hash>(val: T) -> u64 {
     use std::hash::Hasher;
@@ -19,29 +19,46 @@ fn hash_to_u64<T: std::hash::Hash>(val: T) -> u64 {
     hasher.finish()
 }
 
+/*
+SAFETY: The underlying storage areas of `entries` and `new_coverage` are baked into the JIT
+compilation artifact. This means that they can't be moved until the JIT artifacts are discarded.
+It might be worthwhile to explicitly wrap them in a Pin.
+*/
 pub(crate) struct HashBitset {
-    entries: BitBox,
-    new_coverage: Box<bool>,
+    pub entries: BitBox,
+    pub saved: BitBox,
+    pub new_coverage: Box<bool>,
 }
 impl HashBitset {
     pub fn new_for_elems(count: usize, blowup_factor: usize) -> Self {
-        Self::new_with_size(((count + 1) * blowup_factor).next_power_of_two())
+        let size = (count + 1) * blowup_factor;
+        // limit size to 128kb. we might have thousands of trace metadatas in the corpus.
+        let size = size.min(100_000);
+        Self::new_with_size(size.next_power_of_two())
     }
 
     pub fn new_with_size(size: usize) -> Self {
         assert!(size.is_power_of_two());
+        assert!(size > 0);
         let entries = BitVec::repeat(false, size).into_boxed_bitslice();
         Self {
+            saved: entries.clone(),
             entries,
             new_coverage: Box::new(false),
         }
     }
 
     pub fn update_and_scan(&mut self) -> bool {
-        std::mem::take(&mut self.new_coverage)
+        let new_cov_hint = std::mem::take(self.new_coverage.as_mut());
+        new_cov_hint && super::union_bitboxes(&mut self.saved, &self.entries)
     }
 
     pub fn reset(&mut self) {
+        self.entries.fill(false);
+        self.saved.fill(false);
+    }
+
+    pub fn reset_keep_saved(&mut self) {
         self.entries.fill(false);
     }
 
@@ -79,6 +96,7 @@ impl HashBitset {
         mut ctx: InstrCtx,
         pass: &P,
     ) {
+        assert!(std::ptr::eq(self as *const _, pass.coverage() as *const _));
         let data = get_hash_var(pass, &mut ctx);
         let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
         let hash_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
@@ -127,7 +145,7 @@ impl HashBitset {
         let contrib = hash_to_u64(contrib) as u32 as i64;
         let contrib = ctx.bcx.ins().iconst(ir::types::I32, contrib);
 
-        let new_cov_ptr = pass.coverage().new_coverage.as_ref() as *const _;
+        let new_cov_ptr = self.new_coverage.as_ref() as *const _;
         let new_cov_ptr = ctx.state.host_ptr(ctx.bcx, new_cov_ptr as *const _);
         let bitslice_ptr = ctx
             .state
@@ -195,10 +213,12 @@ pub(crate) struct FuncPathHashPass {
 }
 
 impl FuncPathHashPass {
-    pub fn new(spec: &ModuleSpec) -> Self {
-        let keys = super::iter_funcs(spec).collect::<HashSet<_>>();
+    pub fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
+        let keys = super::iter_funcs(spec)
+            .filter(|x| key_filter(&Location::from(*x)))
+            .collect::<HashSet<_>>();
         Self {
-            coverage: HashBitset::new_for_elems(keys.len(), 1024),
+            coverage: HashBitset::new_for_elems(keys.len(), 64),
             keys,
         }
     }
@@ -242,10 +262,12 @@ pub(crate) struct EdgePathHashPass {
 }
 
 impl EdgePathHashPass {
-    pub fn new(spec: &ModuleSpec) -> Self {
-        let keys = super::iter_edges(spec).collect::<HashSet<_>>();
+    pub fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
+        let keys = super::iter_edges(spec)
+            .filter(|x| key_filter(&Location::from(*x)))
+            .collect::<HashSet<_>>();
         Self {
-            coverage: HashBitset::new_for_elems(keys.len(), 1024),
+            coverage: HashBitset::new_for_elems(keys.len(), 64),
             keys,
         }
     }
