@@ -199,6 +199,29 @@ impl Worker {
         self.sess.reset_pass_coverage_keep_saved();
         let _ = self.sess.run(input, &mut self.stats);
         let coverage_snapshot = InstrumentationSnapshot::from(&self.sess.passes);
+        if false {
+            let total = coverage_snapshot
+                .snapshots
+                .iter()
+                .map(|x| x.mem_usage())
+                .sum::<usize>();
+            eprintln!(
+                "Snapshot Mem Usage: {}",
+                humansize::format_size(total, humansize::DECIMAL)
+            );
+            for (pass, snapshot) in self
+                .sess
+                .passes
+                .iter()
+                .zip(coverage_snapshot.snapshots.iter())
+            {
+                eprintln!(
+                    "- {}: {}",
+                    pass.shortcode(),
+                    humansize::format_size(snapshot.mem_usage(), humansize::DECIMAL),
+                );
+            }
+        }
         testcase.metadata_map_mut().insert(coverage_snapshot);
 
         self.gather_trace_metadata(input, &mut testcase);

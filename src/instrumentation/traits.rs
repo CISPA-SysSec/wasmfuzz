@@ -134,7 +134,12 @@ pub(crate) trait CodeCovInstrumentationPass {
         self.coverage_mut().reset_keep_saved()
     }
     fn snapshot_coverage(&self) -> CovSnapshot {
-        CovSnapshot::BitBox(self.coverage().entries.clone())
+        CovSnapshot::Bitset(
+            roaring::RoaringBitmap::from_sorted_iter(
+                self.coverage().entries.iter_ones().map(|x| x as u32),
+            )
+            .unwrap(),
+        )
     }
 
     fn as_any(&self) -> &dyn Any;
@@ -160,7 +165,12 @@ pub(crate) trait HashBitsetInstrumentationPass {
         self.coverage_mut().reset_keep_saved()
     }
     fn snapshot_coverage(&self) -> CovSnapshot {
-        CovSnapshot::BitBox(self.coverage().entries.clone())
+        CovSnapshot::Bitset(
+            roaring::RoaringBitmap::from_sorted_iter(
+                self.coverage().entries.iter_ones().map(|x| x as u32),
+            )
+            .unwrap(),
+        )
     }
 
     fn as_any(&self) -> &dyn Any;

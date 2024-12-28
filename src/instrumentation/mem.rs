@@ -192,7 +192,7 @@ impl MemoryStorePrevValRangePass {
         Self {
             coverage: AssociatedCoverageArray::new(
                 &Self::generate_keys(spec)
-                    .filter(|x| key_filter(&Location::from(*x)))
+                    .filter(key_filter)
                     .collect::<Vec<_>>(),
             ),
         }

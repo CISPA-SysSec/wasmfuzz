@@ -149,13 +149,14 @@ impl Passes {
 pub(crate) trait ErasedCovSnapshot {
     fn clear(&mut self);
     fn update_with(&mut self, other: &dyn ErasedCovSnapshot) -> bool;
+    fn mem_usage(&self) -> usize;
     fn as_any(&self) -> &dyn Any;
 }
 
 #[derive(libafl_bolts::SerdeAny)]
 pub(crate) enum CovSnapshot {
     Noop,
-    BitBox(bitvec::boxed::BitBox),
+    Bitset(roaring::RoaringBitmap),
     Erased(Box<dyn ErasedCovSnapshot>),
 }
 
@@ -163,7 +164,7 @@ impl std::fmt::Debug for CovSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Noop => write!(f, "Noop"),
-            Self::BitBox(arg0) => f.debug_tuple("BitBox").field(arg0).finish(),
+            Self::Bitset(arg0) => f.debug_tuple("Bitset").field(arg0).finish(),
             Self::Erased(_) => f.debug_tuple("Erased").finish_non_exhaustive(),
         }
     }
@@ -191,7 +192,7 @@ impl CovSnapshot {
     pub fn clear(&mut self) {
         match self {
             CovSnapshot::Noop => {}
-            CovSnapshot::BitBox(v) => v.fill(false),
+            CovSnapshot::Bitset(v) => v.clear(),
             CovSnapshot::Erased(erased) => erased.clear(),
         }
     }
@@ -199,16 +200,35 @@ impl CovSnapshot {
     pub fn update_with(&mut self, other: &CovSnapshot) -> bool {
         match (self, other) {
             (CovSnapshot::Noop, CovSnapshot::Noop) => false,
-            (CovSnapshot::BitBox(s), CovSnapshot::BitBox(o)) => union_bitboxes(s, o),
+            (CovSnapshot::Bitset(s), CovSnapshot::Bitset(o)) => {
+                let res = !o.is_subset(s);
+                if res {
+                    *s |= o;
+                }
+                res
+            }
             (CovSnapshot::Erased(s), CovSnapshot::Erased(o)) => s.update_with(&**o),
             _ => unreachable!(),
+        }
+    }
+
+    pub fn mem_usage(&self) -> usize {
+        match self {
+            CovSnapshot::Noop => 0,
+            CovSnapshot::Bitset(bits) => {
+                let s = bits.statistics();
+                (s.n_bytes_array_containers
+                    + s.n_bytes_bitset_containers
+                    + s.n_bytes_run_containers) as usize
+            }
+            CovSnapshot::Erased(erased) => erased.mem_usage(),
         }
     }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, libafl_bolts::SerdeAny)]
 pub(crate) struct InstrumentationSnapshot {
-    snapshots: Vec<CovSnapshot>,
+    pub snapshots: Vec<CovSnapshot>,
 }
 impl InstrumentationSnapshot {
     pub(crate) fn from(passes: &Passes) -> Self {
@@ -336,22 +356,64 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
     where
         V: 'static,
     {
-        struct LatticeBox<V: FeedbackLattice + 'static>(Box<[V]>);
-        impl<V: FeedbackLattice + 'static> ErasedCovSnapshot for LatticeBox<V> {
+        enum SparseLatticeBox<V: FeedbackLattice + 'static> {
+            Full(Box<[V]>),
+            Sparse {
+                non_default_values: Box<[V]>,
+                non_default: roaring::RoaringBitmap,
+                orig_len: usize,
+            },
+        }
+        impl<V: FeedbackLattice> SparseLatticeBox<V> {
+            fn new(entries: &[V]) -> Self {
+                let non_default = roaring::RoaringBitmap::from_sorted_iter(
+                    entries
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, v)| (!v.is_bottom()).then_some(i as u32)),
+                )
+                .unwrap();
+                let non_default_values =
+                    entries.iter().filter(|x| !x.is_bottom()).cloned().collect();
+                Self::Sparse {
+                    non_default_values,
+                    non_default,
+                    orig_len: entries.len(),
+                }
+            }
+            fn _update_with(&mut self, other: &Self) -> bool {
+                match self {
+                    SparseLatticeBox::Full(base) => match other {
+                        SparseLatticeBox::Full(_) => unimplemented!(),
+                        SparseLatticeBox::Sparse {
+                            non_default_values,
+                            non_default,
+                            ..
+                        } => {
+                            let mut res = false;
+                            for (i, ov) in non_default.iter().zip(non_default_values) {
+                                let sv = &mut base[i as usize];
+                                res |= sv.is_extended_by(ov);
+                                *sv = sv.unify(ov);
+                            }
+                            res
+                        }
+                    },
+                    SparseLatticeBox::Sparse { .. } => unimplemented!(),
+                }
+            }
+        }
+        impl<V: FeedbackLattice + 'static> ErasedCovSnapshot for SparseLatticeBox<V> {
             fn clear(&mut self) {
-                self.0.fill(V::bottom());
+                let len = match self {
+                    SparseLatticeBox::Full(x) => x.len(),
+                    SparseLatticeBox::Sparse { orig_len, .. } => *orig_len,
+                };
+                *self = Self::Full(vec![V::bottom(); len].into_boxed_slice());
             }
             fn update_with(&mut self, other: &dyn ErasedCovSnapshot) -> bool {
                 if let Some(other) = other.as_any().downcast_ref::<Self>() {
-                    other
-                        .0
-                        .iter()
-                        .zip(self.0.iter_mut())
-                        .fold(false, |mut res, (a, b)| {
-                            res |= b.is_extended_by(a);
-                            *b = b.unify(a);
-                            res
-                        })
+                    self._update_with(other)
                 } else {
                     false
                 }
@@ -359,8 +421,24 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
             fn as_any(&self) -> &dyn Any {
                 self as &dyn Any
             }
+            fn mem_usage(&self) -> usize {
+                match self {
+                    SparseLatticeBox::Full(x) => x.len() * std::mem::size_of::<V>(),
+                    SparseLatticeBox::Sparse {
+                        non_default_values,
+                        non_default,
+                        ..
+                    } => {
+                        let s = non_default.statistics();
+                        (s.n_bytes_array_containers
+                            + s.n_bytes_bitset_containers
+                            + s.n_bytes_run_containers) as usize
+                            + non_default_values.len() * std::mem::size_of::<V>()
+                    }
+                }
+            }
         }
-        CovSnapshot::Erased(Box::new(LatticeBox(self.entries.clone())))
+        CovSnapshot::Erased(Box::new(SparseLatticeBox::new(&self.entries)))
     }
 }
 

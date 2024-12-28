@@ -415,7 +415,7 @@ impl Orchestrator {
                     opts,
                     spec: self.module.clone(),
                     swarm: swarm.clone(),
-                    covered_functions: None,
+                    instr_only_funcs: None,
                 },
                 swarm,
                 timeout,
@@ -591,7 +591,7 @@ impl Orchestrator {
                 opts,
                 spec: self.module.clone(),
                 swarm: swarm.clone(),
-                covered_functions: self.coverage_is_saturated().then(|| {
+                instr_only_funcs: self.coverage_is_saturated().then(|| {
                     let pass = self.codecov_sess.get_pass::<FunctionCoveragePass>();
                     pass.coverage.iter_covered_keys().collect()
                 }),
@@ -691,20 +691,19 @@ pub(crate) struct OrcPassesGen {
     pub swarm: SwarmConfig,
     pub opts: FeedbackOptions,
     pub spec: Arc<ModuleSpec>,
-    pub covered_functions: Option<HashSet<FuncIdx>>,
+    pub instr_only_funcs: Option<HashSet<FuncIdx>>,
 }
 
 impl std::fmt::Debug for OrcPassesGen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OrcPassesGen")
-            .field("swarm", &"...")
             .field("opts", &self.opts)
             .field("spec", &self.spec)
             .field(
-                "covered_functions",
-                &self.covered_functions.as_ref().map(|x| x.len()),
+                "instr_only_funcs (cnt)",
+                &self.instr_only_funcs.as_ref().map(|x| x.len()),
             )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -749,7 +748,7 @@ impl PassesGen for OrcPassesGen {
         // We don't really need to add coverage instrumentation to functions
         // that have not been covered yet if it looks like coverage has settled.
         // This reduces compilation time (~ -30%) and improve performance (~ -25%) by reducing bitmap sizes.
-        let key_filter = |loc: &Location| match &self.covered_functions {
+        let key_filter = |loc: &Location| match &self.instr_only_funcs {
             Some(x) => x.contains(&FuncIdx(loc.function)),
             None => true,
         };

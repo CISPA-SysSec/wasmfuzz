@@ -599,7 +599,7 @@ impl FeedbackOptions {
 impl std::fmt::Debug for FeedbackOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("FeedbackOptions");
-        let v = serde_json::to_value(&self).unwrap();
+        let v = serde_json::to_value(self).unwrap();
         let mut skipped = false;
         for (k, v) in v.as_object().unwrap() {
             if v.as_bool().unwrap() {
