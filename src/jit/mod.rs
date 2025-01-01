@@ -438,6 +438,7 @@ pub(crate) struct CompilationOptions {
     pub verbose: bool,
     pub debug_trace: bool,
     pub kind: CompilationKind,
+    pub optimize_for_compilation_time: bool,
 }
 
 impl CompilationOptions {
@@ -449,6 +450,7 @@ impl CompilationOptions {
         kind: CompilationKind,
         debug_trace: bool,
         verbose: bool,
+        optimize_for_compilation_time: bool,
     ) -> Self {
         Self {
             debug_trace: debug_trace
@@ -464,6 +466,7 @@ impl CompilationOptions {
             tracing: tracing.clone(),
             kind,
             swarm: swarm.clone(),
+            optimize_for_compilation_time,
         }
     }
 
@@ -820,6 +823,7 @@ pub(crate) struct JitFuzzingSessionBuilder {
     swarm: SwarmConfig,
     passes_generator: Arc<dyn PassesGen>,
     run_from_snapshot: bool,
+    optimize_for_compilation_time: bool,
 }
 
 impl JitFuzzingSessionBuilder {
@@ -841,6 +845,7 @@ impl JitFuzzingSessionBuilder {
                 spec: mod_spec.clone(),
             }),
             run_from_snapshot: *sopts.run_from_snapshot,
+            optimize_for_compilation_time: false,
             mod_spec,
         }
     }
@@ -892,6 +897,14 @@ impl JitFuzzingSessionBuilder {
         self.passes_generator = passes_generator;
         self
     }
+
+    pub(crate) fn optimize_for_compilation_time(
+        mut self,
+        optimize_for_compilation_time: bool,
+    ) -> Self {
+        self.optimize_for_compilation_time = optimize_for_compilation_time;
+        self
+    }
 }
 
 // TODO: move to vm.rs?
@@ -906,6 +919,7 @@ pub(crate) struct JitFuzzingSession {
     run_from_snapshot: bool,
     debug_trace: bool,
     verbose: bool,
+    optimize_for_compilation_time: bool,
     pub(crate) swarm: SwarmConfig,
     pub(crate) passes: Passes,
 }
@@ -924,6 +938,7 @@ impl JitFuzzingSession {
             swarm,
             passes_generator,
             run_from_snapshot,
+            optimize_for_compilation_time,
         } = builder;
 
         let tracking = TrackingOptions {
@@ -943,6 +958,7 @@ impl JitFuzzingSession {
             debug_trace,
             verbose,
             swarm,
+            optimize_for_compilation_time,
             passes: passes_generator.generate_passes(),
         }
     }
@@ -965,6 +981,7 @@ impl JitFuzzingSession {
                 self.reusable_stage.kind,
                 self.debug_trace,
                 self.verbose,
+                self.optimize_for_compilation_time,
             ),
             &mut self.passes,
         );
@@ -1009,6 +1026,7 @@ impl JitFuzzingSession {
                 self.reusable_stage.kind,
                 self.debug_trace,
                 self.verbose,
+                self.optimize_for_compilation_time,
             ),
             &mut self.passes,
         );
@@ -1084,6 +1102,7 @@ impl JitFuzzingSession {
                 self.tracing_stage.kind,
                 self.debug_trace,
                 self.verbose,
+                self.optimize_for_compilation_time,
             ),
             &mut self.passes,
         );

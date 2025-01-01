@@ -204,8 +204,8 @@ pub(crate) fn main() {
                 })
                 .debug(trace, verbose_jit)
                 .instruction_limit(Some(2_000_000_000))
+                .optimize_for_compilation_time(inputs.len() <= 1)
                 .build();
-            sess.initialize(&mut stats);
 
             if inputs.is_empty() {
                 println!("No input specified. Exiting.")

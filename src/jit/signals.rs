@@ -156,14 +156,14 @@ pub(crate) struct TrapInfo {
 pub(crate) unsafe fn catch_traps<T, F: Fn() -> T>(f: F) -> Result<T, TrapInfo> {
     INSTALL.with(|x| x.call_once(|| setup_handlers(trap_handler)));
 
-    assert_eq!(ACTIVE.replace(true), false);
+    assert!(!ACTIVE.replace(true));
     let jmp_buf = JMP_BUF.with_borrow_mut(|x| x as *mut _);
     let res = match setjmp(jmp_buf) {
         0 => Ok(f()),
         1 => Err(TRAP_INFO.take().unwrap()),
         _ => unreachable!(),
     };
-    assert_eq!(ACTIVE.replace(false), true);
+    assert!(ACTIVE.replace(false));
     res
 }
 

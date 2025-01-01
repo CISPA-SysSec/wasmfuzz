@@ -89,7 +89,7 @@ impl Location {
 
     pub(crate) fn as_u64(&self) -> u64 {
         let (lo, hi) = (self.index, self.function);
-        lo as u64 | (hi as u64) << 32
+        lo as u64 | ((hi as u64) << 32)
     }
 }
 

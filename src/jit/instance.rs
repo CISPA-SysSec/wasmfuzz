@@ -53,7 +53,7 @@ impl ModuleInstance {
         res.map_err(|info| match info.reason {
             Some(TrapReason::MemoryOutOfBounds) => {
                 self.vmctx.tainted = true;
-                TrapKind::MemoryOutOfBounds
+                TrapKind::Abort(crate::AbortCode::HeapOutOfBounds)
             }
             Some(TrapReason::OutOfFuel) => {
                 self.vmctx.tainted = true;

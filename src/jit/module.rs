@@ -17,20 +17,18 @@ use super::{instance::ModuleInstance, util::wasm2tys, vmcontext::VMContext, Comp
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TrapKind {
-    Coverage { location: Location, pass: String },
+    // Coverage { location: Location, pass: String },
     Abort(AbortCode),
     SwarmShortCircuit(Location),
     OutOfFuel(Option<Location>),
-    MemoryOutOfBounds,
     ExitTestcase(Location),
 }
 
 impl TrapKind {
     pub(crate) fn loc(&self) -> Option<Location> {
         match self {
-            Self::MemoryOutOfBounds | Self::Abort(_) => None,
+            Self::Abort(_) => None,
             Self::SwarmShortCircuit(loc) | Self::ExitTestcase(loc) => Some(*loc),
-            Self::Coverage { location, .. } => Some(*location),
             Self::OutOfFuel(loc) => *loc,
         }
     }
@@ -39,12 +37,13 @@ impl TrapKind {
         use colored::Colorize;
         let name = match self {
             Self::Abort(AbortCode::UnreachableReached) => "abort-unreachable".red(),
+            Self::Abort(AbortCode::HeapOutOfBounds) => "abort/heap-oob".red(),
+            Self::Abort(AbortCode::StackOverflow) => "abort/stack-overflow".red(),
+            Self::Abort(AbortCode::IntegerDivisionByZero) => "abort/div-zero".red(),
             Self::Abort(_) => "abort/unk".red(),
-            Self::MemoryOutOfBounds => "abort/mem-oob".red(),
             Self::SwarmShortCircuit(_) => "swarm-short-circuit".green(),
             Self::OutOfFuel(_) => "out-of-fuel".cyan(),
             Self::ExitTestcase(_) => "exit-testcase".cyan(),
-            Self::Coverage { pass, .. } => pass.cyan(),
         };
         self.loc().map_or_else(
             || format!("trap/{name}"),
@@ -73,7 +72,7 @@ impl TrapKind {
     }
 }
 
-fn isa() -> Arc<dyn isa::TargetIsa> {
+fn isa(opts: &CompilationOptions) -> Arc<dyn isa::TargetIsa> {
     let mut flag_builder = settings::builder();
 
     flag_builder.set("is_pic", "true").unwrap();
@@ -83,6 +82,9 @@ fn isa() -> Arc<dyn isa::TargetIsa> {
     flag_builder
         .set("enable_heap_access_spectre_mitigation", "false")
         .unwrap();
+    if opts.optimize_for_compilation_time {
+        flag_builder.set("opt_level", "none").unwrap();
+    }
 
     // we're not linking __cranelift_probestack, and stack clashing is not an issue
     flag_builder.set("enable_probestack", "false").unwrap();
@@ -122,7 +124,7 @@ pub(crate) struct ModuleTranslator<'s> {
 
 impl<'s> ModuleTranslator<'s> {
     pub(crate) fn new(spec: &'s ModuleSpec, opts: &CompilationOptions) -> Self {
-        let mut builder = JITBuilder::with_isa(isa(), default_libcall_names());
+        let mut builder = JITBuilder::with_isa(isa(opts), default_libcall_names());
         builder.reserve_memory_area(256 << 20);
         let mut module = JITModule::new(builder);
 
