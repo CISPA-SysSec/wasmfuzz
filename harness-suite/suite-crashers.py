@@ -29,6 +29,7 @@ def check_reproduces(harness_path, crash_path):
         harness_path,
         crash_path
     ])
+    print("[>]", res.decode('utf8', errors='ignore').splitlines()[-1].strip())
     if b"execution trapped with" in res and b"which indicates that the target crashed" in res:
         return True
 
@@ -67,14 +68,17 @@ with open(tags_path) as f:
 
 print()
 print("-"*80)
-print(f"{len(mismatches)} mismatches found" + ":" if mismatches else ".")
+print(f"{len(mismatches)} mismatches found" + ".:"[bool(mismatches)])
 with open(tags_path) as f:
     for row in csv.DictReader(f):
         harness = Path(row["harness"])
         crash_path = crashes_dir / f"{harness.stem}.bin"
         tagged_crash = row["crashing"] and bool(int(row["crashing"]))
         if tagged_crash and harness.name not in verified:
-            print(f"[!] {harness.name}: Missing reproducer for tagged harness!")
+            if crash_path.exists():
+                print(f"[!] {harness.name}: Input for tagged crash didn't reproduce!")
+            else:
+                print(f"[!] {harness.name}: Missing reproducer for tagged harness!")
         if crash_path.exists() and not tagged_crash:
             if harness.name in verified:
                 print(f"[!] {harness.name}: Crash reproduced but not tagged!")

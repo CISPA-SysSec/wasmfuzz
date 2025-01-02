@@ -33,6 +33,7 @@ struct LogEvent {
     // what time did we actually take this snapshot?
     seconds_rt: f32,
     crashing: bool,
+    timeout: bool,
     cov_funcs: u32,
     cov_bbs: u32,
     cov_edges: u32,
@@ -77,6 +78,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
     let mut corpus = HashSet::default();
     let mut paths_seen = HashSet::default();
     let mut crashes = false;
+    let mut timeout = false;
     let mut finds = 0;
 
     let start_timestamp = SystemTime::now()
@@ -115,6 +117,10 @@ pub(crate) fn run(opts: MonitorCovOpts) {
 
                     let res = sess.run(&data, &mut Stats::default());
                     crashes |= res.is_crash();
+                    timeout |= matches!(
+                        res.trap_kind,
+                        Some(crate::jit::module::TrapKind::OutOfFuel(_))
+                    );
                     if res.novel_coverage {
                         has_find = true;
                         finds += 1;
@@ -137,6 +143,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
                 cov_bbs: sess.get_pass::<BBCoveragePass>().count_saved() as u32,
                 cov_edges: sess.get_pass::<EdgeCoveragePass>().count_saved() as u32,
                 crashing: crashes,
+                timeout,
                 entries: corpus.len() as u32,
                 finds,
             };
