@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/libexpat/libexpat "$PROJECT/repo" 8cb7d5677286f7bf4d606c1e0eb16f29ca4c50c9
+git clone-rev.sh https://github.com/libexpat/libexpat "$PROJECT/repo" 493406dbcc915c8209514241297fd2734a9e3a9b
 git -C "$PROJECT/repo" apply ../fix_link_args.patch

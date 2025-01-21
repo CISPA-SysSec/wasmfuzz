@@ -19,7 +19,9 @@ harness_dir = Path(args.harness_dir)
 corpus_dir = Path(args.corpus_dir)
 crashes_dir = Path(args.crashes_dir)
 tags_path = Path(args.tags)
-assert all(x.exists() for x in [harness_dir, corpus_dir, crashes_dir, tags_path])
+assert all(x.exists() for x in [harness_dir, crashes_dir, tags_path])
+if not corpus_dir.exists():
+    print("[!] corpus directory not found, can't cross-check")
 
 def check_reproduces(harness_path, crash_path):
     print(f"[*] reproducing {crash_path} ...")
@@ -45,6 +47,7 @@ def check_harness(harness_path):
             verified.add(harness)
             return
 
+    if not corpus_dir.exists(): return
     for corpus_snapshot in corpus_dir.glob(f"{harness_path.stem}/snapshot-*.csv"):
         with open(corpus_snapshot) as f:
             for elem in csv.DictReader(f):
