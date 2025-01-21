@@ -1,0 +1,44 @@
+diff --git a/library/timing.c b/library/timing.c
+index 1ed88639..a6a929aa 100644
+--- a/library/timing.c
++++ b/library/timing.c
+@@ -15,7 +15,7 @@
+ 
+ #if !defined(unix) && !defined(__unix__) && !defined(__unix) && \
+     !defined(__APPLE__) && !defined(_WIN32) && !defined(__QNXNTO__) && \
+-    !defined(__HAIKU__) && !defined(__midipix__)
++    !defined(__HAIKU__) && !defined(__midipix__) && !defined(__wasm__)
+ #error "This module only works on Unix and Windows, see MBEDTLS_TIMING_C in mbedtls_config.h"
+ #endif
+ 
+@@ -32,7 +32,9 @@ struct _hr_time {
+ 
+ #include <unistd.h>
+ #include <sys/types.h>
++#if !defined(__wasm__)
+ #include <signal.h>
++#endif
+ /* time.h should be included independently of MBEDTLS_HAVE_TIME. If the
+  * platform matches the ifdefs above, it will be used. */
+ #include <time.h>
+diff --git a/programs/fuzz/Makefile b/programs/fuzz/Makefile
+index 71cba0bc..3dfd507d 100644
+--- a/programs/fuzz/Makefile
++++ b/programs/fuzz/Makefile
+@@ -1,13 +1,13 @@
+ MBEDTLS_TEST_PATH:=../../tests
+ 
++CFLAGS ?= -g -O2 -flto
++
+ MBEDTLS_PATH := ../..
+ include ../../scripts/common.make
+ 
+ DEP=${MBEDLIBS}
+ 
+-ifdef FUZZINGENGINE
+-LOCAL_LDFLAGS += -lFuzzingEngine
+-endif
++LOCAL_LDFLAGS += ${FUZZ_LDFLAGS}
+ 
+ # A test application is built for each fuzz_*.c file.
+ APPS = $(basename $(wildcard fuzz_*.c))
