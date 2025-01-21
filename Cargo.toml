@@ -8,8 +8,8 @@ rust-version = "1.83"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.221"
-wasm-encoder = "0.221"
+wasmparser = "0.223"
+wasm-encoder = "0.223"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive"] }
 md5 = "0.7"
@@ -20,7 +20,7 @@ target-lexicon = "0.13"
 speedy = "0.8"
 colored = "2.1"
 anyhow = "1.0"
-dirs = "5.0"
+dirs = "6.0"
 serde = "1.0"
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 gimli = { version = "0.31" }
@@ -28,7 +28,7 @@ gimli = { version = "0.31" }
 symbolic = { version = "12.11.1", features = ["demangle", "symcache"] }
 symbolic-debuginfo = "=12.11.1"
 rustc-hash = "2.0.0"
-hexyl = "0.15"
+hexyl = "0.16"
 humantime = "2.1"
 humansize = "2.1"
 crossbeam-channel = "0.5"
@@ -41,11 +41,11 @@ object = { version = "0.36", default-features = false, features = [
     "wasm",
 ] }
 ouroboros = "0.18.3"
-libafl = { version = "0.14.1", default-features = false, features = [
+libafl = { version = "0.15", default-features = false, features = [
     "std",
     "rand_trait",
 ] }
-libafl_bolts = "0.14.1"
+libafl_bolts = "0.15"
 # cranelift is ~0.114
 cranelift = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "cranelift-jit-reserve-vmem-area", features = [
     "jit",

@@ -3,6 +3,7 @@ use cranelift::prelude::{types::I64, InstBuilder, IntCC, MemFlags, Type, Value};
 
 use crate::ir::{heuristics::Libfunc, Location};
 
+use super::VMContext;
 use super::{
     module::TrapKind,
     tracing::{trace_cmp, trace_memcmp, trace_strcmp},
@@ -83,14 +84,24 @@ fn instrument_bb_fuel(state: &mut FuncTranslator, bcx: &mut FunctionBuilder, loc
 
     let gv_vmctx = state.get_vmctx(bcx);
     let vmctx = bcx.ins().global_value(state.ptr_ty(), gv_vmctx);
-    let fuel = bcx.ins().load(I64, MemFlags::trusted(), vmctx, 8 + 8);
+    let fuel = bcx.ins().load(
+        I64,
+        MemFlags::trusted(),
+        vmctx,
+        std::mem::offset_of!(VMContext, fuel) as i32,
+    );
 
     let is_lt = bcx.ins().icmp_imm(IntCC::UnsignedLessThan, fuel, bb_size);
     let trap_code = state.get_trap_code(TrapKind::OutOfFuel(Some(location)));
     bcx.ins().trapnz(is_lt, trap_code);
 
     let fuel = bcx.ins().iadd_imm(fuel, -bb_size);
-    bcx.ins().store(MemFlags::trusted(), fuel, vmctx, 8 + 8);
+    bcx.ins().store(
+        MemFlags::trusted(),
+        fuel,
+        vmctx,
+        std::mem::offset_of!(VMContext, fuel) as i32,
+    );
 }
 
 pub(crate) fn instrument_cmp(

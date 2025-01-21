@@ -6,14 +6,14 @@ use std::{sync::Arc, time::Instant};
 
 use crate::simple_bus::MessageBus;
 use libafl::corpus::CorpusId;
-use libafl::inputs::UsesInput;
+use libafl::inputs::ResizableMutator;
 use libafl::mutators::{havoc_mutations, StdMOptMutator};
 use libafl::observers::CmplogBytes;
 use libafl::stages::{HasCurrentStageId, StageId};
-use libafl::state::{HasSolutions, State, Stoppable};
+use libafl::state::{HasSolutions, Stoppable};
 use libafl::{
     corpus::{Corpus, HasCurrentCorpusId, InMemoryCorpus, Testcase},
-    inputs::{BytesInput, HasMutatorBytes},
+    inputs::BytesInput,
     mutators::{scheduled::StdScheduledMutator, Mutator},
     observers::{CmpValues, CmpValuesMetadata},
     state::{HasCorpus, HasMaxSize, HasRand},
@@ -90,21 +90,19 @@ impl Worker {
                     .swarm(config.swarm)
                     .build()
             }
-            None => {
-                JitFuzzingSession::builder(mod_spec.clone())
-                    .feedback(opts.i.to_feedback_opts())
-                    .tracing(TracingOptions {
-                        stdout: true,
-                        cmplog: *opts.x.use_cmplog,
-                        concolic: *opts.x.use_concolic,
-                    })
-                    .swarm(SwarmConfig::from_instruction_limit(
-                        opts.x.instruction_limit,
-                    )) // TODO
-                    .run_from_snapshot(*opts.x.run_from_snapshot)
-                    .input_size_limit(opts.g.input_size_limit as u32)
-                    .build()
-            }
+            None => JitFuzzingSession::builder(mod_spec.clone())
+                .feedback(opts.i.to_feedback_opts())
+                .tracing(TracingOptions {
+                    stdout: true,
+                    cmplog: *opts.x.use_cmplog,
+                    concolic: *opts.x.use_concolic,
+                })
+                .swarm(SwarmConfig::from_instruction_limit(
+                    opts.x.instruction_limit,
+                ))
+                .run_from_snapshot(*opts.x.run_from_snapshot)
+                .input_size_limit(opts.g.input_size_limit as u32)
+                .build(),
         };
 
         let mut worker = Self {
@@ -387,7 +385,7 @@ impl Worker {
                 .get(self.corpus.first().unwrap())?
                 .borrow_mut()
                 .load_input(&self.corpus)?
-                .bytes()
+                .as_ref()
                 .to_vec(),
         );
 
@@ -405,7 +403,7 @@ impl Worker {
                 let mut _corpus = HashSet::default();
                 for i in self.corpus.ids() {
                     let entry = self.corpus.get(i).unwrap();
-                    _corpus.insert(entry.borrow().input().as_ref().unwrap().bytes().to_vec());
+                    _corpus.insert(entry.borrow().input().as_ref().unwrap().as_ref().to_vec());
                 }
                 exhaustive_queue.retain(|el| _corpus.contains(el.input()));
                 exhaustive_queue.retain(|el| el.has_next());
@@ -425,9 +423,9 @@ impl Worker {
                         break 'fast_det;
                     }
                     self.stats.exhaustive_execs += 1;
-                    det.next(input.bytes_mut());
+                    det.next(input.as_mut());
                     self.schedule.step();
-                    let _interesting = match self.run_input(input.bytes())? {
+                    let _interesting = match self.run_input(input.as_ref())? {
                         InputVerdict::Interesting => true,
                         InputVerdict::NotInteresting => false,
                         InputVerdict::Crashed => return Ok(WorkerExit::CrashFound),
@@ -445,7 +443,7 @@ impl Worker {
                         sticky_cooldown = A_FEW_EXECS;
                         break 'fast_det;
                     }
-                    if !det.revert(input.bytes_mut()) {
+                    if !det.revert(input.as_mut()) {
                         input.drain(..);
                         input.extend(det.input());
                     }
@@ -470,7 +468,7 @@ impl Worker {
                             .get(corpus_idx)?
                             .borrow_mut()
                             .load_input(&self.corpus)?
-                            .bytes(),
+                            .as_ref(),
                     );
                     *self.corpus.current_mut() = Some(corpus_idx);
                     sticky_cooldown = sticky_cooldown.saturating_sub(1);
@@ -483,12 +481,12 @@ impl Worker {
                     let start = Instant::now();
                     // Note: optionally retrace input before mutating?
                     mutator.mutate(self, &mut input)?;
-                    assert!(input.bytes().len() <= self.sess.swarm.input_alloc_size());
+                    assert!(input.as_ref().len() <= self.sess.swarm.input_alloc_size());
                     self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
                 }
 
                 self.schedule.step();
-                let _interesting = match self.run_input(input.bytes())? {
+                let _interesting = match self.run_input(input.as_ref())? {
                     InputVerdict::Interesting => true,
                     InputVerdict::NotInteresting => false,
                     InputVerdict::Crashed => return Ok(WorkerExit::CrashFound),
@@ -695,7 +693,7 @@ impl Worker {
 
             for idx in self.corpus.ids() {
                 let testcase = self.corpus.get(idx).unwrap().borrow();
-                let input = testcase.input().as_ref().unwrap().bytes();
+                let input = testcase.input().as_ref().unwrap().as_ref();
                 let _ = self.sess.run_reusable_fresh(input, false, &mut self.stats);
             }
         }
@@ -723,7 +721,6 @@ impl Worker {
     }
 }
 
-impl State for Worker {}
 impl serde::Serialize for Worker {
     fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -741,10 +738,6 @@ impl<'de> serde::Deserialize<'de> for Worker {
     }
 }
 
-impl UsesInput for Worker {
-    type Input = BytesInput;
-}
-
 impl HasRand for Worker {
     type Rand = StdRand;
     fn rand(&self) -> &StdRand {
@@ -756,7 +749,7 @@ impl HasRand for Worker {
     }
 }
 
-impl HasCorpus for Worker {
+impl HasCorpus<BytesInput> for Worker {
     type Corpus = InMemoryCorpus<BytesInput>;
     fn corpus(&self) -> &InMemoryCorpus<BytesInput> {
         &self.corpus
@@ -816,7 +809,7 @@ impl HasCurrentStageId for Worker {
     }
 }
 
-impl HasSolutions for Worker {
+impl HasSolutions<BytesInput> for Worker {
     type Solutions = InMemoryCorpus<BytesInput>;
     fn solutions(&self) -> &InMemoryCorpus<BytesInput> {
         &self.solutions

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use libafl::inputs::HasMutatorBytes;
 
 pub(crate) mod exhaustive;
 mod i2s_patches;
@@ -104,7 +103,7 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                         let mut inputs = Vec::new();
                         let id = worker.solutions.ids().next().unwrap();
                         let entry = worker.solutions.get(id).unwrap();
-                        inputs.push(entry.borrow().input().as_ref().unwrap().bytes().to_vec());
+                        inputs.push(entry.borrow().input().as_ref().unwrap().as_ref().to_vec());
                         orc_handle.report_finds(inputs);
                     } else {
                         for _ in 0..10 {
@@ -116,7 +115,7 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                         let mut inputs = Vec::new();
                         for i in worker.corpus.ids() {
                             let entry = worker.corpus.get(i).unwrap();
-                            inputs.push(entry.borrow().input().as_ref().unwrap().bytes().to_vec());
+                            inputs.push(entry.borrow().input().as_ref().unwrap().as_ref().to_vec());
                         }
                         orc_handle.report_finds(inputs);
                     }

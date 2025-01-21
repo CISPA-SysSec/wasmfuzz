@@ -143,7 +143,6 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         (a, b)
     }
 
-    // TODO: match param types
     pub(crate) fn popn(&mut self, tys: &[Type], bcx: &mut FunctionBuilder) -> Vec<ir::Value> {
         let n = tys.len();
         assert!(self.stack.len() >= n);
@@ -426,7 +425,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         let gv = *self.heap.get_or_insert_with(|| {
             bcx.create_global_value(ir::GlobalValueData::Load {
                 base,
-                offset: ir::immediates::Offset32::new(0),
+                offset: ir::immediates::Offset32::new(std::mem::offset_of!(VMContext, heap) as i32),
                 global_type: ptr_ty,
                 flags: ir::MemFlags::trusted().with_readonly(),
             })
@@ -841,7 +840,12 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 .special_param(ir::ArgumentPurpose::VMContext)
                 .expect("Missing vmctx parameter");
             let flags = MemFlags::trusted_ro();
-            let host_ptr_area = bcx.ins().load(self.ptr_ty(), flags, vmctx, 8); // TODO offset_of(VMContext, host_ptr)
+            let host_ptr_area = bcx.ins().load(
+                self.ptr_ty(),
+                flags,
+                vmctx,
+                std::mem::offset_of!(VMContext, host_ptrs) as i32,
+            );
             let val = bcx.ins().load(
                 self.ptr_ty(),
                 flags,

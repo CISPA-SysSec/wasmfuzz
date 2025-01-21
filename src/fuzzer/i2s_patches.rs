@@ -2,7 +2,7 @@ use std::{borrow::Cow, mem::size_of};
 
 use libafl::{
     corpus::Corpus,
-    inputs::{HasMutatorBytes, UsesInput},
+    inputs::{BytesInput, HasMutatorBytes},
     mutators::{MutationResult, Mutator},
     observers::{CmpValues, CmpValuesMetadata},
     state::{HasCorpus, HasMaxSize, HasRand},
@@ -17,7 +17,7 @@ pub(crate) struct I2SRandReplace;
 
 impl<I, S> Mutator<I, S> for I2SRandReplace
 where
-    S: UsesInput + HasCorpus + HasMetadata + HasRand + HasMaxSize,
+    S: HasCorpus<BytesInput> + HasMetadata + HasRand + HasMaxSize,
     I: HasMutatorBytes,
 {
     #[allow(clippy::too_many_lines)]
@@ -25,7 +25,7 @@ where
         if input.is_empty() {
             return Ok(MutationResult::Skipped);
         }
-        let size = input.bytes().len().try_into().unwrap();
+        let size = input.mutator_bytes().len().try_into().unwrap();
 
         let cmps_len = {
             let &Some(id) = state.corpus().current() else {
@@ -46,8 +46,8 @@ where
         let idx = state.rand_mut().below(cmps_len);
 
         let off = state.rand_mut().below(size);
-        let len = input.bytes().len();
-        let bytes = input.bytes_mut();
+        let len = input.mutator_bytes().len();
+        let bytes = input.mutator_bytes_mut();
 
         let &Some(id) = state.corpus().current() else {
             return Ok(MutationResult::Skipped);
@@ -171,8 +171,8 @@ where
                 'outer: for i in off..len {
                     let mut size = core::cmp::min(v.0.len(), len - i);
                     while size != 0 {
-                        if v.0.as_slice()[0..size] == input.bytes()[i..i + size] {
-                            input.bytes_mut()[i..i + size]
+                        if v.0.as_slice()[0..size] == input.mutator_bytes()[i..i + size] {
+                            input.mutator_bytes_mut()[i..i + size]
                                 .copy_from_slice(&v.1.as_slice()[0..size]);
                             result = MutationResult::Mutated;
                             break 'outer;
@@ -181,8 +181,8 @@ where
                     }
                     size = core::cmp::min(v.1.len(), len - i);
                     while size != 0 {
-                        if v.1.as_slice()[0..size] == input.bytes()[i..i + size] {
-                            input.bytes_mut()[i..i + size]
+                        if v.1.as_slice()[0..size] == input.mutator_bytes()[i..i + size] {
+                            input.mutator_bytes_mut()[i..i + size]
                                 .copy_from_slice(&v.1.as_slice()[0..size]);
                             result = MutationResult::Mutated;
                             break 'outer;

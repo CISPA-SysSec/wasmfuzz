@@ -14,7 +14,7 @@ pub(crate) struct VMContext {
     pub heap: *mut u8,
     pub host_ptrs: *const usize,
     pub fuel: u64,
-    // ^^ Note: These fields are accessed by hard-coded offset ^^
+    // ^^ Note: These fields are accessed by JITted code ^^
     pub fuel_init: u64,
     pub heap_alloc: Box<dyn ResettableMapping>,
     pub heap_pages: u32,

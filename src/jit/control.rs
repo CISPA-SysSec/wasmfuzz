@@ -307,7 +307,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                     .collect::<Vec<_>>();
                 rvals.extend_from_slice(&concolic_vars);
             }
-            bcx.ins().return_(&rvals); // TODO: refactor for easier inlining?
+            bcx.ins().return_(&rvals);
             state.mark_dead(bcx);
         }
 

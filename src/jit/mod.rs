@@ -431,7 +431,6 @@ impl PassesGen for FullFeedbackPasses {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CompilationOptions {
-    pub feedback: FeedbackOptions,
     pub tracking: TrackingOptions,
     pub tracing: TracingOptions,
     pub swarm: SwarmConfig, // is `scope` a better name?
@@ -443,7 +442,6 @@ pub(crate) struct CompilationOptions {
 
 impl CompilationOptions {
     pub fn new(
-        feedback: &FeedbackOptions,
         tracking: &TrackingOptions,
         tracing: &TracingOptions,
         swarm: &SwarmConfig,
@@ -461,7 +459,6 @@ impl CompilationOptions {
                 || std::env::var("JITDEBUG")
                     .map(|el| el == "1")
                     .unwrap_or_default(),
-            feedback: feedback.clone(),
             tracking: tracking.clone(),
             tracing: tracing.clone(),
             kind,
@@ -643,7 +640,6 @@ pub(crate) struct JitStage {
     pub(crate) instance: Option<ModuleInstance>,
     pub(crate) inp_ptr: Option<i32>,
     fuzz_func: Option<*const u8>,
-    feedback_options: FeedbackOptions,
     run_from_snapshot: bool,
 }
 
@@ -654,7 +650,6 @@ impl JitStage {
             instance: None,
             inp_ptr: None,
             fuzz_func: None,
-            feedback_options: FeedbackOptions::nothing(),
             run_from_snapshot,
         }
     }
@@ -764,8 +759,6 @@ impl JitStage {
                 instance.vmctx.snapshot();
             }
         }
-
-        self.feedback_options = opts.feedback.clone();
     }
 
     fn reset(&mut self, spec: &ModuleSpec) {
@@ -910,7 +903,6 @@ impl JitFuzzingSessionBuilder {
 // TODO: move to vm.rs?
 pub(crate) struct JitFuzzingSession {
     pub(crate) spec: Arc<ModuleSpec>,
-    feedback: FeedbackOptions,
     tracking: TrackingOptions,
     tracing: TracingOptions,
     pub(crate) reusable_stage: JitStage,
@@ -944,11 +936,8 @@ impl JitFuzzingSession {
         let tracking = TrackingOptions {
             fuel: swarm.instruction_limit.is_some(),
         };
-        // TODO: remove
-        let feedback = FeedbackOptions::nothing();
         Self {
             spec: mod_spec,
-            feedback,
             tracking,
             tracing,
             reusable_stage: JitStage::new_lazy(CompilationKind::Reusable, run_from_snapshot),
@@ -974,7 +963,6 @@ impl JitFuzzingSession {
         self.reusable_stage.ensure_init(
             &self.spec,
             &CompilationOptions::new(
-                &self.feedback,
                 &self.tracking,
                 &self.tracing,
                 &self.swarm,
@@ -1019,7 +1007,6 @@ impl JitFuzzingSession {
         self.reusable_stage.ensure_init(
             &self.spec,
             &CompilationOptions::new(
-                &self.feedback,
                 &self.tracking,
                 &self.tracing,
                 &self.swarm,
@@ -1095,7 +1082,6 @@ impl JitFuzzingSession {
         self.tracing_stage.ensure_init(
             &self.spec,
             &CompilationOptions::new(
-                &self.feedback,
                 &self.tracking,
                 &self.tracing,
                 &self.swarm,
