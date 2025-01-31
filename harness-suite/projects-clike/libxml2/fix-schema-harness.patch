@@ -1,15 +1,15 @@
 diff --git a/fuzz/schema.c b/fuzz/schema.c
-index fb1027c..1f0ed6f 100644
+index a6759a6..33cc0a1 100644
 --- a/fuzz/schema.c
 +++ b/fuzz/schema.c
 @@ -29,9 +29,8 @@ LLVMFuzzerTestOneInput(const char *data, size_t size) {
      if (size > 50000)
          return(0);
  
--    maxAlloc = xmlFuzzReadInt(4) % (size + 100);
+-    failurePos = xmlFuzzReadInt(4) % (size + 100);
 -
      xmlFuzzDataInit(data, size);
-+    maxAlloc = xmlFuzzReadInt(4) % (size + 100);
++    failurePos = xmlFuzzReadInt(4) % (size + 100);
      xmlFuzzReadEntities();
  
-     xmlFuzzMemSetLimit(maxAlloc);
+     xmlFuzzInjectFailure(failurePos);

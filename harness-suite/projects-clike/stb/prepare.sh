@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/nothings/stb.git "$PROJECT/repo" 2e2bef463a5b53ddf8bb788e25da6b8506314c08
+git clone-rev.sh https://github.com/nothings/stb.git "$PROJECT/repo" 5c205738c191bcb0abc65c4febfa9bd25ff35234

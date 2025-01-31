@@ -12,11 +12,13 @@ args = parser.parse_args()
 harness_dir = Path(args.suite_dir) / "out"
 assert harness_dir.exists()
 
+
 @functools.cache
 def get_remote_head(remote: str):
     return subprocess.check_output([
         "git", "ls-remote", remote, "HEAD"
     ]).decode().split()[0]
+
 
 for harness in harness_dir.glob("*.wasm"):
     print(harness)
@@ -37,7 +39,7 @@ for harness in harness_dir.glob("*.wasm"):
         proj_dir = proj_dirs[0]
         if row["pinrev"] != head:
             print("[-]", row["origin"])
-            with open(proj_dir / "prepare.sh") as f:
+            with open(proj_dir / "prepare.sh", "r") as f:
                 prepare_sh = f.read()
             prepare_sh = prepare_sh.replace(row["pin"], head)
             with open(proj_dir / "prepare.sh", "w") as f:

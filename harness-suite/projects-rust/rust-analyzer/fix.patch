@@ -1,21 +1,18 @@
-From 5e6c9c99bf9652f2e03f4932cfcfef4330958ded Mon Sep 17 00:00:00 2001
-Date: Thu, 15 Aug 2024 12:06:18 +0200
-Subject: [PATCH] syntax fuzzers: fix broken Cargo.toml
-
----
- crates/syntax/fuzz/Cargo.toml | 2 --
- 1 file changed, 2 deletions(-)
-
 diff --git a/crates/syntax/fuzz/Cargo.toml b/crates/syntax/fuzz/Cargo.toml
-index c2c6dac72..2dae36c5a 100644
+index c2c6dac..206daac 100644
 --- a/crates/syntax/fuzz/Cargo.toml
 +++ b/crates/syntax/fuzz/Cargo.toml
-@@ -25,5 +25,3 @@ path = "fuzz_targets/parser.rs"
+@@ -10,7 +10,6 @@ cargo-fuzz = true
+ 
+ [dependencies]
+ syntax = { path = "..", version = "0.0.0" }
+-text-edit = { path = "../../text-edit", version = "0.0.0" }
+ libfuzzer-sys = "0.4.5"
+ 
+ # Prevent this from interfering with workspaces
+@@ -25,5 +24,3 @@ path = "fuzz_targets/parser.rs"
  name = "reparse"
  path = "fuzz_targets/reparse.rs"
  
 -[lints]
 -workspace = true
--- 
-2.46.0
-

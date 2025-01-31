@@ -1,0 +1,78 @@
+diff --git a/gix-fs/src/capabilities.rs b/gix-fs/src/capabilities.rs
+index 4fa6892ee..73dc69fa0 100644
+--- a/gix-fs/src/capabilities.rs
++++ b/gix-fs/src/capabilities.rs
+@@ -39,6 +39,18 @@ impl Default for Capabilities {
+     }
+ }
+ 
++#[cfg(target_os = "wasi")]
++impl Default for Capabilities {
++    fn default() -> Self {
++        Capabilities {
++            precompose_unicode: false,
++            ignore_case: false,
++            executable_bit: false,
++            symlink: false,
++        }
++    }
++}
++
+ impl Capabilities {
+     /// try to determine all values in this context by probing them in the given `git_dir`, which
+     /// should be on the file system the git repository is located on.
+@@ -102,6 +114,7 @@ impl Capabilities {
+         res
+     }
+ 
++    #[cfg(not(target_os = "wasi"))]
+     fn probe_symlink(root: &Path) -> std::io::Result<bool> {
+         let rand = fastrand::usize(..);
+         let link_path = root.join(format!("__file_link{rand}"));
+@@ -113,4 +126,9 @@ impl Capabilities {
+         crate::symlink::remove(&link_path).or_else(|_| std::fs::remove_file(&link_path))?;
+         res
+     }
++
++    #[cfg(target_os = "wasi")]
++    fn probe_symlink(root: &Path) -> std::io::Result<bool> {
++        Ok(false)
++    }
+ }
+diff --git a/gix-fs/src/symlink.rs b/gix-fs/src/symlink.rs
+index 5022332f2..1bdebf453 100644
+--- a/gix-fs/src/symlink.rs
++++ b/gix-fs/src/symlink.rs
+@@ -3,7 +3,7 @@ use std::{io, io::ErrorKind::AlreadyExists, path::Path};
+ /// Create a new symlink at `link` which points to `original`.
+ ///
+ /// Note that `original` doesn't have to exist.
+-#[cfg(not(windows))]
++#[cfg(not(any(windows, target_os = "wasi")))]
+ pub fn create(original: &Path, link: &Path) -> io::Result<()> {
+     std::os::unix::fs::symlink(original, link)
+ }
+@@ -11,11 +11,22 @@ pub fn create(original: &Path, link: &Path) -> io::Result<()> {
+ /// Remove a symlink.
+ ///
+ /// Note that on only on windows this is special.
+-#[cfg(not(windows))]
++#[cfg(not(any(windows, target_os = "wasi")))]
+ pub fn remove(path: &Path) -> io::Result<()> {
+     std::fs::remove_file(path)
+ }
+ 
++/// wasi stub
++#[cfg(target_os = "wasi")]
++pub fn create(original: &Path, link: &Path) -> io::Result<()> {
++    unimplemented!()
++}
++/// wasi stub
++#[cfg(target_os = "wasi")]
++pub fn remove(path: &Path) -> io::Result<()> {
++    unimplemented!()
++}
++
+ // TODO: use the `symlink` crate once it can delete directory symlinks
+ /// Remove a symlink.
+ #[cfg(windows)]
