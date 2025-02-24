@@ -33,11 +33,11 @@ Based on a preliminary experiment comparing `wasmfuzz` and `cargo-fuzz` (libfuzz
 
 To build form source you need a somewhat recent stable or nightly Rust toolchain.
 
-- From source: `cargo install --force --git https://github.com/CISPA-SysSec/wasmfuzz`
-- From a git checkout: `cargo install --force --path .`
+- From source: `cargo install --locked --force --git https://github.com/CISPA-SysSec/wasmfuzz`
+- From a git checkout: `cargo install --locked --force --path .`
 - Pre-built binaries: https://github.com/CISPA-SysSec/wasmfuzz/releases/download/initial-commit/wasmfuzz-x86_64-unknown-linux-gnu.2.31
 
-Pre-built binaries are dynamically linked against an old `glibc` version and should be compatible with most Linux environments.
+Pre-built binaries are dynamically linked against an old `glibc` version (2.31) and should be compatible with most Linux environments.
 
 
 ### Usage Examples

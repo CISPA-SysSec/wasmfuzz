@@ -78,8 +78,7 @@ pub(crate) fn run(mod_spec: Arc<ModuleSpec>, opts: CminOpts) {
         for i in 0..iters {
             sess.reset_pass_coverage();
             use rand::seq::SliceRandom;
-            use rand::thread_rng;
-            results.borrow_mut().shuffle(&mut thread_rng());
+            results.borrow_mut().shuffle(&mut rand::rng());
             let prev_len = results.borrow().len();
             results.borrow_mut().retain(|input| {
                 let res = sess.run_reusable(input, false, &mut stats);

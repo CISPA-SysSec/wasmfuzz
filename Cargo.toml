@@ -8,17 +8,17 @@ rust-version = "1.83"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.223"
-wasm-encoder = "0.223"
+wasmparser = "0.226"
+wasm-encoder = "0.226"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive"] }
 md5 = "0.7"
-rand = "0.8"
+rand = "0.9"
 bitvec = "1.0.1"
 roaring = "0.10.9"
 target-lexicon = "0.13"
 speedy = "0.8"
-colored = "2.1"
+colored = "3.0"
 anyhow = "1.0"
 dirs = "6.0"
 serde = "1.0"
@@ -32,7 +32,7 @@ hexyl = "0.16"
 humantime = "2.1"
 humansize = "2.1"
 crossbeam-channel = "0.5"
-ordered-float = { version = "4.2", features = ["speedy"] }
+ordered-float = { version = "5.0", features = ["speedy"] }
 decurse = "0.0.4"
 rustix = { version = "0.38", features = ["mm", "param"] }
 object = { version = "0.36", default-features = false, features = [
@@ -41,7 +41,9 @@ object = { version = "0.36", default-features = false, features = [
     "wasm",
 ] }
 ouroboros = "0.18.3"
-libafl = { version = "0.15", default-features = false, features = [
+# NOTE: LibAFL tends to play it fast and loose with SemVer and version bumps.
+#       We pin to an exact minor release in order to avoid breakage.
+libafl = { version = "=0.15.1", default-features = false, features = [
     "std",
     "rand_trait",
 ] }

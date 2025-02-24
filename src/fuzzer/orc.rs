@@ -161,7 +161,7 @@ impl OrchestratorHandle {
     }
 
     pub fn fetch_corpus(&self) -> Vec<Arc<[u8]>> {
-        self.corpus.read().unwrap().sample(&mut thread_rng())
+        self.corpus.read().unwrap().sample(&mut rand::rng())
     }
 
     pub fn load_corpus(&self, seed_corpus: Vec<Vec<u8>>) {
@@ -260,7 +260,7 @@ impl SharedCorpus {
     fn sample<R: RngCore>(&self, rng: &mut R) -> Vec<Arc<[u8]>> {
         let mut res = Vec::new();
         for e in self.entries.values() {
-            if e.weight >= rng.gen() {
+            if e.weight >= rng.random() {
                 res.push(e.input.clone());
             }
         }
@@ -333,7 +333,7 @@ impl Orchestrator {
             // func_reachcounts: Default::default(),
             // edge_reachcounts: Default::default(),
             module,
-            rng: StdRng::from_entropy(),
+            rng: StdRng::from_os_rng(),
             found_crashes: false,
             corpus,
             init_funcs,
@@ -423,20 +423,21 @@ impl Orchestrator {
         }
 
         let is_saturated = self.coverage_is_saturated();
-        // let apply_memlimit = self.rng.gen_ratio(9, 10);
-        let apply_fuellimit = self.rng.gen_ratio(9, 10);
+        // let apply_memlimit = self.rng.random_ratio(9, 10);
+        let apply_fuellimit = self.rng.random_ratio(9, 10);
 
         // let target_function = None;
         let mut target_edge = None;
         let mut target_bb = None;
 
-        if is_saturated && self.rng.gen_ratio(5, 10) {
+        if is_saturated && self.rng.random_ratio(5, 10) {
             // filter instrumentation sites?
         }
 
         if is_saturated {
-            if self.rng.gen() && !self.frontier_bbs.is_empty() {
-                target_bb = Some(self.frontier_bbs[self.rng.gen_range(0..self.frontier_bbs.len())]);
+            if self.rng.random() && !self.frontier_bbs.is_empty() {
+                target_bb =
+                    Some(self.frontier_bbs[self.rng.random_range(0..self.frontier_bbs.len())]);
             } else {
                 let edges_pass = self.codecov_sess.get_pass::<EdgeCoveragePass>();
                 let edges = edges_pass
@@ -450,7 +451,7 @@ impl Orchestrator {
                     .collect::<Vec<_>>();
                 // TODO: focus on frontier edges?
                 if !edges.is_empty() {
-                    target_edge = Some(edges[self.rng.gen_range(0..edges.len())]);
+                    target_edge = Some(edges[self.rng.random_range(0..edges.len())]);
                 }
             }
         }
@@ -479,7 +480,7 @@ impl Orchestrator {
             let res = res.next_power_of_two();
             res.min(self.codecov_sess.swarm.instruction_limit.unwrap())
         });
-        let memory_limit_pages = 1 << self.rng.gen_range(7..15);
+        let memory_limit_pages = 1 << self.rng.random_range(7..15);
 
         let mut swarm = SwarmConfig::default();
         swarm.instruction_limit =
@@ -492,7 +493,7 @@ impl Orchestrator {
         );
         if matches!(self.opts.experiment, Some(Experiment::SwarmFocusEdge)) {
             if let Some(target_edge) = target_edge {
-                if !self.init_edges.contains(&target_edge) && self.rng.gen_ratio(5, 10) {
+                if !self.init_edges.contains(&target_edge) && self.rng.random_ratio(5, 10) {
                     swarm.must_include_edges.insert(target_edge);
                 }
             }
@@ -505,7 +506,7 @@ impl Orchestrator {
             swarm.discard_short_circuit_coverage = true;
         }
 
-        let extra_musts_and_avoids = self.rng.gen_ratio(5, 10);
+        let extra_musts_and_avoids = self.rng.random_ratio(5, 10);
         if extra_musts_and_avoids {
             // let random_func =
         }
@@ -541,7 +542,7 @@ impl Orchestrator {
 
         if !is_saturated {
             for _ in 0..3 {
-                let opt = match self.rng.gen::<u8>() % 5 {
+                let opt = match self.rng.random::<u8>() % 5 {
                     0 => &mut *cmpcov_absdist,
                     1 => &mut *cmpcov_hamming,
                     2 => &mut *func_input_size_color,
@@ -557,7 +558,7 @@ impl Orchestrator {
             }
         } else {
             for _ in 0..5 {
-                let opt = match self.rng.gen::<u8>() % 19 {
+                let opt = match self.rng.random::<u8>() % 19 {
                     0 => &mut *call_value_profile,
                     1 => &mut *cmpcov_absdist,
                     2 => &mut *cmpcov_hamming,

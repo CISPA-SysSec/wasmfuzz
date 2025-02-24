@@ -682,7 +682,7 @@ pub(crate) fn main() {
             let accessible_size = pages << 12;
             let mapping_size = accessible_size;
             let mut page_offsets = (0..pages).map(|x| x << 12).collect::<Vec<_>>();
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
 
             for provider in &[
                 Provider::Dummy,
