@@ -1,0 +1,40 @@
+diff --git a/crates/zune-jpeg/fuzz/Cargo.toml b/crates/zune-jpeg/fuzz/Cargo.toml
+index 2574dcde..0de2bb82 100644
+--- a/crates/zune-jpeg/fuzz/Cargo.toml
++++ b/crates/zune-jpeg/fuzz/Cargo.toml
+@@ -25,8 +25,9 @@ path = "fuzz_targets/decode_buffer.rs"
+ test = false
+ doc = false
+ 
+-[[bin]]
+-name = "fuzz_idct"
+-path = "fuzz_targets/fuzz_idct.rs"
+-test = false
+-doc = false
++# fuzz_idct targets arch-specific (neon, x86) impls - not applicable for wasm
++#[[bin]]
++#name = "fuzz_idct"
++#path = "fuzz_targets/fuzz_idct.rs"
++#test = false
++#doc = false
+diff --git a/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs b/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs
+index eec5b075..de290ba4 100644
+--- a/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs
++++ b/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs
+@@ -8,6 +8,7 @@
+ 
+ use libfuzzer_sys::fuzz_target;
+ use png::{BitDepth, ColorType, FilterType};
++use std::io::Cursor;
+ 
+ fuzz_target!(|data: (u8, u8, u8, u8, u8, Vec<u8>)| {
+     if let Some((raw, encoded)) = encode_png(data.0, data.1, data.2, data.3, data.4, &data.5)
+@@ -80,7 +81,7 @@ fn encode_png(
+ 
+ fn decode_png(data: &[u8]) -> Vec<u8>
+ {
+-    zune_png::PngDecoder::new(data)
++    zune_png::PngDecoder::new(Cursor::new(data))
+         .decode_raw()
+         .expect("Failed to decode valid input data!")
+ }

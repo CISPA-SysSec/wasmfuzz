@@ -1,0 +1,78 @@
+diff --git a/src/elf/mod.rs b/src/elf/mod.rs
+index 70c4914..a30ebb5 100644
+--- a/src/elf/mod.rs
++++ b/src/elf/mod.rs
+@@ -363,7 +363,7 @@ if_sylvan! {
+                     .chain(pltrelocs.iter())
+                     .fold(0, |num, reloc| cmp::max(num, reloc.r_sym));
+                 if max_reloc_sym != 0 {
+-                    num_syms = cmp::max(num_syms, max_reloc_sym + 1);
++                    num_syms = cmp::max(num_syms, max_reloc_sym.saturating_add(1));
+                 }
+                 dynsyms = Symtab::parse(bytes, dyn_info.symtab, num_syms, ctx)?;
+             }
+@@ -433,10 +433,10 @@ if_sylvan! {
+                                                        buckets_num, min_chain, bloom_size)));
+         }
+         // Find the last bucket.
+-        let buckets_offset = offset + 16 + bloom_size * if ctx.container.is_big() { 8 } else { 4 };
++        let buckets_offset = (offset + 16).saturating_add(bloom_size.saturating_mul(if ctx.container.is_big() { 8 } else { 4 }));
+         let mut max_chain = 0;
+         for bucket in 0..buckets_num {
+-            let chain = bytes.pread_with::<u32>(buckets_offset + bucket * 4, ctx.le)? as usize;
++            let chain = bytes.pread_with::<u32>(buckets_offset.saturating_add(bucket * 4), ctx.le)? as usize;
+             if max_chain < chain {
+                 max_chain = chain;
+             }
+@@ -445,7 +445,7 @@ if_sylvan! {
+             return Ok(0);
+         }
+         // Find the last chain within the bucket.
+-        let mut chain_offset = buckets_offset + buckets_num * 4 + (max_chain - min_chain) * 4;
++        let mut chain_offset = (buckets_offset + buckets_num * 4).saturating_add((max_chain.saturating_sub(min_chain)).saturating_mul(4));
+         loop {
+             let hash = bytes.pread_with::<u32>(chain_offset, ctx.le)?;
+             max_chain += 1;
+diff --git a/src/pe/debug.rs b/src/pe/debug.rs
+index 948840f..518df53 100644
+--- a/src/pe/debug.rs
++++ b/src/pe/debug.rs
+@@ -184,7 +184,7 @@ impl<'a> DebugData<'a> {
+                 })?;
+ 
+         // Ensure that the offset and size do not exceed the length of the bytes slice
+-        if offset + dd.size as usize > bytes.len() {
++        if offset.saturating_add(dd.size as usize) > bytes.len() {
+             return Err(error::Error::Malformed(format!(
+                 "ImageDebugDirectory offset {:#x} and size {:#x} exceeds the bounds of the bytes size {:#x}",
+                 offset, dd.size, bytes.len()
+@@ -729,13 +729,14 @@ impl<'a> POGOInfo<'a> {
+             return Ok(None);
+         }
+ 
+-        if offset + idd.size_of_data as usize - POGO_SIGNATURE_SIZE > bytes.len() {
++        let size_of_data = (idd.size_of_data as usize).saturating_sub(POGO_SIGNATURE_SIZE);
++        if offset.saturating_add(size_of_data) > bytes.len() {
+             return Err(error::Error::Malformed(format!(
+                     "ImageDebugDirectory offset {:#x} and size {:#x} exceeds the bounds of the bytes size {:#x}",
+                     offset, idd.size_of_data, bytes.len()
+                 )));
+         }
+-        let data = &bytes[offset..offset + idd.size_of_data as usize - POGO_SIGNATURE_SIZE];
++        let data = &bytes[offset..offset + size_of_data];
+         Ok(Some(POGOInfo { signature, data }))
+     }
+ 
+diff --git a/src/pe/tls.rs b/src/pe/tls.rs
+index 005b41a..512439e 100644
+--- a/src/pe/tls.rs
++++ b/src/pe/tls.rs
+@@ -227,7 +227,7 @@ impl<'a> TlsData<'a> {
+                         rva
+                     ))
+                 })?;
+-            if offset + size as usize > bytes.len() {
++            if offset.saturating_add(size as usize) > bytes.len() {
+                 return Err(error::Error::Malformed(format!(
+                     "tls raw data offset ({:#x}) and size ({:#x}) greater than byte slice len ({:#x})",
+                     offset, size, bytes.len()

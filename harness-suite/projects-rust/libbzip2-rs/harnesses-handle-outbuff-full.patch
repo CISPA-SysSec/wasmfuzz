@@ -1,0 +1,151 @@
+diff --git a/fuzz/fuzz_targets/compress.rs b/fuzz/fuzz_targets/compress.rs
+index 1d7f548..ccb10db 100644
+--- a/fuzz/fuzz_targets/compress.rs
++++ b/fuzz/fuzz_targets/compress.rs
+@@ -1,8 +1,8 @@
+ #![no_main]
+-use libbz2_rs_sys::BZ_OK;
++use libbz2_rs_sys::{BZ_OK, BZ_OUTBUFF_FULL};
+ use libfuzzer_sys::fuzz_target;
+ 
+-fuzz_target!(|data: String| {
++fuzz_target!(|data: &[u8]| {
+     let length = 8 * 1024;
+     let mut deflated = vec![0; length as usize];
+     let mut length = length as _;
+@@ -16,11 +16,15 @@ fuzz_target!(|data: String| {
+         )
+     };
+ 
++    if error == BZ_OUTBUFF_FULL {
++        return;
++    }
++
+     assert_eq!(error, BZ_OK);
+ 
+     deflated.truncate(length as usize);
+ 
+-    let mut output = [0u8; 1 << 10];
++    let mut output = vec![0u8; data.len()];
+     let mut output_len = output.len() as _;
+     let error = unsafe {
+         test_libbz2_rs_sys::decompress_rs(
+@@ -31,13 +35,12 @@ fuzz_target!(|data: String| {
+         )
+     };
+     assert_eq!(error, BZ_OK);
+-    let output = &output[..output_len as usize];
+ 
+-    if output != data.as_bytes() {
++    if output != data {
+         let path = std::env::temp_dir().join("compressed.txt");
+         std::fs::write(&path, &data).unwrap();
+         eprintln!("saved input file to {path:?}");
+     }
+ 
+-    assert_eq!(output, data.as_bytes());
++    assert_eq!(output, data);
+ });
+diff --git a/fuzz/fuzz_targets/decompress.rs b/fuzz/fuzz_targets/decompress.rs
+index 10bd30d..797740f 100644
+--- a/fuzz/fuzz_targets/decompress.rs
++++ b/fuzz/fuzz_targets/decompress.rs
+@@ -1,5 +1,5 @@
+ #![no_main]
+-use libbz2_rs_sys::BZ_OK;
++use libbz2_rs_sys::{BZ_OK, BZ_OUTBUFF_FULL};
+ use libfuzzer_sys::fuzz_target;
+ 
+ fn decompress_help(input: &[u8]) -> Vec<u8> {
+@@ -22,7 +22,7 @@ fn decompress_help(input: &[u8]) -> Vec<u8> {
+     dest_vec
+ }
+ 
+-fuzz_target!(|data: String| {
++fuzz_target!(|data: &[u8]| {
+     let mut length = 8 * 1024;
+     let mut deflated = vec![0; length as usize];
+ 
+@@ -36,17 +36,21 @@ fuzz_target!(|data: String| {
+         )
+     };
+ 
++    if error == BZ_OUTBUFF_FULL {
++        return;
++    }
++
+     assert_eq!(error, BZ_OK);
+ 
+     deflated.truncate(length as _);
+ 
+     let output = decompress_help(&deflated);
+ 
+-    if output != data.as_bytes() {
++    if output != data {
+         let path = std::env::temp_dir().join("deflate.txt");
+         std::fs::write(&path, &data).unwrap();
+         eprintln!("saved input file to {path:?}");
+     }
+ 
+-    assert_eq!(output, data.as_bytes());
++    assert_eq!(output, data);
+ });
+diff --git a/fuzz/fuzz_targets/decompress_chunked.rs b/fuzz/fuzz_targets/decompress_chunked.rs
+index 40c0d4e..44d6a05 100644
+--- a/fuzz/fuzz_targets/decompress_chunked.rs
++++ b/fuzz/fuzz_targets/decompress_chunked.rs
+@@ -1,5 +1,5 @@
+ #![no_main]
+-use libbz2_rs_sys::{BZ_FINISH, BZ_OK, BZ_STREAM_END};
++use libbz2_rs_sys::{BZ_FINISH, BZ_OK, BZ_OUTBUFF_FULL, BZ_STREAM_END};
+ use libfuzzer_sys::fuzz_target;
+ 
+ fn compress_c(data: &[u8]) -> Vec<u8> {
+@@ -45,14 +45,14 @@ fn compress_c(data: &[u8]) -> Vec<u8> {
+     deflated
+ }
+ 
+-fuzz_target!(|input: (String, usize)| {
++fuzz_target!(|input: (&[u8], usize)| {
+     let (data, chunk_size) = input;
+ 
+     if chunk_size == 0 {
+         return;
+     }
+ 
+-    let deflated = compress_c(data.as_bytes());
++    let deflated = compress_c(data);
+ 
+     let mut stream = libbz2_rs_sys::bz_stream::zeroed();
+ 
+@@ -73,6 +73,9 @@ fuzz_target!(|input: (String, usize)| {
+         match err {
+             BZ_OK => continue,
+             BZ_STREAM_END => continue,
++            BZ_OUTBUFF_FULL => {
++                panic!("output buffer is full");
++            }
+             _ => {
+                 panic!("{err}");
+             }
+@@ -84,7 +87,6 @@ fuzz_target!(|input: (String, usize)| {
+             .try_into()
+             .unwrap(),
+     );
+-    let output = String::from_utf8(output).unwrap();
+ 
+     unsafe {
+         let err = libbz2_rs_sys::BZ2_bzDecompressEnd(&mut stream);
+diff --git a/fuzz/fuzz_targets/decompress_random_input.rs b/fuzz/fuzz_targets/decompress_random_input.rs
+index e896496..987a7a2 100644
+--- a/fuzz/fuzz_targets/decompress_random_input.rs
++++ b/fuzz/fuzz_targets/decompress_random_input.rs
+@@ -2,7 +2,7 @@
+ use libbz2_rs_sys::BZ_OK;
+ use libfuzzer_sys::fuzz_target;
+ 
+-fuzz_target!(|source: Vec<u8>| {
++fuzz_target!(|source: &[u8]| {
+     let mut dest_c = vec![0u8; 1 << 16];
+     let mut dest_rs = vec![0u8; 1 << 16];
+ 

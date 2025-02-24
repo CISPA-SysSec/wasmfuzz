@@ -17,7 +17,7 @@ parser.add_argument('--init-toolchain', action='store_true')
 args = parser.parse_args()
 
 WASM_V2 = True
-RUSTUP_TOOLCHAIN = "nightly-2024-12-11"
+RUSTUP_TOOLCHAIN = "nightly-2025-02-13"
 TARGET_TRIPLE = "wasm32-wasip1"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
@@ -138,7 +138,10 @@ def build_harnesses():
         bins_path /= "debug" if args.debug else "release"
         for wasm in bins_path.glob("*.wasm"):
             print(wasm)
-            slug = wasm.parts[2] + "-" + wasm.stem.replace("-fuzzer", "").replace("_fuzzer", "")
+            slug = wasm.parts[2]
+            if "crates" in wasm.parts:
+                slug += "-" + wasm.parts[wasm.parts.index("crates")+1]
+            slug += "-" + wasm.stem.replace("-fuzzer", "").replace("_fuzzer", "")
             if args.debug:
                 slug += "-dbg"
             shutil.copyfile(wasm, OUT / f"{slug}.wasm")
