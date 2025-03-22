@@ -40,7 +40,7 @@ pub(crate) struct CliOpts {
     #[clap(long)]
     pub live_html_coverage: Option<PathBuf>,
 
-    #[clap(long)]
+    #[clap(long, env)]
     pub experiment: Option<Experiment>,
 
     #[clap(long, default_value = "30m")]
@@ -80,7 +80,7 @@ enum OrcMessage {
     ReqLoadCorpus(Vec<Vec<u8>>),
 
     RespOk,
-    RespSuggest(Config),
+    RespSuggest(Box<Config>),
     RespShouldContinue(bool),
     RespInvalid,
 }
@@ -98,7 +98,7 @@ impl OrchestratorHandle {
                 let mut orc = Orchestrator::new(module, opts, corpus_);
                 while let Ok((req, tx)) = rx.recv() {
                     let resp = match req {
-                        OrcMessage::ReqSuggest => OrcMessage::RespSuggest(orc.suggest()),
+                        OrcMessage::ReqSuggest => OrcMessage::RespSuggest(orc.suggest().into()),
                         OrcMessage::ReqShouldContinue => {
                             OrcMessage::RespShouldContinue(orc.should_continue())
                         }
@@ -143,7 +143,7 @@ impl OrchestratorHandle {
     pub fn suggest(&self) -> Config {
         let resp = self.req(OrcMessage::ReqSuggest);
         match resp {
-            OrcMessage::RespSuggest(config) => config,
+            OrcMessage::RespSuggest(config) => *config,
             _ => unreachable!(),
         }
     }
