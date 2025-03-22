@@ -79,6 +79,8 @@ pub(crate) struct InstrumentationOpts {
     #[clap(long, default_value = "false")]
     pub perffuzz_edge: FlagBool,
     #[clap(long, default_value = "false")]
+    pub func_rec_depth: FlagBool,
+    #[clap(long, default_value = "false")]
     pub call_value_profile: FlagBool,
     #[clap(long, default_value = "true")]
     pub cov_func_input_size: FlagBool,
@@ -116,6 +118,7 @@ impl InstrumentationOpts {
             perffuzz_bb,
             perffuzz_edge_local,
             perffuzz_edge,
+            func_rec_depth,
             call_value_profile,
             cov_func_input_size,
             cov_func_input_size_cyclic,
@@ -139,6 +142,7 @@ impl InstrumentationOpts {
             perffuzz_bb: **perffuzz_bb,
             perffuzz_edge: **perffuzz_edge_local,
             perffuzz_edge_global: **perffuzz_edge,
+            func_rec_depth: **func_rec_depth,
             call_value_profile: **call_value_profile,
             func_input_size: **cov_func_input_size,
             func_input_size_cyclic: **cov_func_input_size_cyclic,

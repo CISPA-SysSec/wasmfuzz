@@ -15,7 +15,6 @@ use crate::{
     ir::{InsnIdx, Location, MemoryInstruction, ModuleSpec, WFOperator},
     AbortCode,
 };
-
 use super::{
     builtins::{
         builtin_debug_wasmfuzz_write_stdout, builtin_memory_copy, builtin_memory_fill,

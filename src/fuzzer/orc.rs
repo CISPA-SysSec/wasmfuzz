@@ -90,41 +90,46 @@ impl OrchestratorHandle {
         let (tx, rx) = mpsc::channel::<(OrcMessage, mpsc::SyncSender<OrcMessage>)>();
         let corpus = SharedCorpus::new(&opts);
         let corpus_ = corpus.clone();
-        let _thread_handle = std::thread::spawn(move || {
-            let mut orc = Orchestrator::new(module, opts, corpus_);
-            while let Ok((req, tx)) = rx.recv() {
-                let resp = match req {
-                    OrcMessage::ReqSuggest => OrcMessage::RespSuggest(orc.suggest()),
-                    OrcMessage::ReqShouldContinue => {
-                        OrcMessage::RespShouldContinue(orc.should_continue())
-                    }
-                    OrcMessage::ReqReportFinds(finds) => {
-                        let mut update_live_coverage = false;
-                        for input in finds {
-                            let res = orc.report_find(&input);
-                            update_live_coverage |= res.map(|x| x.novel_coverage).unwrap_or(false);
+
+        let _thread_handle = std::thread::Builder::new()
+            .stack_size(32 << 20) // TODO: look into why generated code doesn't probe the stack any more?
+            .name("orchestrator".to_owned())
+            .spawn(move || {
+                let mut orc = Orchestrator::new(module, opts, corpus_);
+                while let Ok((req, tx)) = rx.recv() {
+                    let resp = match req {
+                        OrcMessage::ReqSuggest => OrcMessage::RespSuggest(orc.suggest()),
+                        OrcMessage::ReqShouldContinue => {
+                            OrcMessage::RespShouldContinue(orc.should_continue())
                         }
-                        orc.corpus.write().unwrap().cull_and_update_weights();
-                        if update_live_coverage {
+                        OrcMessage::ReqReportFinds(finds) => {
+                            let mut update_live_coverage = false;
+                            for input in finds {
+                                let res = orc.report_find(&input);
+                                update_live_coverage |=
+                                    res.map(|x| x.novel_coverage).unwrap_or(false);
+                            }
+                            orc.corpus.write().unwrap().cull_and_update_weights();
+                            if update_live_coverage {
+                                orc.update_live_coverage();
+                                orc.frontier_bbs = orc.compute_frontier().into_iter().collect();
+                            }
+                            OrcMessage::RespOk
+                        }
+                        OrcMessage::ReqShutdown => {
+                            tx.send(OrcMessage::RespOk).unwrap();
+                            break;
+                        }
+                        OrcMessage::ReqLoadCorpus(corpus) => {
+                            let _ = orc.load_corpus(&corpus);
                             orc.update_live_coverage();
-                            orc.frontier_bbs = orc.compute_frontier().into_iter().collect();
+                            OrcMessage::RespOk
                         }
-                        OrcMessage::RespOk
-                    }
-                    OrcMessage::ReqShutdown => {
-                        tx.send(OrcMessage::RespOk).unwrap();
-                        break;
-                    }
-                    OrcMessage::ReqLoadCorpus(corpus) => {
-                        let _ = orc.load_corpus(&corpus);
-                        orc.update_live_coverage();
-                        OrcMessage::RespOk
-                    }
-                    _ => OrcMessage::RespInvalid,
-                };
-                tx.send(resp).unwrap();
-            }
-        });
+                        _ => OrcMessage::RespInvalid,
+                    };
+                    tx.send(resp).unwrap();
+                }
+            });
 
         Self { chan: tx, corpus }
     }
@@ -403,7 +408,8 @@ impl Orchestrator {
             let instruction_limit =
                 (self.config_epoch != 3).then_some(1_000_000 * self.config_epoch as u64);
             let instruction_limit = Some(instruction_limit.unwrap_or(750_000_000)); // TODO
-            let swarm = SwarmConfig::from_instruction_limit(instruction_limit);
+            let mut swarm = SwarmConfig::from_instruction_limit(instruction_limit);
+            swarm.input_size_limit = Some(1024 * self.config_epoch as u32);
             // First config: no additional feedback guidance.
             let mut opts = FeedbackOptions::minimal_code_coverage();
             opts.cmpcov_hamming = true;
@@ -481,34 +487,35 @@ impl Orchestrator {
             res.min(self.codecov_sess.swarm.instruction_limit.unwrap())
         });
         let memory_limit_pages = 1 << self.rng.random_range(7..15);
+        let input_size_limit = *[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536 - 1]
+            .choose(&mut self.rng)
+            .unwrap();
 
         let mut swarm = SwarmConfig::default();
         swarm.instruction_limit =
             Some(fuel_limit.unwrap_or(self.codecov_sess.swarm.instruction_limit.unwrap()));
         swarm.memory_limit_pages = Some(memory_limit_pages);
-        swarm.input_size_limit = Some(
-            *[1024, 4096, 16384, 32768, u16::MAX as u32]
-                .choose(&mut self.rng)
-                .unwrap(),
-        );
-        if matches!(self.opts.experiment, Some(Experiment::SwarmFocusEdge)) {
-            if let Some(target_edge) = target_edge {
-                if !self.init_edges.contains(&target_edge) && self.rng.random_ratio(5, 10) {
-                    swarm.must_include_edges.insert(target_edge);
+        swarm.input_size_limit = Some(input_size_limit);
+
+        let extra_musts_and_avoids = self.rng.random_ratio(5, 10);
+        if extra_musts_and_avoids {
+            // TODO: evaluate this
+            if matches!(self.opts.experiment, Some(Experiment::SwarmFocusEdge)) {
+                if let Some(target_edge) = target_edge {
+                    if !self.init_edges.contains(&target_edge) && self.rng.random_ratio(5, 10) {
+                        swarm.must_include_edges.insert(target_edge);
+                    }
+                }
+                if let Some(target_bb) = target_bb {
+                    swarm.must_include_bbs.insert(target_bb);
                 }
             }
-            if let Some(target_bb) = target_bb {
-                swarm.must_include_bbs.insert(target_bb);
-            }
+
+            // TODO: add extra musts and avoids
         }
 
         if !swarm.must_include_bbs.is_empty() || !swarm.must_include_edges.is_empty() {
             swarm.discard_short_circuit_coverage = true;
-        }
-
-        let extra_musts_and_avoids = self.rng.random_ratio(5, 10);
-        if extra_musts_and_avoids {
-            // let random_func =
         }
 
         let mut opts = FeedbackOptions::nothing();
@@ -522,6 +529,7 @@ impl Orchestrator {
             perffuzz_bb,
             perffuzz_edge,
             perffuzz_edge_global,
+            func_rec_depth,
             call_value_profile,
             func_input_size,
             func_input_size_cyclic,
@@ -558,7 +566,7 @@ impl Orchestrator {
             }
         } else {
             for _ in 0..5 {
-                let opt = match self.rng.random::<u8>() % 19 {
+                let opt = match self.rng.random::<u8>() % 20 {
                     0 => &mut *call_value_profile,
                     1 => &mut *cmpcov_absdist,
                     2 => &mut *cmpcov_hamming,
@@ -566,18 +574,19 @@ impl Orchestrator {
                     4 => &mut *perffuzz_bb,
                     5 => &mut *perffuzz_edge,
                     6 => &mut *perffuzz_edge_global,
-                    7 => &mut *call_value_profile,
-                    8 => &mut *func_input_size,
-                    9 => &mut *func_input_size_cyclic,
-                    10 => &mut *func_input_size_color,
-                    11 => &mut *memory_op_value,
-                    12 => &mut *memory_op_address,
-                    13 => &mut *memory_store_prev_value,
-                    14 => &mut *path_hash_func,
-                    15 => &mut *path_hash_edge,
-                    16 => &mut *func_shortest_trace,
-                    17 => &mut *edge_shortest_trace,
-                    18 => &mut *func_longest_trace,
+                    7 => &mut *func_rec_depth,
+                    8 => &mut *call_value_profile,
+                    9 => &mut *func_input_size,
+                    10 => &mut *func_input_size_cyclic,
+                    11 => &mut *func_input_size_color,
+                    12 => &mut *memory_op_value,
+                    13 => &mut *memory_op_address,
+                    14 => &mut *memory_store_prev_value,
+                    15 => &mut *path_hash_func,
+                    16 => &mut *path_hash_edge,
+                    17 => &mut *func_shortest_trace,
+                    18 => &mut *edge_shortest_trace,
+                    19 => &mut *func_longest_trace,
                     _ => unreachable!(),
                 };
                 if *opt {
@@ -724,6 +733,7 @@ impl PassesGen for OrcPassesGen {
             perffuzz_bb,
             perffuzz_edge,
             perffuzz_edge_global,
+            func_rec_depth,
             call_value_profile,
             func_input_size,
             func_input_size_cyclic,
@@ -792,10 +802,6 @@ impl PassesGen for OrcPassesGen {
             perffuzz_func,
             PerffuzzFunctionPass::new(&self.spec, key_filter)
         );
-        add_pass!(
-            perffuzz_func,
-            FunctionRecursionDepthPass::new(&self.spec, key_filter)
-        );
         add_pass!(perffuzz_bb, PerffuzzBBPass::new(&self.spec, key_filter));
         add_pass!(
             perffuzz_edge,
@@ -804,6 +810,10 @@ impl PassesGen for OrcPassesGen {
         add_pass!(
             perffuzz_edge_global,
             PerffuzzEdgePass::new(&self.spec, key_filter)
+        );
+        add_pass!(
+            func_rec_depth,
+            FunctionRecursionDepthPass::new(&self.spec, key_filter)
         );
 
         add_pass!(

@@ -299,6 +299,7 @@ impl PassesGen for FullFeedbackPasses {
             perffuzz_bb,
             perffuzz_edge,
             perffuzz_edge_global,
+            func_rec_depth,
             call_value_profile,
             func_input_size,
             func_input_size_cyclic,
@@ -357,10 +358,6 @@ impl PassesGen for FullFeedbackPasses {
         );
 
         add_pass!(perffuzz_func, PerffuzzFunctionPass::new(&self.spec, filter));
-        add_pass!(
-            perffuzz_func,
-            FunctionRecursionDepthPass::new(&self.spec, filter)
-        );
         add_pass!(perffuzz_bb, PerffuzzBBPass::new(&self.spec, filter));
         add_pass!(
             perffuzz_edge,
@@ -369,6 +366,10 @@ impl PassesGen for FullFeedbackPasses {
         add_pass!(
             perffuzz_edge_global,
             PerffuzzEdgePass::new(&self.spec, filter)
+        );
+        add_pass!(
+            func_rec_depth,
+            FunctionRecursionDepthPass::new(&self.spec, filter)
         );
 
         add_pass!(
@@ -517,6 +518,7 @@ pub(crate) struct FeedbackOptions {
     pub perffuzz_bb: bool,
     pub perffuzz_edge: bool,
     pub perffuzz_edge_global: bool,
+    pub func_rec_depth: bool,
     // TODO: this also enables cmp value profile. rename or split?
     pub call_value_profile: bool,
     // TODO: add arithmetic value profiles? maybe just 8bit?
@@ -554,6 +556,7 @@ impl FeedbackOptions {
             perffuzz_bb: false,
             perffuzz_edge: false,
             perffuzz_edge_global: false,
+            func_rec_depth: false,
             call_value_profile: false,
             func_input_size: false,
             func_input_size_cyclic: false,
@@ -580,6 +583,7 @@ impl FeedbackOptions {
             perffuzz_bb: true,
             perffuzz_edge: true,
             perffuzz_edge_global: true,
+            func_rec_depth: true,
             call_value_profile: true,
             func_input_size: true,
             func_input_size_cyclic: true,

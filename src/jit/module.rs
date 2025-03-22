@@ -75,8 +75,6 @@ impl TrapKind {
 fn isa(opts: &CompilationOptions) -> Arc<dyn isa::TargetIsa> {
     let mut flag_builder = settings::builder();
 
-    flag_builder.set("is_pic", "true").unwrap();
-
     // --set opt_level=speed_and_size --set enable_heap_access_spectre_mitigation=false
     flag_builder.set("opt_level", "speed_and_size").unwrap();
     flag_builder
