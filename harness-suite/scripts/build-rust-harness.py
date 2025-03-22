@@ -3,6 +3,7 @@ import subprocess
 import os
 import shutil
 import argparse
+import tomllib
 from pathlib import Path
 
 # Note: Python's stdlib doesn't currently support writing TOML files
@@ -17,7 +18,7 @@ parser.add_argument('--init-toolchain', action='store_true')
 args = parser.parse_args()
 
 WASM_V2 = True
-RUSTUP_TOOLCHAIN = "nightly-2025-02-13"
+RUSTUP_TOOLCHAIN = "nightly-2025-03-18"
 TARGET_TRIPLE = "wasm32-wasip1"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
@@ -55,6 +56,7 @@ def build_folder(folder, verb="build"):
         env["CFLAGS"] = f"--sysroot {WASI_SYSROOT}"
     env["PKG_CONFIG_SYSROOT_DIR"] = WASI_SYSROOT
     env["RUSTFLAGS"] = "-C target-feature=+crt-static"
+    env["RUSTFLAGS"] = "-C target-cpu=lime1"
     env["RUSTFLAGS"] += " -Zwasi-exec-model=reactor"
     env["RUSTFLAGS"] += " --cfg=fuzzing"
 
@@ -112,6 +114,15 @@ libfuzzer-sys = "0.4.0"\
     build_folder(dir, verb="check")
     shutil.rmtree(dir)
 
+def is_cargo_fuzz_manifest(path):
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+        metadata = data.get("package", {}).get("metadata", {})
+        return "cargo-fuzz" in metadata
+    except tomllib.TOMLDecodeError as e:
+        print(e)
+        return False
 
 def build_harnesses():
     OUT = Path("/out/")
@@ -119,23 +130,22 @@ def build_harnesses():
     folders = [
         cargo_toml.parent
         for cargo_toml in Path(args.workdir).glob("**/Cargo.toml")
-        if "cargo-fuzz = true" in open(cargo_toml, "r").read()
+        if is_cargo_fuzz_manifest(cargo_toml)
     ]
 
     for folder in folders:
         print(f"{folder = }")
-
-        with open(f"{folder}/Cargo.toml") as f:
-            data = f.read()
-            if "libfuzzer-sys" not in data:
-                print("[!] doesn't appear to be a cargo-fuzz harness")
-                continue
-
         patch_cargo_toml(f"{folder}/Cargo.toml")
         build_folder(folder)
 
-        bins_path = Path(folder) / "target" / TARGET_TRIPLE
+        # find target folder (depends on workspace setup)
+        folder_ = Path(folder)
+        for _ in range(5):
+            bins_path = folder_ / "target" / TARGET_TRIPLE
+            if bins_path.exists(): break
+            folder_ = folder_.parent
         bins_path /= "debug" if args.debug else "release"
+
         for wasm in bins_path.glob("*.wasm"):
             print(wasm)
             slug = wasm.parts[2]

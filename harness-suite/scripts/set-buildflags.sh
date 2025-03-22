@@ -5,7 +5,7 @@ export CXX="$WASI_SDK_PREFIX/bin/clang++"
 export LD="$WASI_SDK_PREFIX/bin/wasm-ld"
 export PATH="$WASI_SDK_PREFIX/bin/:$PATH"
 
-TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi"
+TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi" # -mcpu=lime1"
 
 
 # export CCFLAGS="-g -gdwarf-5 -gembed-source -O0 -flto -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION"
