@@ -17,22 +17,6 @@ index 905095d..f901040 100644
      }
  });
 +*/
-diff --git a/openpgp/fuzz/fuzz_targets/decrypt_from_bytes.rs b/openpgp/fuzz/fuzz_targets/decrypt_from_bytes.rs
-index 517a936..342906c 100644
---- a/openpgp/fuzz/fuzz_targets/decrypt_from_bytes.rs
-+++ b/openpgp/fuzz/fuzz_targets/decrypt_from_bytes.rs
-@@ -71,9 +71,9 @@ fuzz_target!(|data: &[u8]| -> Corpus {
-         fn decrypt<D>(&mut self, _: &[PKESK], _: &[SKESK],
-                       _sym_algo: Option<SymmetricAlgorithm>,
-                       mut decrypt: D) -> Result<Option<openpgp::Fingerprint>>
--        where D: FnMut(SymmetricAlgorithm, &SessionKey) -> bool
-+        where D: FnMut(Option<SymmetricAlgorithm>, &SessionKey) -> bool
-         {
--            decrypt(SymmetricAlgorithm::AES128, &SK);
-+            decrypt(Some(SymmetricAlgorithm::AES128), &SK);
-             Ok(Some(FP.clone()))
-         }
-     }
 diff --git a/openpgp/src/parse.rs b/openpgp/src/parse.rs
 index 6a8a1df..ed07026 100644
 --- a/openpgp/src/parse.rs

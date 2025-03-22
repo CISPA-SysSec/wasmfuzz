@@ -1,0 +1,20 @@
+diff --git a/expat/CMakeLists.txt b/expat/CMakeLists.txt
+index 2fc59ef1..fdbf1857 100644
+--- a/expat/CMakeLists.txt
++++ b/expat/CMakeLists.txt
+@@ -760,6 +760,7 @@ if(EXPAT_BUILD_FUZZERS)
+         endforeach()
+     endforeach()
+ 
++    if(FALSE)
+     find_package(Protobuf REQUIRED)
+ 
+     # Only include libprotobuf-mutator here so we don't build it in non-fuzz
+@@ -816,6 +817,7 @@ if(EXPAT_BUILD_FUZZERS)
+         target_link_options(xml_lpm_fuzzer PRIVATE -fsanitize=fuzzer)
+     endif()
+     set_property(TARGET xml_lpm_fuzzer PROPERTY RUNTIME_OUTPUT_DIRECTORY fuzz)
++    endif()
+ else()
+     if(EXPAT_OSSFUZZ_BUILD)
+         message(SEND_ERROR

@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/gfx-rs/wgpu.git "$PROJECT/repo" d8833d079833c62b4fd00325d0ba08ec0c8bc309
+git clone-rev.sh https://github.com/gfx-rs/wgpu.git "$PROJECT/repo" d55bb2956a2391e3cd003b837bb406b4c1440bc7
 git -C "$PROJECT/repo" apply "$PROJECT/huh.patch"
