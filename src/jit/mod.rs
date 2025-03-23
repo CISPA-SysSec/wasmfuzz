@@ -1006,7 +1006,11 @@ impl JitFuzzingSession {
         let start = Instant::now();
         stats.reusable_stage_executions += 1;
         if !self.run_from_snapshot {
-            self.reusable_exec_history.push(inp.to_vec());
+            if inp.len() <= 1024 && self.reusable_exec_history.len() <= 1024 {
+                self.reusable_exec_history.push(inp.to_vec());
+            } else {
+                self.reusable_exec_history.push(Vec::new());
+            }
         }
         self.reusable_stage.ensure_init(
             &self.spec,
@@ -1059,7 +1063,12 @@ impl JitFuzzingSession {
     }
 
     pub(crate) fn run(&mut self, inp: &[u8], stats: &mut Stats) -> RunResult {
-        self.run_reusable(inp, true, stats)
+        if !self.run_from_snapshot && self.reusable_exec_history.len() > 100_000 {
+            // periodically reset state and execution history when running without snapshots
+            self.run_reusable_fresh(inp, true, stats)
+        } else {
+            self.run_reusable(inp, true, stats)
+        }
     }
 
     pub(crate) fn run_reusable_fresh(
