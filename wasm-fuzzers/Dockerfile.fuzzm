@@ -1,6 +1,7 @@
 FROM wasm-fuzzers-wasm2c-base
-RUN apt-get install -y build-essential curl git pkg-config libssl-dev
-RUN git clone https://github.com/fuzzm/fuzzm-project
+RUN apt-get install -y build-essential curl git pkg-config libssl-dev rsync patchelf
+RUN git clone https://github.com/Mrmaxmeier/fuzzm-project
+RUN git -C fuzzm-project checkout 30d75154f035a4aa18daf80d6ff3fd2a1767ad22
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain stable -y
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -8,7 +9,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN apt-get update && apt-get install -y llvm llvm-dev clang
 
 WORKDIR /fuzzm-project/wasm_instrumenter
-RUN sed -i 's/wasabi"/wasabi", rev="519da3ced4e1ae11daeea39f3588bb89643bb7bb"/' Cargo.toml 
+Run sed -i 's/danleh/Mrmaxmeier/' Cargo.toml && sed -i 's/21a322b7faac9440b931762aae124ffa57d0fa17/c239a5d895cd3f7f33d05dbc8c5f23ef666faf4a/' Cargo.toml
 RUN cargo update && cargo install --path .
 
 WORKDIR /fuzzm-project
@@ -16,7 +17,22 @@ RUN wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-11/w
     tar xvf wasi-sdk-11.0-linux.tar.gz
 RUN cd AFL-wasm && make install
 
-COPY fuzzm.sh run-afl-fuzz.sh /usr/bin/fuzzm.sh
+WORKDIR /
+COPY fuzzm-wasmtime-0.20-fix-cpuid.patch /tmp/
+RUN git clone https://github.com/bytecodealliance/wasmtime && \
+    cd wasmtime && \
+    git checkout v0.20.0 && \
+    git submodule update --init && \
+    git apply /tmp/fuzzm-wasmtime-0.20-fix-cpuid.patch && \
+    cd crates/c-api && \
+    cargo build --release && \
+    cp /wasmtime/target/release/libwasmtime.so /usr/local/lib/libwasmtime.so && \
+    rm -rf /wasmtime
+
+RUN patchelf --remove-needed libwasmtime.so /usr/local/bin/afl-fuzz && \
+    patchelf --add-needed /usr/local/lib/libwasmtime.so /usr/local/bin/afl-fuzz
+
+COPY fuzzm.sh shim-for-wafl.sh run-afl-fuzz.sh /usr/bin/
 RUN chmod +x /usr/bin/fuzzm.sh /usr/bin/run-afl-fuzz.sh
 WORKDIR /
 ENTRYPOINT [ "fuzzm.sh" ]

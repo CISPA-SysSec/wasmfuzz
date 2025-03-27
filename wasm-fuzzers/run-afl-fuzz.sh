@@ -19,11 +19,13 @@ function syncForever() {
 mkdir -p /sync/
 syncForever &
 
-afl-fuzz -G 4096 -i /seeds -o /sync -M default $@ &
+AFL_OPTS="${AFL_MEMLIMIT_OPTS:- -G 4096} -i /seeds -o /sync"
+
+afl-fuzz $AFL_OPTS -M default $@ &
 pids["1"]=$!
 for i in $(seq 2 "${FUZZER_CORES:-1}")
 do
-    afl-fuzz -G 4096 -i /seeds -o /sync -S "core-$i" $@ > /dev/null &
+    afl-fuzz $AFL_OPTS -S "core-$i" $@ > /dev/null &
     pids[${i}]=$!
 done
 for pid in ${pids[*]}; do

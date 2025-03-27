@@ -123,3 +123,13 @@ A [FuzzM](https://github.com/fuzzm/fuzzm-project) container is included but we'r
 
 - `symbolic` only supports DWARF embedded sources at exactly v12.10.0-v12.11.1: [[Upstream PR]](https://github.com/getsentry/symbolic/pull/849)
 
+#### Fuzzer Integration
+
+- We're using a patched version of WAFL that side-steps a crash when using WASM modules that have symbols: [[Upstream PR]](https://github.com/fgsect/WAFL/pull/10)
+
+- We have applied several patches to FuzzM in order to be able to run our WASM modules:
+    * Wasmtime: Avoid assertion failure in `raw-cpuid` crate: [fuzzm-wasmtime-0.20-fix-cpuid.patch](wasm-fuzzers/fuzzm-wasmtime-0.20-fix-cpuid.patch)
+    * Wasabi: Support the Lime1 extensions by @doehyunbaek [[Upstream PR]](https://github.com/danleh/wasabi/pull/41)
+    * Wasabi: Fix parser error with overlong `call_indirect` encoding [[Upstream PR]](https://github.com/doehyunbaek/wasabi/pull/1)
+    * FuzzM: Adjust for Wasabi changes [[Upstream PR]](https://github.com/fuzzm/fuzzm-project/pull/6)
+
