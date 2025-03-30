@@ -72,11 +72,7 @@ impl FeedbackLattice for ValueRange {
         }
     }
     fn as_linear_score(&self) -> Option<u64> {
-        Some(if self.low >= self.high {
-            0
-        } else {
-            self.high - self.low
-        })
+        Some(self.high.saturating_sub(self.low))
     }
     fn bottom() -> Self {
         Self {

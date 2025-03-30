@@ -895,11 +895,8 @@ impl JitFuzzingSessionBuilder {
         self
     }
 
-    pub(crate) fn optimize_for_compilation_time(
-        mut self,
-        optimize_for_compilation_time: bool,
-    ) -> Self {
-        self.optimize_for_compilation_time = optimize_for_compilation_time;
+    pub(crate) fn optimize_for_compilation_time(mut self, val: bool) -> Self {
+        self.optimize_for_compilation_time = val;
         self
     }
 }

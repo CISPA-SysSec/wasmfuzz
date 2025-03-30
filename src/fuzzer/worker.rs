@@ -163,9 +163,10 @@ impl Worker {
     // Note: this should be the first time we run the input
     fn on_corpus(&mut self, input: &[u8], is_seed: bool) -> Result<InputVerdict, libafl::Error> {
         tracy_full::zone!("Worker::on_corpus");
+        let ignore_crashes = *self.opts.x.fuzz_through_crashes;
         if !*self.opts.x.run_from_snapshot {
             let res = self.sess.run_reusable(input, false, &mut self.stats);
-            if res.is_crash() {
+            if res.is_crash() && !ignore_crashes {
                 self.last_crasher = Some(input.to_vec());
                 return Ok(InputVerdict::Crashed);
             }
@@ -176,7 +177,7 @@ impl Worker {
 
         // make sure we catch inputs that crash on fresh instances but not on used ones (TODO?)
         let res = self.sess.run_reusable_fresh(input, false, &mut self.stats);
-        if res.is_crash() {
+        if res.is_crash() && !ignore_crashes {
             self.last_crasher = Some(input.to_vec());
             return Ok(InputVerdict::Crashed);
         }
@@ -348,12 +349,14 @@ impl Worker {
     }
 
     fn run_(&mut self) -> Result<WorkerExit, libafl::Error> {
+        let ignore_crashes = *self.opts.x.fuzz_through_crashes;
         let first_run = self.corpus.is_empty();
         if first_run {
             self.sess.reset_pass_coverage();
             self.sess.initialize(&mut self.stats);
             match self.initialize_corpus() {
                 Ok(_) => (),
+                Err(CrashOrLibAFLError::Crash) if ignore_crashes => (),
                 Err(CrashOrLibAFLError::Crash) => return Ok(WorkerExit::CrashFound),
                 Err(CrashOrLibAFLError::LibAFLError(e)) => return Err(e),
             };
@@ -428,6 +431,7 @@ impl Worker {
                     let _interesting = match self.run_input(input.as_ref())? {
                         InputVerdict::Interesting => true,
                         InputVerdict::NotInteresting => false,
+                        InputVerdict::Crashed if ignore_crashes => unreachable!(),
                         InputVerdict::Crashed => return Ok(WorkerExit::CrashFound),
                     };
                     if _interesting {
@@ -489,6 +493,7 @@ impl Worker {
                 let _interesting = match self.run_input(input.as_ref())? {
                     InputVerdict::Interesting => true,
                     InputVerdict::NotInteresting => false,
+                    InputVerdict::Crashed if ignore_crashes => unreachable!(),
                     InputVerdict::Crashed => return Ok(WorkerExit::CrashFound),
                 };
                 if _interesting {
@@ -611,7 +616,8 @@ impl Worker {
         tracy_full::zone!("Worker::run_input");
         assert!(input.len() <= self.sess.swarm.input_alloc_size());
         let res = self.sess.run(input, &mut self.stats);
-        if res.is_crash() {
+        let ignore_crashes = *self.opts.x.fuzz_through_crashes;
+        if res.is_crash() && !ignore_crashes {
             self.save_input(input);
             self.bus.send(Message::Testcase {
                 input: Arc::new(input.to_vec()),

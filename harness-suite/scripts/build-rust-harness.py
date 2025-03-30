@@ -17,7 +17,6 @@ parser.add_argument('--small-stack', action='store_true')
 parser.add_argument('--init-toolchain', action='store_true')
 args = parser.parse_args()
 
-WASM_V2 = True
 RUSTUP_TOOLCHAIN = "nightly-2025-03-18"
 TARGET_TRIPLE = "wasm32-wasip1"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
@@ -71,21 +70,16 @@ def build_folder(folder, verb="build"):
     if args.debug_assertions:
         env["CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS"] = "true"
         env["CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS"] = "true"
-    if WASM_V2:
-        # rustc --print target-features --target=wasm32-wasip1
-        # env["RUSTFLAGS"] += " -C target-feature=+bulk-memory,+mutable-globals,+nontrapping-fptoint,+sign-ext"
-        env["RUSTFLAGS"] += " -C target-feature=+bulk-memory,+nontrapping-fptoint,+sign-ext"
-        # env["RUSTFLAGS"] += " -C target-feature=+multivalue"
-        # https://github.com/rust-lang/rust/issues/83940
     if args.small_stack:
         # default: 16 pages, 1MB
         #    smol: 1 page, 64kb
         env["RUSTFLAGS"] += f" -C link-arg=-zstack-size={1<<16}"
     # embed build-id (requires LLVM 17)
-    env["RUSTFLAGS"] += f" -C link-arg=--build-id"
+    env["RUSTFLAGS"] += " -C link-arg=--build-id"
     subprocess.run([
         CARGO, verb, "--bins", f"--target={TARGET_TRIPLE}",
-        f"-Z=build-std=std,panic_abort", "--profile=dev" if args.debug else "--profile=release"
+        "-Z=build-std=std,panic_abort",
+        "--profile=dev" if args.debug else "--profile=release"
     ], cwd=folder, env=env, check=True)
 
 

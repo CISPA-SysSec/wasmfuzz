@@ -197,6 +197,8 @@ pub(crate) struct StrategyOpts {
     // Reset VMContext's memory for deterministic (re-)execution
     #[clap(long, default_value = "true")]
     pub run_from_snapshot: FlagBool,
+    #[clap(long, default_value = "false")]
+    pub fuzz_through_crashes: FlagBool,
 
     #[clap(long, default_value = "false")]
     pub ignore_bus_inputs: FlagBool,

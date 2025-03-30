@@ -18,17 +18,18 @@ jobs:
     - uses: baptiste0928/cargo-install@v3
       with:
         crate: cargo-zigbuild
+    # Ubuntu 22.04 ships with GLIBC 2.35, 24.04 with 2.39
     - name: Build aarch64 binary
-      run: cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.31
+      run: cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.35
     - name: Build x86_64 binary
-      run: cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31
+      run: cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.35
     - name: Strip binaries
       run: llvm-strip target/*/release/wasmfuzz
     - uses: actions/upload-artifact@v4
       with:
-        name: wasmfuzz-aarch64-unknown-linux-gnu.2.31
+        name: wasmfuzz-aarch64-unknown-linux-gnu.2.35
         path: target/aarch64-unknown-linux-gnu/release/wasmfuzz
     - uses: actions/upload-artifact@v4
       with:
-        name: wasmfuzz-x86_64-unknown-linux-gnu.2.31
+        name: wasmfuzz-x86_64-unknown-linux-gnu.2.35
         path: target/x86_64-unknown-linux-gnu/release/wasmfuzz

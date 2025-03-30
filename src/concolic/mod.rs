@@ -746,7 +746,7 @@ impl ConcolicContext {
     }
 
     pub(crate) fn mark_input(&mut self, pos: usize, len: usize) {
-        assert!(len <= u16::MAX as _);
+        assert!(len <= u16::MAX as usize);
         self.ensure_heap_init_for(pos as u32, len as u32);
         for i in 0..len {
             self.heap[pos + i] = self.store(SymVal::InputByte(i as u16), 0);
