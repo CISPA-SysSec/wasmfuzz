@@ -106,10 +106,6 @@ impl ErasedInstrumentationPass for SwarmShortCircuitPass {
         "swarm-short-circuit"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
-
     fn instrument_function(&self, mut ctx: InstrCtx) {
         let f = ctx.state.loc().function;
         if self.config.avoid_functions.contains(&f) {

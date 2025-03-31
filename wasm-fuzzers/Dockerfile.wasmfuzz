@@ -1,7 +1,7 @@
 FROM ubuntu:24.04 AS builder
 RUN apt-get update && apt-get install -y rustup git clang
-RUN rustup toolchain add 1.83 --no-self-update
-ARG COMMIT="74d05874d2d85cc0921cda9c03dbe1de77df0ea3"
+RUN rustup toolchain add 1.86 --no-self-update
+ARG COMMIT="9f904255398d1006427091953ea9746f7134b9dd"
 RUN git clone https://github.com/CISPA-SysSec/wasmfuzz && git -C wasmfuzz checkout "$COMMIT"
 RUN cargo install --locked --no-default-features --path /wasmfuzz
 

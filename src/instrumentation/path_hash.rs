@@ -250,10 +250,6 @@ impl HashBitsetInstrumentationPass for FuncPathHashPass {
         }
         self.coverage.mix_and_instrument(key, ctx, self);
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
-    }
 }
 
 pub(crate) struct EdgePathHashPass {
@@ -297,9 +293,5 @@ impl HashBitsetInstrumentationPass for EdgePathHashPass {
             return;
         }
         self.coverage.mix_and_instrument(key, ctx, self);
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self as &dyn std::any::Any
     }
 }
