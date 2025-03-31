@@ -112,8 +112,6 @@ Currently, we include the following fuzzers in our evaluation scripts:
 Symbols get renamed during the wasm2c process for native fuzzers. Due to this, hardcoded support for input-to-state mutations might be impacted due to symbol names and/or non-standard unrolled translated implementations.
 We have not confirmed the impact of this specific issue though.
 
-A [FuzzM](https://github.com/fuzzm/fuzzm-project) container is included but we're not using it since it doesn't work with our harnesses due to WebAssembly spec incompatibilities.
-
 
 ## Notes on Upstreaming
 

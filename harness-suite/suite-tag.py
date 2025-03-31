@@ -9,6 +9,7 @@ from pathlib import Path
 from pprint import pprint
 from collections import Counter, defaultdict
 from enum import Enum
+from typing import Dict, Union
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--harness-dir', default="./out/")
@@ -344,6 +345,7 @@ with open('tags.csv', 'w') as csvfile:
 
     writer.writeheader()
     for harness in harnesses:
+        d: Dict[str, Union[int, str]] = {}
         d = {t.value: int(t in tags[harness]) for t in Tag}
         d["harness"] = harness
         writer.writerow(d)

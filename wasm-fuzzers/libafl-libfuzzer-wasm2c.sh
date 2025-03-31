@@ -12,8 +12,6 @@ clang++ -fsanitize=fuzzer-no-link -L/LibAFL/libafl_libfuzzer/libafl_libfuzzer_ru
 
 mkdir -p /corpus/
 
-if [ "$FUZZER_CONFIG" == "multicore" ]; then
-  "./$name-fuzzer" -fork=8  -ignore_crashes=1 -ignore_timeouts=1 /corpus/ -grimoire=0 -artifact_prefix=/corpus/
-else
-  "./$name-fuzzer" -fork=1 -ignore_crashes=1 -ignore_timeouts=1 /corpus/ -grimoire=0 -artifact_prefix=/corpus/
-fi
+"./$name-fuzzer" \
+    -fork="${FUZZER_CORES:-1}" -ignore_crashes=1 -ignore_timeouts=1 \
+    -artifact_prefix=/corpus/ /corpus/

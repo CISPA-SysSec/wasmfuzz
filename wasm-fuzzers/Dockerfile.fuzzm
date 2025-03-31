@@ -9,7 +9,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN apt-get update && apt-get install -y llvm llvm-dev clang
 
 WORKDIR /fuzzm-project/wasm_instrumenter
-Run sed -i 's/danleh/Mrmaxmeier/' Cargo.toml && sed -i 's/21a322b7faac9440b931762aae124ffa57d0fa17/c239a5d895cd3f7f33d05dbc8c5f23ef666faf4a/' Cargo.toml
+RUN sed -i 's/danleh/Mrmaxmeier/' Cargo.toml && sed -i 's/21a322b7faac9440b931762aae124ffa57d0fa17/c239a5d895cd3f7f33d05dbc8c5f23ef666faf4a/' Cargo.toml
 RUN cargo update && cargo install --path .
 
 WORKDIR /fuzzm-project
@@ -34,5 +34,6 @@ RUN patchelf --remove-needed libwasmtime.so /usr/local/bin/afl-fuzz && \
 
 COPY fuzzm.sh shim-for-wafl.sh run-afl-fuzz.sh /usr/bin/
 RUN chmod +x /usr/bin/fuzzm.sh /usr/bin/run-afl-fuzz.sh
+RUN mkdir -p /seeds/ && echo -n "YELLOW SUBMARINE" > /seeds/seed && mkdir -p /corpus/
 WORKDIR /
 ENTRYPOINT [ "fuzzm.sh" ]
