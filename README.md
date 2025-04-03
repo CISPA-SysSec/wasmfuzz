@@ -115,7 +115,7 @@ We have not confirmed the impact of this specific issue though.
 
 ## Notes on Upstreaming
 
-- Our JIT currently depends on a minor patch to Cranelift's JIT setup: [[Upstream issue]](https://github.com/bytecodealliance/wasmtime/issues/4000)
+- Our JIT currently depends on a minor patch to Cranelift's JIT setup: [[Upstream PR]](https://github.com/bytecodealliance/wasmtime/pull/10512)
 
 - `rustc` support for `-Zembed-source` for embedded sources in harness binaries: [[Upstream PR]](https://github.com/rust-lang/rust/pull/126985)
 

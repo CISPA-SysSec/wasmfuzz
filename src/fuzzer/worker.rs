@@ -9,7 +9,8 @@ use libafl::corpus::CorpusId;
 use libafl::inputs::ResizableMutator;
 use libafl::mutators::{havoc_mutations, StdMOptMutator};
 use libafl::observers::CmplogBytes;
-use libafl::stages::{HasCurrentStageId, StageId};
+use libafl::stages::StageId;
+use libafl::state::HasCurrentStageId;
 use libafl::state::{HasSolutions, Stoppable};
 use libafl::{
     corpus::{Corpus, HasCurrentCorpusId, InMemoryCorpus, Testcase},
