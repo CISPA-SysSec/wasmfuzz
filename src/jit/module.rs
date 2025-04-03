@@ -19,17 +19,31 @@ use super::{instance::ModuleInstance, util::wasm2tys, vmcontext::VMContext, Comp
 pub(crate) enum TrapKind {
     // Coverage { location: Location, pass: String },
     Abort(AbortCode),
-    SwarmShortCircuit(Location),
+    SwarmShortCircuit(Option<Location>),
     OutOfFuel(Option<Location>),
-    ExitTestcase(Location),
+    ExitTestcase(Option<Location>),
 }
 
 impl TrapKind {
+    // Locations are a nice to have, but are not required in the fuzzing loop.
+    // Cranelift reduced the unique amount of trap codes to ~250 recently, so we
+    // can not afford to have a unique trap code for each location.
+    // Xref: https://github.com/bytecodealliance/wasmtime/pull/10515
+    pub(crate) fn strip_location(&self) -> Self {
+        let mut x = self.clone();
+        match &mut x {
+            Self::Abort(_) => {}
+            Self::SwarmShortCircuit(loc) | Self::ExitTestcase(loc) | Self::OutOfFuel(loc) => {
+                *loc = None;
+            }
+        }
+        x
+    }
+
     pub(crate) fn loc(&self) -> Option<Location> {
         match self {
             Self::Abort(_) => None,
-            Self::SwarmShortCircuit(loc) | Self::ExitTestcase(loc) => Some(*loc),
-            Self::OutOfFuel(loc) => *loc,
+            Self::SwarmShortCircuit(loc) | Self::ExitTestcase(loc) | Self::OutOfFuel(loc) => *loc,
         }
     }
 

@@ -29,9 +29,7 @@ pub(crate) fn instrument_func(
             .avoid_functions
             .contains(&location.function)
     {
-        let trap = TrapKind::SwarmShortCircuit(location);
-        bcx.ins().trap(state.get_trap_code(trap));
-        state.mark_dead(bcx);
+        state.trap_here(TrapKind::SwarmShortCircuit(Some(location)), bcx);
     }
     if !bail(state, bcx) && state.options.kind == CompilationKind::Tracing {
         if matches!(

@@ -10,11 +10,6 @@ use cranelift::prelude::{InstBuilder, MemFlags, Signature, TrapCode, Value};
 use ir::types::{Type, I32, I64};
 use wasmparser::FuncType;
 
-use crate::{
-    instrumentation::{ErasedInstrumentationPass, InstrCtx},
-    ir::{InsnIdx, Location, MemoryInstruction, ModuleSpec, WFOperator},
-    AbortCode,
-};
 use super::{
     builtins::{
         builtin_debug_wasmfuzz_write_stdout, builtin_memory_copy, builtin_memory_fill,
@@ -32,6 +27,11 @@ use super::{
     util::{wasm2tys, MemFlagsExt},
     vmcontext::VMContext,
     CompilationKind, CompilationOptions,
+};
+use crate::{
+    instrumentation::{ErasedInstrumentationPass, InstrCtx},
+    ir::{InsnIdx, Location, MemoryInstruction, ModuleSpec, WFOperator},
+    AbortCode,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -750,9 +750,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             }
 
             "wasmfuzz::exit_testcase" => {
-                bcx.ins()
-                    .trap(self.get_trap_code(TrapKind::ExitTestcase(self.loc())));
-                self.mark_dead(bcx);
+                self.trap_here(TrapKind::ExitTestcase(Some(self.loc())), bcx);
             }
 
             _ => {
@@ -770,6 +768,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
     }
 
     pub(crate) fn get_trap_code(&mut self, kind: TrapKind) -> TrapCode {
+        let kind = kind.strip_location();
         let idx = self
             .trapcodes
             .iter()
@@ -946,6 +945,11 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             f(pass, ctx);
         }
         self.passes = Some(passes);
+    }
+
+    pub(crate) fn trap_here(&mut self, loc: TrapKind, bcx: &mut FunctionBuilder) {
+        bcx.ins().trap(self.get_trap_code(loc));
+        self.mark_dead(bcx);
     }
 }
 

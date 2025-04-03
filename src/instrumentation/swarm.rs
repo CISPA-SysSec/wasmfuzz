@@ -48,9 +48,8 @@ impl SwarmShortCircuitPass {
     }
 
     fn short_circuit(&self, ctx: &mut InstrCtx) {
-        let trap = TrapKind::SwarmShortCircuit(ctx.state.loc());
-        ctx.bcx.ins().trap(ctx.state.get_trap_code(trap));
-        ctx.state.mark_dead(ctx.bcx);
+        ctx.state
+            .trap_here(TrapKind::SwarmShortCircuit(Some(ctx.state.loc())), ctx.bcx)
     }
 
     fn get_var(&self, ctx: &mut InstrCtx) -> DataId {
@@ -166,7 +165,7 @@ impl ErasedInstrumentationPass for SwarmShortCircuitPass {
                         .load(ir::types::I8, MemFlags::trusted(), bools_ptr, i as i32);
                 c = ctx.bcx.ins().band(c, val);
             }
-            let trap = TrapKind::SwarmShortCircuit(ctx.state.loc());
+            let trap = TrapKind::SwarmShortCircuit(Some(ctx.state.loc()));
             ctx.bcx.ins().trapnz(c, ctx.state.get_trap_code(trap));
         }
     }
