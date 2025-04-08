@@ -54,6 +54,9 @@ macro_rules! instrumentation_hook_fn_defs {
 
 macro_rules! impl_kv_instrumentation_pass {
     () => {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self as &dyn std::any::Any
+        }
         fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value> {
             &self.coverage
         }
@@ -70,13 +73,14 @@ macro_rules! impl_kv_instrumentation_pass {
 }
 pub(crate) use impl_kv_instrumentation_pass;
 
-pub(crate) trait KVInstrumentationPass: Any {
+pub(crate) trait KVInstrumentationPass {
     type Key: Into<Location> + Ord + Clone; // = Location
     type Value: FeedbackLattice + 'static;
 
     /// Returns a short string (<12 chars) that describes this specific pass
     fn shortcode(&self) -> &'static str;
 
+    fn as_any(&self) -> &dyn Any;
     fn coverage(&self) -> &AssociatedCoverageArray<Self::Key, Self::Value>;
     fn coverage_mut(&mut self) -> &mut AssociatedCoverageArray<Self::Key, Self::Value>;
 
@@ -137,6 +141,8 @@ pub(crate) trait CodeCovInstrumentationPass {
             .unwrap(),
         )
     }
+
+    fn as_any(&self) -> &dyn Any;
 }
 
 pub(crate) trait HashBitsetInstrumentationPass {
@@ -166,9 +172,11 @@ pub(crate) trait HashBitsetInstrumentationPass {
             .unwrap(),
         )
     }
+
+    fn as_any(&self) -> &dyn Any;
 }
 
-pub trait ErasedInstrumentationPass: Any {
+pub trait ErasedInstrumentationPass {
     instrumentation_hook_fn_defs!(no_body);
 
     fn update_and_scan_coverage(&mut self) -> bool;
@@ -176,6 +184,7 @@ pub trait ErasedInstrumentationPass: Any {
     fn reset_coverage_keep_saved(&mut self);
     fn snapshot_coverage(&self) -> CovSnapshot;
     fn shortcode(&self) -> &'static str;
+    fn as_any(&self) -> &dyn Any;
 }
 
 macro_rules! dispatch {
@@ -210,4 +219,5 @@ impl<K: Ord + Into<Location> + Clone + 'static, V: FeedbackLattice + 'static>
     dispatch!(reset_coverage_keep_saved(&mut self) -> ());
     dispatch!(snapshot_coverage(&self) -> CovSnapshot);
     dispatch!(shortcode(&self) -> &'static str);
+    dispatch!(as_any(&self) -> &dyn Any);
 }

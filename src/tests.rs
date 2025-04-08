@@ -50,7 +50,7 @@ impl TestModule {
             .arg(&mod_path)
             .status()
             .expect("failed to compile Rust snippet to WASM");
-        let module = std::fs::read(&mod_path).expect("failed to read compiled test harness module");
+        let module = std::fs::read(&mod_path).unwrap();
         Self { name, module }
     }
 

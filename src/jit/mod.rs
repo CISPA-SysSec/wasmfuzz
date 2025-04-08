@@ -15,7 +15,6 @@ pub mod util;
 pub mod vmcontext;
 
 use std::{
-    any::Any,
     collections::BTreeSet,
     fmt,
     sync::Arc,
@@ -980,10 +979,9 @@ impl JitFuzzingSession {
         // save malloc coverage
         let new_cov = !self.scan_passes_for_coverage().is_empty();
         let have_codecov_pass = self.passes.iter().any(|pass| {
-            let pass = pass as &dyn std::any::Any;
-            pass.is::<FunctionCoveragePass>()
-                || pass.is::<BBCoveragePass>()
-                || pass.is::<EdgeCoveragePass>()
+            pass.as_any().is::<FunctionCoveragePass>()
+                || pass.as_any().is::<BBCoveragePass>()
+                || pass.as_any().is::<EdgeCoveragePass>()
         });
         assert!(
             new_cov || !have_codecov_pass,
@@ -1139,7 +1137,7 @@ impl JitFuzzingSession {
 
     pub(crate) fn get_pass<T: 'static>(&self) -> &T {
         for pass in self.passes.iter() {
-            if let Some(pass) = (pass as &dyn Any).downcast_ref::<T>() {
+            if let Some(pass) = pass.as_any().downcast_ref::<T>() {
                 return pass;
             }
         }
@@ -1149,7 +1147,7 @@ impl JitFuzzingSession {
     pub(crate) fn get_passes<T: 'static>(&self) -> Vec<&T> {
         let mut passes = Vec::new();
         for pass in self.passes.iter() {
-            if let Some(pass) = (pass as &dyn Any).downcast_ref::<T>() {
+            if let Some(pass) = pass.as_any().downcast_ref::<T>() {
                 passes.push(pass);
             }
         }

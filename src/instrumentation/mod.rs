@@ -146,10 +146,11 @@ impl Passes {
     }
 }
 
-pub(crate) trait ErasedCovSnapshot: Any {
+pub(crate) trait ErasedCovSnapshot {
     fn clear(&mut self);
     fn update_with(&mut self, other: &dyn ErasedCovSnapshot) -> bool;
     fn mem_usage(&self) -> usize;
+    fn as_any(&self) -> &dyn Any;
 }
 
 #[derive(libafl_bolts::SerdeAny)]
@@ -411,13 +412,15 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
                 *self = Self::Full(vec![V::bottom(); len].into_boxed_slice());
             }
             fn update_with(&mut self, other: &dyn ErasedCovSnapshot) -> bool {
-                if let Some(other) = (other as &dyn Any).downcast_ref::<Self>() {
+                if let Some(other) = other.as_any().downcast_ref::<Self>() {
                     self._update_with(other)
                 } else {
                     false
                 }
             }
-
+            fn as_any(&self) -> &dyn Any {
+                self as &dyn Any
+            }
             fn mem_usage(&self) -> usize {
                 match self {
                     SparseLatticeBox::Full(x) => x.len() * std::mem::size_of::<V>(),

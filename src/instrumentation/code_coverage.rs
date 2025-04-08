@@ -126,6 +126,10 @@ impl CodeCovInstrumentationPass for EdgeCoveragePass {
     fn coverage_mut(&mut self) -> &mut CoverageBitset<Self::Key> {
         &mut self.coverage
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self as &dyn std::any::Any
+    }
 }
 
 pub(crate) struct FunctionCoveragePass {
@@ -165,6 +169,10 @@ impl CodeCovInstrumentationPass for FunctionCoveragePass {
         self.coverage
             .instrument(&FuncIdx(ctx.state.fidx), ctx, self);
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self as &dyn std::any::Any
+    }
 }
 
 pub(crate) struct BBCoveragePass {
@@ -196,5 +204,9 @@ impl CodeCovInstrumentationPass for BBCoveragePass {
 
     fn instrument_basic_block(&self, ctx: InstrCtx) {
         self.coverage.instrument(&ctx.state.loc(), ctx, self);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self as &dyn std::any::Any
     }
 }
