@@ -628,7 +628,8 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 self.set_concolic_concrete(I32, end_count, bcx);
 
                 let zero = bcx.ins().iconst(I32, 0);
-                bcx.ins().jump(block, &[iovs_addr, iovs_len, zero]);
+                bcx.ins()
+                    .jump(block, &[iovs_addr.into(), iovs_len.into(), zero.into()]);
 
                 bcx.switch_to_block(block);
 
@@ -680,8 +681,13 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 let iovs_len = bcx.ins().isub(block_iovs_len, one);
 
                 // if (iov_len == 0) break;
-                bcx.ins()
-                    .brif(iovs_len, block, &[iovs, iovs_len, count], end, &[count]);
+                bcx.ins().brif(
+                    iovs_len,
+                    block,
+                    &[iovs.into(), iovs_len.into(), count.into()],
+                    end,
+                    &[count.into()],
+                );
 
                 bcx.seal_block(block);
                 bcx.seal_block(end);

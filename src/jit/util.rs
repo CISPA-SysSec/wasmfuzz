@@ -16,6 +16,10 @@ pub(crate) fn wasm2tys(wasmtys: &[ValType]) -> Vec<ir::Type> {
     wasmtys.iter().map(super::wasm2ty).collect::<Vec<_>>()
 }
 
+pub(crate) fn values_to_blockargs(vals: &[ir::Value]) -> Vec<ir::BlockArg> {
+    vals.iter().map(|x| (*x).into()).collect()
+}
+
 pub trait MemFlagsExt {
     fn trusted_ro() -> MemFlags;
 }

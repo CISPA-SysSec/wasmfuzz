@@ -5,7 +5,7 @@ use crate::{ir::ControlInstruction, AbortCode};
 use super::concolic::{
     translate_concolic_push_path_constraint_eq, translate_concolic_push_path_constraint_nz,
 };
-use super::util::wasm2tys;
+use super::util::{values_to_blockargs, wasm2tys};
 use super::FuncTranslator;
 use codegen::ir::SigRef;
 use cranelift::codegen::ir::{self, ArgumentPurpose};
@@ -59,7 +59,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 let mut params = state.popn(&tys, bcx);
                 state.pop_control_frame();
                 params_augument_concolic(&mut params, state);
-                bcx.ins().jump(block, &params);
+                bcx.ins().jump(block, &values_to_blockargs(&params));
                 state.mark_dead(bcx);
             }
 
@@ -94,7 +94,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             if !state.dead(bcx) {
                 let mut params = state.popn(&tys, bcx);
                 params_augument_concolic(&mut params, state);
-                bcx.ins().jump(block, &params);
+                bcx.ins().jump(block, &values_to_blockargs(&params));
                 state.mark_dead(bcx);
             }
             let mut block_params = Vec::new();
@@ -179,7 +179,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 let param_tys = wasm2tys(target_params.params());
                 let mut params = state.popn(&param_tys, bcx);
                 params_augument_concolic(&mut params, state);
-                bcx.ins().jump(end_block, &params);
+                bcx.ins().jump(end_block, &values_to_blockargs(&params));
                 state.mark_dead(bcx);
             }
             let else_block = state.block(state.ip, bcx);
@@ -201,7 +201,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, *cfg_target);
             state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
             if !state.dead(bcx) {
-                bcx.ins().jump(target, &params);
+                bcx.ins().jump(target, &values_to_blockargs(&params));
                 state.mark_dead(bcx);
             }
             // NOTE: br should always be followed by end?
@@ -234,7 +234,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             let mut params = state.peekn(target_params.params().len(), bcx);
             if !state.dead(bcx) {
                 params_augument_concolic(&mut params, state);
-                bcx.ins().jump(target, &params);
+                bcx.ins().jump(target, &values_to_blockargs(&params));
             }
 
             bcx.seal_block(else_block);

@@ -137,7 +137,9 @@ pub(crate) struct ModuleTranslator<'s> {
 impl<'s> ModuleTranslator<'s> {
     pub(crate) fn new(spec: &'s ModuleSpec, opts: &CompilationOptions) -> Self {
         let mut builder = JITBuilder::with_isa(isa(opts), default_libcall_names());
-        builder.reserve_memory_area(256 << 20);
+        builder.memory_provider(Box::new(
+            cranelift::jit::ArenaMemoryProvider::new_with_size(256 << 20).unwrap(),
+        ));
         let mut module = JITModule::new(builder);
 
         let mut func_ids = HashMap::default();

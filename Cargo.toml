@@ -48,7 +48,8 @@ libafl = { version = "=0.15.2", default-features = false, features = [
 ] }
 libafl_bolts = "0.15"
 # cranelift is ~0.114
-cranelift = { git = "https://github.com/Mrmaxmeier/wasmtime", branch = "cranelift-jit-reserve-vmem-area", features = [
+cranelift = { git = "https://github.com/bytecodealliance/wasmtime", rev = "56148ad9a82f708e42a47003cbee0df5ca2aa365", features = [
+# cranelift = { path = "../wasmtime/cranelift/umbrella", package = "cranelift", features = [
     "jit",
     "module",
     "native",
@@ -71,14 +72,17 @@ syntect = { version = "5.1", optional = true }
 # feat:compressed_harnesses
 zstd = { version = "0.13.1", optional = true }
 
-
 # enable via feat:tracy
-tracy_full = "1.10.0"
 # tracy_full = { path = "../_others/tracy_full", default-features = false, features = [
-# 	"system-tracing", "context-switch-tracing", "sampling", "code-transfer",
-#         "broadcast", "callstack-inlines", # "crash-handler" 
-# ] }
-
+tracy_full = { version = "1.10.0", default-features = false, features = [
+    "system-tracing",
+    "context-switch-tracing",
+    "sampling",
+    "code-transfer",
+    "broadcast",
+    # "callstack-inlines",
+    # "crash-handler"
+] }
 
 [features]
 default = ["reports", "compressed_harnesses"]
