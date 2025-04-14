@@ -27,6 +27,9 @@ thresholds:
 most pages for large allocations are never touched (!)
 => stack area is large by default
 => we allocate 64kb for input but only use around 4kb
+
+MADV_DONTNEED doesn't scale well to many-core systems. Changing page tables requires shooting down TLB entries for all cores that may have cached the page table.
+=> mitigate by pinning to cores explicitly? Is mm_cpumask ever cleared?
 */
 
 // TODO: explicit dirty-page-logging / kernel module?
@@ -553,7 +556,7 @@ impl ResettableMapping for RestoreDirtyLKMMapping {
 
     fn restore(&mut self) {
         unsafe {
-            let ctl = ioctl::NoArg::<ioctl::NoneOpcode<0xaa, 2, ()>>::new();
+            let ctl = ioctl::NoArg::<{ ioctl::opcode::none(0xaa, 2) }>::new();
             ioctl::ioctl(&self.dev_fd, ctl).unwrap();
         }
     }
@@ -598,7 +601,7 @@ impl ResettableMapping for RestoreDirtyLKMMapping {
                 size: usize,
             }
             let ctl = ioctl::Setter::<
-                ioctl::ReadOpcode<0xaa, 1, RestoreDirtyParams>,
+                { ioctl::opcode::read::<RestoreDirtyParams>(0xaa, 1) },
                 RestoreDirtyParams,
             >::new(RestoreDirtyParams {
                 target_mapping: self.ptr as _,

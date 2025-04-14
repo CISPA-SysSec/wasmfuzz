@@ -1141,7 +1141,7 @@ impl JitFuzzingSession {
                 return pass;
             }
         }
-        panic!("pass not found");
+        panic!("pass {:?} not found", std::any::type_name::<T>());
     }
 
     pub(crate) fn get_passes<T: 'static>(&self) -> Vec<&T> {

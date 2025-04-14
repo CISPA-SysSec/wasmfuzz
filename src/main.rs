@@ -27,7 +27,7 @@ mod with_mimalloc {
 #[global_allocator]
 static ALLOC: tracy_full::alloc::GlobalAllocator = tracy_full::alloc::GlobalAllocator::new();
 
-// Note: This is a hard limit, the CLI has its own default.
+// Note: This is a hard limit, fuzzer instances set their own limits..
 pub(crate) const TEST_CASE_SIZE_LIMIT: usize = u16::MAX as usize; // 64kb
 
 // Requests for new memory pages (`memory.grow`) will fail after this limit:

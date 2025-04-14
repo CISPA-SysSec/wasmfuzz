@@ -8,7 +8,7 @@ rust-version = "1.83"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.227"
+wasmparser = "0.228"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive", "env"] }
 md5 = "0.7"
@@ -33,7 +33,7 @@ humansize = "2.1"
 crossbeam-channel = "0.5"
 ordered-float = { version = "5.0", features = ["speedy"] }
 decurse = "0.0.4"
-rustix = { version = "0.38", features = ["mm", "param"] }
+rustix = { version = "1.0", features = ["mm", "param", "fs"] }
 object = { version = "0.36", default-features = false, features = [
     "read_core",
     "compression",
@@ -48,8 +48,8 @@ libafl = { version = "=0.15.2", default-features = false, features = [
 ] }
 libafl_bolts = "0.15"
 # cranelift is ~0.114
-cranelift = { git = "https://github.com/bytecodealliance/wasmtime", rev = "56148ad9a82f708e42a47003cbee0df5ca2aa365", features = [
-# cranelift = { path = "../wasmtime/cranelift/umbrella", package = "cranelift", features = [
+cranelift = { git = "https://github.com/bytecodealliance/wasmtime", rev = "18c6d1d16bfea914b3ccd090b596aa1aab0b6f2a", features = [
+    # cranelift = { path = "../wasmtime/cranelift/umbrella", package = "cranelift", features = [
     "jit",
     "module",
     "native",
@@ -65,7 +65,7 @@ bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = t
 mimalloc = { version = "0.1", optional = true, default-features = false }
 
 # feat:reports
-askama = { version = "0.12", optional = true }
+askama = { version = "0.13", optional = true }
 lcov = { version = "0.8", optional = true }
 syntect = { version = "5.1", optional = true }
 
@@ -82,6 +82,9 @@ tracy_full = { version = "1.10.0", default-features = false, features = [
     "broadcast",
     # "callstack-inlines",
     # "crash-handler"
+
+    # Note: We want to disable the `crash-handler` feature but there isn't a release yet that has it.
+    # https://github.com/nagisa/rust_tracy_client/pull/132
 ] }
 
 [features]

@@ -67,7 +67,6 @@ enum ErasedInstrumentationPassHelper<K, V> {
     KV(Box<dyn KVInstrumentationPass<Key = K, Value = V>>),
     CodeCov(Box<dyn CodeCovInstrumentationPass<Key = K>>),
     HashBitset(Box<dyn HashBitsetInstrumentationPass<Key = K>>),
-    #[allow(unused)]
     Erased(Box<dyn ErasedInstrumentationPass>),
 }
 pub struct Passes(pub Vec<Box<dyn ErasedInstrumentationPass>>);

@@ -18,10 +18,10 @@ mod cmin;
 mod concolic_explore;
 #[cfg(feature = "reports")]
 pub(crate) mod cov_html;
+mod doctor;
 #[cfg(feature = "reports")]
 pub(crate) mod lcov;
 mod monitor_cov;
-
 #[derive(Parser)]
 pub(crate) struct Opts {
     // /// A level of verbosity, and can be used multiple times
@@ -51,6 +51,10 @@ pub(crate) enum Subcommand {
         verbose_jit: bool,
         #[clap(long, default_value = "true")]
         print_stdout: FlagBool,
+    },
+    /// Check the system configuration and WebAssembly module for potential issues.
+    Doctor {
+        program: Option<String>,
     },
     /// Run a single specified input (repeatedly for timing).
     #[clap(hide = true)]
@@ -403,7 +407,6 @@ pub(crate) fn main() {
             let mod_spec = parse_program(&PathBuf::from(&opts.program));
             cmin::run(mod_spec, opts);
         }
-
         #[cfg(feature = "concolic_bitwuzla")]
         Subcommand::CheckConcolic { program, input } => {
             if cfg!(not(feature = "concolic_debug_verify")) {
@@ -492,9 +495,7 @@ pub(crate) fn main() {
                 trace.symvals.debug_event(ev);
             }
         }
-
         Subcommand::MonitorCov(opts) => monitor_cov::run(opts),
-
         Subcommand::EvalPassCorr {
             program,
             corpus,
@@ -538,7 +539,6 @@ pub(crate) fn main() {
                 out_file.write_all(b"\n").unwrap();
             }
         }
-
         Subcommand::EvalPassSpeed {
             program,
             corpus,
@@ -728,5 +728,6 @@ pub(crate) fn main() {
                 )
             }
         }
+        Subcommand::Doctor { program } => doctor::run(program),
     }
 }
