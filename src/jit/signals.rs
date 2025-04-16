@@ -192,6 +192,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_catch_signal() {
+        #[inline(never)]
         fn trap_or_get_trap_pc(dry_run: bool) -> usize {
             let trap_loc: usize;
 
