@@ -544,55 +544,54 @@ impl Orchestrator {
             func_longest_trace,
         } = &mut opts;
 
-        *live_funcs = true;
+        // We always enable edge coverage, and edge coverage subsumes function and bb coverage.
+        *live_funcs = false;
         *live_bbs = false;
         *live_edges = true;
 
         if !is_saturated {
+            let mut light_opts = [
+                &mut *cmpcov_absdist,
+                &mut *cmpcov_hamming,
+                &mut *func_input_size_color,
+                &mut *func_shortest_trace,
+                &mut *perffuzz_edge_global,
+            ];
             for _ in 0..3 {
-                let opt = match self.rng.random::<u8>() % 5 {
-                    0 => &mut *cmpcov_absdist,
-                    1 => &mut *cmpcov_hamming,
-                    2 => &mut *func_input_size_color,
-                    3 => &mut *edge_shortest_trace,
-                    4 => &mut *perffuzz_edge_global,
-                    // 4 => &mut *func_longest_trace,
-                    _ => unreachable!(),
-                };
-                if *opt {
+                let opt = light_opts.choose_mut(&mut self.rng).unwrap();
+                if **opt {
                     break;
                 }
-                *opt = true;
+                **opt = true;
             }
         } else {
-            for _ in 0..5 {
-                let opt = match self.rng.random::<u8>() % 20 {
-                    0 => &mut *call_value_profile,
-                    1 => &mut *cmpcov_absdist,
-                    2 => &mut *cmpcov_hamming,
-                    3 => &mut *perffuzz_func,
-                    4 => &mut *perffuzz_bb,
-                    5 => &mut *perffuzz_edge,
-                    6 => &mut *perffuzz_edge_global,
-                    7 => &mut *func_rec_depth,
-                    8 => &mut *call_value_profile,
-                    9 => &mut *func_input_size,
-                    10 => &mut *func_input_size_cyclic,
-                    11 => &mut *func_input_size_color,
-                    12 => &mut *memory_op_value,
-                    13 => &mut *memory_op_address,
-                    14 => &mut *memory_store_prev_value,
-                    15 => &mut *path_hash_func,
-                    16 => &mut *path_hash_edge,
-                    17 => &mut *func_shortest_trace,
-                    18 => &mut *edge_shortest_trace,
-                    19 => &mut *func_longest_trace,
-                    _ => unreachable!(),
-                };
-                if *opt {
+            let mut heavy_opts = [
+                &mut *call_value_profile,
+                &mut *cmpcov_absdist,
+                &mut *cmpcov_hamming,
+                &mut *perffuzz_func,
+                &mut *perffuzz_bb,
+                &mut *perffuzz_edge,
+                &mut *perffuzz_edge_global,
+                &mut *func_rec_depth,
+                &mut *func_input_size,
+                &mut *func_input_size_cyclic,
+                &mut *func_input_size_color,
+                &mut *memory_op_value,
+                &mut *memory_op_address,
+                &mut *memory_store_prev_value,
+                &mut *path_hash_func,
+                &mut *path_hash_edge,
+                &mut *func_shortest_trace,
+                &mut *edge_shortest_trace,
+                &mut *func_longest_trace,
+            ];
+            for _ in 0..3 {
+                let opt = heavy_opts.choose_mut(&mut self.rng).unwrap();
+                if **opt {
                     break;
                 }
-                *opt = true;
+                **opt = true;
             }
         }
 

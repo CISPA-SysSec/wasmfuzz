@@ -1,4 +1,8 @@
-use std::{ops::Deref, path::PathBuf, str::FromStr};
+use std::{
+    ops::Deref,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use clap::Parser;
 use humantime::Duration;
@@ -6,7 +10,7 @@ use humantime::Duration;
 #[derive(Debug, Clone, Parser)]
 pub(crate) struct GeneralOpts {
     // Module under test
-    pub program: String,
+    pub program: PathBuf,
     // Load initial corpus from this path.
     #[clap(long)]
     pub seed_dir: Option<String>,
@@ -244,9 +248,13 @@ pub(crate) struct FuzzOpts {
 }
 
 impl FuzzOpts {
-    pub(crate) fn resolve_corpus_dir(dir: String, program: &str) -> PathBuf {
+    pub(crate) fn resolve_corpus_dir(dir: String, program: &Path) -> PathBuf {
         if dir == "auto" {
-            let opts = Self::parse_from(vec!["wasmfuzz-fuzz", program, "--autosave"]);
+            let opts = Self::parse_from(vec![
+                "wasmfuzz-fuzz",
+                program.to_str().unwrap(),
+                "--autosave",
+            ]);
             opts.g.corpus_dir().unwrap()
         } else {
             dir.into()

@@ -1,6 +1,5 @@
 use clap::Parser;
 use std::{
-    fs::File,
     io::{BufRead, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -10,7 +9,7 @@ use std::{
 use crate::{
     fuzzer::opts::{FlagBool, InstrumentationOpts},
     ir::ModuleSpec,
-    jit::{FeedbackOptions, JitFuzzingSession, PassesGen, Stats, TracingOptions},
+    jit::{FeedbackOptions, JitFuzzingSession, Stats, TracingOptions},
 };
 
 mod cmin;
@@ -21,7 +20,9 @@ pub(crate) mod cov_html;
 mod doctor;
 #[cfg(feature = "reports")]
 pub(crate) mod lcov;
+mod misc_eval;
 mod monitor_cov;
+
 #[derive(Parser)]
 pub(crate) struct Opts {
     // /// A level of verbosity, and can be used multiple times
@@ -35,7 +36,7 @@ pub(crate) struct Opts {
 pub(crate) enum Subcommand {
     #[clap(hide = true)]
     CorpusInfo {
-        program: String,
+        program: PathBuf,
         #[clap(long)]
         dir: Option<String>,
         #[clap(long)]
@@ -43,7 +44,7 @@ pub(crate) enum Subcommand {
     },
     /// Run a single input.
     RunInput {
-        program: String,
+        program: PathBuf,
         inputs: Vec<String>,
         #[clap(long)]
         trace: bool,
@@ -56,10 +57,24 @@ pub(crate) enum Subcommand {
     Doctor {
         program: Option<String>,
     },
+    /// Evaluate an input generator by assigning a score to desired coverage properties.
+    #[clap(hide = true)]
+    CoverageGym {
+        program: PathBuf,
+        generator: String,
+        #[clap(long, default_value = "10000")]
+        execs: usize,
+        #[clap(long, default_value = "1000000")]
+        instruction_limit: u64,
+        #[clap(long)]
+        cov_html: Option<PathBuf>,
+        #[clap(long)]
+        json_out: Option<PathBuf>,
+    },
     /// Run a single specified input (repeatedly for timing).
     #[clap(hide = true)]
     BenchInput {
-        program: String,
+        program: PathBuf,
         inputs: Vec<String>,
         #[clap(long)]
         trace: bool,
@@ -75,7 +90,7 @@ pub(crate) enum Subcommand {
     /// Collect concolic traces for each input and try to flip branches for new coverage
     #[cfg(feature = "concolic")]
     ConcolicExplore {
-        program: String,
+        program: PathBuf,
         inputs: Vec<String>,
         #[clap(long)]
         dir: Option<String>,
@@ -88,11 +103,11 @@ pub(crate) enum Subcommand {
     MonitorCov(monitor_cov::MonitorCovOpts),
     #[cfg(feature = "concolic_bitwuzla")]
     CheckConcolic {
-        program: String,
+        program: PathBuf,
         input: String,
     },
     ShowConcolic {
-        program: String,
+        program: PathBuf,
         input: String,
     },
     /// Collect line coverage from debug information.
@@ -104,24 +119,24 @@ pub(crate) enum Subcommand {
     /// Run corpus on program and evaluate instrumentation pass relationship
     #[clap(hide = true)]
     EvalPassCorr {
-        program: String,
-        corpus: String,
+        program: PathBuf,
+        corpus: PathBuf,
         #[clap(long)]
-        jsonl_out_path: String,
+        jsonl_out_path: PathBuf,
     },
     #[clap(hide = true)]
     EvalPassSpeed {
-        program: String,
-        corpus: String,
+        program: PathBuf,
+        corpus: PathBuf,
         #[clap(long)]
-        jsonl_out_path: String,
+        jsonl_out_path: PathBuf,
     },
     #[clap(hide = true)]
     EvalPagesTouched {
-        program: String,
-        corpus: String,
+        program: PathBuf,
+        corpus: PathBuf,
         #[clap(long)]
-        jsonl_out_path: String,
+        jsonl_out_path: PathBuf,
     },
     #[clap(hide = true)]
     EvalSnapshotPerf {
@@ -197,7 +212,7 @@ pub(crate) fn main() {
             print_stdout,
         } => {
             let inputs = gather_inputs_paths(&None, &inputs, true);
-            let mod_spec = parse_program(&PathBuf::from(program));
+            let mod_spec = parse_program(&program);
             let mut stats = Stats::default();
             let mut sess = JitFuzzingSession::builder(mod_spec)
                 // .feedback(i.to_feedback_opts())
@@ -210,7 +225,6 @@ pub(crate) fn main() {
                 .instruction_limit(Some(2_000_000_000))
                 .optimize_for_compilation_time(inputs.len() <= 1)
                 .build();
-
             if inputs.is_empty() {
                 println!("No input specified. Exiting.")
             }
@@ -250,7 +264,7 @@ pub(crate) fn main() {
             run_from_snapshot,
         } => {
             let inputs = gather_inputs_paths(&None, &inputs, true);
-            let mod_spec = parse_program(&PathBuf::from(program));
+            let mod_spec = parse_program(&program);
             let mut stats = Stats::default();
             let mut sess = JitFuzzingSession::builder(mod_spec)
                 .feedback(i.to_feedback_opts())
@@ -295,7 +309,7 @@ pub(crate) fn main() {
             inputs,
             dir,
         } => {
-            let mod_spec = parse_program(&PathBuf::from(&program));
+            let mod_spec = parse_program(&program);
 
             let concolic_provider = crate::concolic::ConcolicProvider::new(Some(mod_spec.clone()));
             let mut explorer =
@@ -325,7 +339,7 @@ pub(crate) fn main() {
         } => {
             let dir = dir.map(|dir| crate::fuzzer::FuzzOpts::resolve_corpus_dir(dir, &program));
             let input_paths = gather_inputs_paths(&dir, &[], true);
-            let mod_spec = parse_program(&PathBuf::from(program));
+            let mod_spec = parse_program(&program);
 
             let mut stats = Stats::default();
             let mut sess = JitFuzzingSession::builder(mod_spec.clone())
@@ -387,7 +401,7 @@ pub(crate) fn main() {
                 crate::fuzzer::FuzzOpts::resolve_corpus_dir(dir.to_owned(), &opts.program)
             });
             let input_paths = gather_inputs_paths(&dir, &opts.seed_files, true);
-            let mod_spec = parse_program(&PathBuf::from(&opts.program));
+            let mod_spec = parse_program(&opts.program);
             lcov::run(mod_spec, &input_paths, opts);
         }
         #[cfg(feature = "reports")]
@@ -396,15 +410,15 @@ pub(crate) fn main() {
                 crate::fuzzer::FuzzOpts::resolve_corpus_dir(dir.to_owned(), &opts.program)
             });
             let input_paths = gather_inputs_paths(&dir, &opts.seed_files, true);
-            let mod_spec = parse_program(&PathBuf::from(&opts.program));
+            let mod_spec = parse_program(&opts.program);
             cov_html::run(mod_spec, &input_paths, opts);
         }
         Subcommand::Fuzz(opts) => {
-            let mod_spec = parse_program(&PathBuf::from(&opts.g.program));
+            let mod_spec = parse_program(&opts.g.program);
             crate::fuzzer::fuzz(mod_spec, opts);
         }
         Subcommand::Cmin(opts) => {
-            let mod_spec = parse_program(&PathBuf::from(&opts.program));
+            let mod_spec = parse_program(&opts.program);
             cmin::run(mod_spec, opts);
         }
         #[cfg(feature = "concolic_bitwuzla")]
@@ -413,7 +427,7 @@ pub(crate) fn main() {
                 println!("[WARN] check-concolic without concolic_debug_verify feature");
             }
 
-            let mod_spec = parse_program(&PathBuf::from(&program));
+            let mod_spec = parse_program(&program);
             let mut stats = Stats::default();
             let mut sess = JitFuzzingSession::builder(mod_spec.clone())
                 .feedback(FeedbackOptions::minimal_code_coverage())
@@ -466,7 +480,7 @@ pub(crate) fn main() {
             }
         }
         Subcommand::ShowConcolic { program, input } => {
-            let mod_spec = parse_program(&PathBuf::from(&program));
+            let mod_spec = parse_program(&program);
             let mut stats = Stats::default();
             let mut sess = JitFuzzingSession::builder(mod_spec)
                 .feedback(FeedbackOptions::nothing())
@@ -501,233 +515,139 @@ pub(crate) fn main() {
             corpus,
             jsonl_out_path,
         } => {
-            let mut out_file = File::create(jsonl_out_path).unwrap();
-            let mod_spec = parse_program(&PathBuf::from(program));
-            let mut stats = Stats::default();
-            let mut sess = JitFuzzingSession::builder(mod_spec)
-                .feedback(FeedbackOptions::all_instrumentation())
-                .build();
-            sess.initialize(&mut stats);
-
-            let mut files = std::fs::read_dir(corpus)
-                .expect("failed to list corpus dir")
-                .flat_map(|el| el.ok())
-                .collect::<Vec<_>>();
-            files.sort_by_cached_key(|entry| entry.metadata().unwrap().created().unwrap());
-
-            for entry in files {
-                let inp = entry.path();
-                println!("{:?}", inp);
-                let testcase = std::fs::read(inp).expect("couldn't read seed");
-                assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
-                // let before = sess.covdb.features().to_map();
-                let res = sess.run_reusable_fresh(&testcase, false, &mut stats);
-                res.expect_ok();
-                let changed = res.novel_coverage_passes;
-
-                // let check_dom = |a, b| {
-                //     if changed.contains(b) {
-                //         assert!(changed.contains(a), "unexpected sensitivity break");
-                //     };
-                // };
-                // check_dom("covered_edges", "covered_basic_blocks");
-                // check_dom("covered_basic_blocks", "covered_functions");
-
-                let log_line = serde_json::to_string(&changed).unwrap();
-                println!("{}", log_line);
-                out_file.write_all(log_line.as_bytes()).unwrap();
-                out_file.write_all(b"\n").unwrap();
-            }
+            misc_eval::eval_pass_corr(&program, &corpus, &jsonl_out_path);
         }
         Subcommand::EvalPassSpeed {
             program,
             corpus,
             jsonl_out_path,
         } => {
-            let mut out_file = File::create(jsonl_out_path).unwrap();
-            let mod_spec = parse_program(&PathBuf::from(program));
-            let mut stats = Stats::default();
-
-            let passes = {
-                let feedback = FeedbackOptions::all_instrumentation();
-                let gen = crate::jit::FullFeedbackPasses {
-                    opts: feedback,
-                    spec: mod_spec.clone(),
-                };
-                gen.generate_passes()
-            };
-
-            let mut configs = passes
-                .0
-                .into_iter()
-                .map(|pass| {
-                    (
-                        pass.shortcode(),
-                        Box::new(crate::jit::SinglePassGen::new(pass)) as Box<dyn PassesGen>,
-                    )
-                })
-                .collect::<Vec<_>>();
-            configs.insert(0, ("<nothing>", Box::new(crate::jit::EmptyPassesGen)));
-
-            for (key, generator) in configs {
-                dbg!(key);
-                let mut sess = JitFuzzingSession::builder(mod_spec.clone())
-                    .passes_generator(generator.into())
-                    .build();
-                let reusable_jit_start = Instant::now();
-                sess.initialize(&mut stats);
-                let reusable_jit_time = reusable_jit_start.elapsed();
-
-                let mut files = std::fs::read_dir(&corpus)
-                    .expect("failed to list corpus dir")
-                    .flat_map(|el| el.ok())
-                    .collect::<Vec<_>>();
-                files.sort_by_cached_key(|entry| entry.metadata().unwrap().created().unwrap());
-
-                // dummy input for trapping jit timing
-                sess.run_reusable(&[0], false, &mut stats).expect_ok();
-
-                let reusable_run_start = Instant::now();
-                for entry in &files {
-                    let inp = entry.path();
-                    let testcase = std::fs::read(inp).expect("couldn't read seed");
-                    assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
-                    sess.run_reusable(&testcase, false, &mut stats).expect_ok();
-                }
-                let reusable_run_time = reusable_run_start.elapsed();
-
-                let log_obj = serde_json::json!({
-                    "pass": key,
-                    "reusable_run_seconds": reusable_run_time.as_secs_f32(),
-                    "reusable_jit_seconds": reusable_jit_time.as_secs_f32(),
-                    "reusable_jit_code_bytes": sess.reusable_stage.instance.as_ref().unwrap().code_size,
-                });
-                let log_line = serde_json::to_string(&log_obj).unwrap();
-                println!("{}", log_line);
-                out_file.write_all(log_line.as_bytes()).unwrap();
-                out_file.write_all(b"\n").unwrap();
-            }
+            misc_eval::eval_pass_speed(&program, &corpus, &jsonl_out_path);
         }
         Subcommand::EvalPagesTouched {
             program,
             corpus,
             jsonl_out_path,
         } => {
-            let mut out_file = File::options()
-                .create(true)
-                .append(true)
-                .open(jsonl_out_path)
-                .unwrap();
-
-            let mod_spec = parse_program(&PathBuf::from(program));
-
-            let mut stats = Stats::default();
-            let mut sess = JitFuzzingSession::builder(mod_spec.clone()).build();
-            sess.initialize(&mut stats);
-
-            let mut files = std::fs::read_dir(corpus)
-                .expect("failed to list corpus dir")
-                .flat_map(|el| el.ok())
-                .collect::<Vec<_>>();
-            files.sort_by_cached_key(|entry| entry.metadata().unwrap().created().unwrap());
-
-            for entry in &files {
-                let inp = entry.path();
-                let testcase = std::fs::read(&inp).expect("couldn't read seed");
-                assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
-                sess.run_reusable_fresh(&testcase, false, &mut stats)
-                    .expect_ok();
-                let reusable_instance = sess.reusable_stage.instance.as_mut().unwrap();
-                let modified_4k = reusable_instance
-                    .vmctx
-                    .heap_alloc
-                    .count_modified_pages(1 << 12);
-                let modified_64k = reusable_instance
-                    .vmctx
-                    .heap_alloc
-                    .count_modified_pages(1 << 16);
-                let pages_64k = reusable_instance.vmctx.heap_pages;
-                let pages_4k = pages_64k * (1 << (16 - 12));
-
-                let test_case = inp.file_name().unwrap().to_string_lossy();
-                let log_obj = serde_json::json!({
-                    "target": mod_spec.filename,
-                    "test_case": test_case,
-                    "modified_4k": modified_4k,
-                    "modified_64k": modified_64k,
-                    "pages_64k": pages_64k,
-                    "pages_4k": pages_4k,
-                });
-                let log_line = serde_json::to_string(&log_obj).unwrap();
-                println!("{}", log_line);
-                out_file.write_all(log_line.as_bytes()).unwrap();
-                out_file.write_all(b"\n").unwrap();
-            }
+            misc_eval::eval_pages_touched(&program, &corpus, &jsonl_out_path);
         }
         Subcommand::EvalSnapshotPerf {
             pages,
             touch,
             iters,
         } => {
-            assert!(RestoreDirtyLKMMapping::is_available());
-            use crate::cow_memory::*;
-            use rand::seq::SliceRandom;
-            #[derive(Debug)]
-            enum Provider {
-                Dummy,
-                CoW,
-                Criu,
-                Lkm,
-            }
-            let accessible_size = pages << 12;
-            let mapping_size = accessible_size;
-            let mut page_offsets = (0..pages).map(|x| x << 12).collect::<Vec<_>>();
-            let mut rng = rand::rng();
-
-            for provider in &[
-                Provider::Dummy,
-                Provider::CoW,
-                Provider::Criu,
-                Provider::Lkm,
-            ] {
-                dbg!(provider);
-                let mut mapping: Box<dyn ResettableMapping> = match provider {
-                    Provider::Dummy => Box::new(DummyMapping::new(accessible_size, mapping_size)),
-                    Provider::CoW => Box::new(CowResetMapping::new(accessible_size, mapping_size)),
-                    Provider::Criu => Box::new(CriuMapping::new(accessible_size, mapping_size)),
-                    Provider::Lkm => {
-                        Box::new(RestoreDirtyLKMMapping::new(accessible_size, mapping_size))
-                    }
-                };
-
-                mapping.restore();
-                dbg!(provider);
-
-                let mut chksum = 0;
-                let start = Instant::now();
-                for _ in 0..iters {
-                    let slice = mapping.as_mut_slice();
-                    page_offsets.shuffle(&mut rng);
-                    page_offsets
-                        .iter()
-                        .take(touch)
-                        .for_each(|&i| slice[i] = 0x42);
-                    mapping.restore();
-                    let slice = mapping.as_slice();
-                    chksum += page_offsets
-                        .iter()
-                        .take(touch)
-                        .map(|&i| slice[i] as usize)
-                        .sum::<usize>();
-                }
-                println!(
-                    "{:?}: {:?} (chksum: {:#x})",
-                    provider,
-                    start.elapsed(),
-                    chksum
-                )
-            }
+            misc_eval::eval_snapshot_perf(pages, touch, iters);
         }
         Subcommand::Doctor { program } => doctor::run(program),
+
+        Subcommand::CoverageGym {
+            program,
+            generator,
+            execs,
+            instruction_limit,
+            cov_html,
+            json_out,
+        } => {
+            use crate::instrumentation::{
+                CodeCovInstrumentationPass, EdgeCoveragePass, EdgeShortestExecutionTracePass,
+                FunctionCoveragePass, FunctionShortestExecutionTracePass,
+            };
+            use std::io::Read as _;
+            let mod_spec = parse_program(&program);
+
+            let mut stats = Stats::default();
+            let mut sess = JitFuzzingSession::builder(mod_spec.clone())
+                .feedback(FeedbackOptions {
+                    live_funcs: true,
+                    live_bbs: true,
+                    live_edges: true,
+                    func_shortest_trace: true,
+                    edge_shortest_trace: true,
+                    ..FeedbackOptions::nothing()
+                })
+                .instruction_limit(Some(instruction_limit))
+                .build();
+            sess.initialize(&mut stats);
+
+            let mut child = std::process::Command::new(generator)
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stdout = child.stdout.as_mut().unwrap();
+
+            fn calculate_score(sess: &JitFuzzingSession) -> f32 {
+                let funcs = sess.get_pass::<FunctionCoveragePass>().count_saved();
+                let edges = sess.get_pass::<EdgeCoveragePass>().count_saved();
+                let time_to_func = sess
+                    .get_pass::<FunctionShortestExecutionTracePass>()
+                    .coverage
+                    .iter_saved()
+                    .map(|(_func, &score)| 64. - (*score as f32 + 1.0).log2())
+                    .sum::<f32>();
+                let time_to_edge = sess
+                    .get_pass::<EdgeShortestExecutionTracePass>()
+                    .coverage
+                    .iter_saved()
+                    .map(|(_func, &score)| 64. - (*score as f32 + 1.0).log2())
+                    .sum::<f32>();
+                funcs as f32 * 10.0 + edges as f32 + time_to_func * 0.5 + time_to_edge * 0.1
+            }
+
+            let mut moving_score = 0.0;
+            let mut stops = Vec::new();
+            let mut buf = Vec::new();
+            for i in 0..execs {
+                let mut len = [0; 4];
+                stdout.read_exact(&mut len).unwrap();
+                let len = u32::from_le_bytes(len);
+                buf.truncate(0);
+                buf.resize(len as usize, 0);
+                stdout.read_exact(&mut buf).unwrap();
+                // dbg!(buf.len());
+                let res = sess.run_reusable(&buf, false, &mut stats);
+                res.expect_ok();
+                if res.novel_coverage {
+                    res.print_cov_update(&sess, i);
+                    // eprintln!("[{:05}] novel coverage {:?}", i, res.novel_coverage_passes);
+                }
+
+                if i.is_power_of_two() && i >= 512 {
+                    let score = calculate_score(&sess);
+                    if moving_score == 0.0 {
+                        moving_score = score;
+                    } else {
+                        moving_score = moving_score * 0.5 + score * 0.5;
+                    }
+                    dbg!(score);
+                    stops.push(score);
+                    // dbg!(score);
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            moving_score = moving_score * 0.5 + calculate_score(&sess) * 0.5;
+            dbg!(moving_score);
+            println!("{}", moving_score);
+
+            if let Some(json_out_path) = json_out {
+                let mut out_file = std::fs::File::create(json_out_path).unwrap();
+                let log_obj = serde_json::json!({
+                    "target": mod_spec.filename,
+                    "score": moving_score,
+                    "stops": stops,
+                });
+                let log_line = serde_json::to_string(&log_obj).unwrap();
+                println!("{}", log_line);
+                out_file.write_all(log_line.as_bytes()).unwrap();
+                out_file.write_all(b"\n").unwrap();
+            }
+
+            if let Some(out_path) = cov_html {
+                #[cfg(feature = "reports")]
+                crate::cli::cov_html::write_html_cov_report(mod_spec, &sess, &out_path);
+                #[cfg(not(feature = "reports"))]
+                panic!("trying to write html report without 'reports' feature")
+            }
+        }
     }
 }

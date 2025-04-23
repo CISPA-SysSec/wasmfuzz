@@ -10,7 +10,7 @@ use crate::{
 
 #[derive(Parser)]
 pub(crate) struct CminOpts {
-    pub program: String,
+    pub program: PathBuf,
     #[clap(long)]
     corpus_dir: String,
     #[clap(long)]

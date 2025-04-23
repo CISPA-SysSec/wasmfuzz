@@ -47,7 +47,7 @@ impl FileLineCoverage {
 
 #[derive(Parser)]
 pub(crate) struct LcovOpts {
-    pub program: String,
+    pub program: PathBuf,
     #[clap(long)]
     pub seed_files: Vec<String>,
     #[clap(long)]

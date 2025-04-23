@@ -100,12 +100,13 @@ We target the [Lime1](https://github.com/WebAssembly/tool-conventions/blob/main/
 We retrofit support for WebAssembly to native fuzzers via a KISS recompilation strategy:
 `wasm2c` translates WASM modules to plain C files, which we then run through standard source-level fuzzing setups.
 
-Currently, we include the following fuzzers in our evaluation scripts:
+Currently, we include the following WebAssembly fuzzers in our evaluation scripts:
 - `wasmfuzz`
-- [WAFL](https://github.com/fgsect/WAFL) (a WASM harness fuzzer, adapted for libfuzzer harnesses)
-- libfuzzer-wasm2c
-- aflpp-wasm2c
-- libafl\_libfuzzer-wasm2c
+- [WAFL](https://github.com/fgsect/WAFL) (We include a "harness stub" for compatibility)
+- [FuzzM](https://github.com/fuzzm/fuzzm-project) (with "harness stub")
+- libfuzzer via wasm2c
+- AFL++ via wasm2c
+- libafl\_libfuzzer via wasm2c
 
 ### Limitations
 
@@ -115,9 +116,9 @@ We have not confirmed the impact of this specific issue though.
 
 ## Notes on Upstreaming
 
-- Alternate JIT memory allocator for Cranelift: [[Upstream PR]](https://github.com/bytecodealliance/wasmtime/pull/10512)
-
 - `rustc` support for `-Zembed-source` for embedded sources in harness binaries: [[Upstream PR]](https://github.com/rust-lang/rust/pull/126985)
+
+- Alternate JIT memory allocator for Cranelift: [[Upstream PR]](https://github.com/bytecodealliance/wasmtime/pull/10512)
 
 - `symbolic` only supports DWARF embedded sources at exactly v12.10.0-v12.11.1: [[Upstream PR]](https://github.com/getsentry/symbolic/pull/849)
 
