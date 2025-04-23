@@ -7,7 +7,7 @@ FROM ubuntu:22.04
 # # install wasmtime
 # RUN apt-get update && apt-get install -y wget curl tar xz-utils && \
 #     curl https://wasmtime.dev/install.sh -sSf | bash
-# 
+#
 # # install wabt's wasi version (we need ~1.0.34)
 # RUN wget -nv https://github.com/WebAssembly/wabt/releases/download/1.0.34/wabt-1.0.34-wasi.tar.gz && \
 #     mkdir /wabt && \
@@ -22,11 +22,11 @@ RUN apt-get update && apt-get install -y wget tar xz-utils && \
     tar -kxzf wabt-1.0.31-ubuntu.tar.gz --strip-components 1 -C /usr/
 
 # install wizer for wasm2c pre-init
-RUN wget -nv "https://github.com/bytecodealliance/wizer/releases/download/v3.0.1/wizer-v3.0.1-`uname -m`-linux.tar.xz" && \
-    tar xf wizer-v3.0.1-`uname -m`-linux.tar.xz \
+RUN wget -nv "https://github.com/bytecodealliance/wizer/releases/download/v8.0.0/wizer-v8.0.0-`uname -m`-linux.tar.xz" && \
+    tar xf wizer-v8.0.0-`uname -m`-linux.tar.xz \
         -C /usr/bin/ --strip-components 1 \
-        wizer-v3.0.1-`uname -m`-linux/wizer && \
-    rm wizer-v3.0.1-`uname -m`-linux.tar.xz
+        wizer-v8.0.0-`uname -m`-linux/wizer && \
+    rm wizer-v8.0.0-`uname -m`-linux.tar.xz
 
 WORKDIR /
 COPY prepare-wasm2c-fuzzer.sh /usr/bin/

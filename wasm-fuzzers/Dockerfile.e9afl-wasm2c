@@ -1,0 +1,34 @@
+FROM wasm-fuzzers-wasm2c-base
+
+RUN apt-get update && apt-get install -y wget software-properties-common
+RUN apt-get install -y \
+    autoconf \
+    automake \
+    build-essential \
+    cmake \
+    libtool \
+    llvm llvm-dev clang \
+    make \
+    ninja-build \
+    sudo \
+    unzip \
+    zlib1g-dev \
+    patchelf \
+    git sed rsync
+
+# Compile and install E9AFL
+# RUN apt-get install -y elfutils libdw-dev libzydis-dev
+RUN apt-get install -y vim # TODO: which of the dependencies fixes the build?
+RUN git clone https://github.com/GJDuck/e9afl && git -C e9afl checkout c1f439d82749de5d67d1ca119d10dcab54725bc9
+WORKDIR /e9afl
+RUN ./build.sh
+RUN ./install.sh && dpkg -i e9afl_*.deb
+
+RUN apt-get install -y afl
+
+WORKDIR /
+COPY e9afl-wasm2c.sh run-afl-fuzz.sh /usr/bin/
+RUN chmod +x /usr/bin/e9afl-wasm2c.sh /usr/bin/run-afl-fuzz.sh
+
+RUN mkdir -p /seeds/ && echo -n "YELLOW SUBMARINE" > /seeds/seed && mkdir -p /corpus/
+ENTRYPOINT [ "e9afl-wasm2c.sh" ]

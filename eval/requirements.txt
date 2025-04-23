@@ -1,0 +1,8 @@
+pandas
+numpy
+seaborn
+zstandard
+matplotlib
+scipy
+ipykernel
+ipywidgets
