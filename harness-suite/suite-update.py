@@ -34,7 +34,8 @@ for harness in harness_dir.glob("*.wasm"):
     for row in reader:
         head = get_remote_head(row["origin"])
         path = Path(row["path"]).parts[2]
-        proj_dirs = list(Path(args.suite_dir).glob("*/" + path))
+        proj_dirs = Path(args.suite_dir).glob("*/" + path)
+        proj_dirs = [x for x in proj_dirs if "corpus" not in x.parts]
         assert len(proj_dirs) == 1, f"{proj_dirs=} {path=}"
         proj_dir = proj_dirs[0]
         if row["pinrev"] != head:

@@ -6,14 +6,16 @@ RUN apt-get update && \
 # install commonly-used building packages
 RUN apt-get install -y autoconf automake autopoint libtool \
     make cmake pkg-config meson ninja-build \
-    g++ libz-dev libreadline-dev
+    clang libz-dev libreadline-dev
 
 COPY scripts/ /usr/bin/
 RUN prepare-toolchain.sh && mkdir /out/
 
 ARG project_name
 ARG project_path
+ARG build_type="wasi-lime1"
 ENV PROJECT=/projects/${project_name}
+ENV BUILD_TYPE=${build_type}
 
 WORKDIR ${PROJECT}
 # COPY ${project_name}/prepare.sh ${PROJECT}/prepare.sh

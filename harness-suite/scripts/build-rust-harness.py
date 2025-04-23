@@ -17,11 +17,16 @@ parser.add_argument('--small-stack', action='store_true')
 parser.add_argument('--init-toolchain', action='store_true')
 args = parser.parse_args()
 
-RUSTUP_TOOLCHAIN = "nightly-2025-03-18"
-TARGET_TRIPLE = "wasm32-wasip1"
+BUILD_TYPE = os.environ.get("BUILD_TYPE", "wasi-lime1")
+assert BUILD_TYPE in ["wasi-lime1", "wasi-mvp", "x86_64-libfuzzer"]
+RUSTUP_TOOLCHAIN = "nightly-2025-04-14"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
 os.environ["RUSTUP_TOOLCHAIN"] = RUSTUP_TOOLCHAIN
+if BUILD_TYPE == "x86_64-libfuzzer":
+    TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
+else:
+    TARGET_TRIPLE = "wasm32-wasip1"
 
 
 def patch_cargo_toml(path):
@@ -51,16 +56,27 @@ def patch_cargo_toml(path):
 
 def build_folder(folder, verb="build"):
     env = os.environ.copy()
-    if "CFLAGS" not in env:
-        env["CFLAGS"] = f"--sysroot {WASI_SYSROOT}"
-    env["PKG_CONFIG_SYSROOT_DIR"] = WASI_SYSROOT
-    env["RUSTFLAGS"] = "-C target-feature=+crt-static"
-    env["RUSTFLAGS"] = "-C target-cpu=lime1"
-    env["RUSTFLAGS"] += " -Zwasi-exec-model=reactor"
-    env["RUSTFLAGS"] += " --cfg=fuzzing"
-
+    env["RUSTFLAGS"] = "--cfg=fuzzing"
     # https://github.com/rust-lang/rust/pull/126985
     env["RUSTFLAGS"] += " -Zembed-source=yes -Zdwarf-version=5 -g"
+
+    if BUILD_TYPE != "x86_64-libfuzzer":
+        if "CFLAGS" not in env:
+            env["CFLAGS"] = f"--sysroot {WASI_SYSROOT}"
+        env["PKG_CONFIG_SYSROOT_DIR"] = WASI_SYSROOT
+        env["RUSTFLAGS"] += " -C target-feature=+crt-static"
+        target_cpu = {"wasi-lime1": "lime1", "wasi-mvp": "mvp"}[BUILD_TYPE]
+        env["RUSTFLAGS"] += f" -C target-cpu={target_cpu}"
+        env["RUSTFLAGS"] += " -Zwasi-exec-model=reactor"
+    else:
+        # https://github.com/rust-fuzz/cargo-fuzz/blob/65e3279c9602375037cb3aaabd3209c5b746375c/src/project.rs#L175-L191
+        env["RUSTFLAGS"] = " -Cpasses=sancov-module" \
+                           " -Cllvm-args=-sanitizer-coverage-level=4" \
+                           " -Cllvm-args=-sanitizer-coverage-inline-8bit-counters" \
+                           " -Cllvm-args=-sanitizer-coverage-pc-table" \
+                           " -Cllvm-args=-sanitizer-coverage-trace-compares" \
+                           " -Cllvm-args=-sanitizer-coverage-stack-depth"
+
 
     env["CARGO_PROFILE_RELEASE_OPT_LEVEL"] = "s"
     env["CARGO_PROFILE_RELEASE_PANIC"] = "abort"
@@ -74,8 +90,10 @@ def build_folder(folder, verb="build"):
         # default: 16 pages, 1MB
         #    smol: 1 page, 64kb
         env["RUSTFLAGS"] += f" -C link-arg=-zstack-size={1<<16}"
-    # embed build-id (requires LLVM 17)
-    env["RUSTFLAGS"] += " -C link-arg=--build-id"
+    
+    if BUILD_TYPE != "x86_64-libfuzzer":
+        # embed build-id into WASM module (requires LLVM 17)
+        env["RUSTFLAGS"] += " -C link-arg=--build-id"
     subprocess.run([
         CARGO, verb, "--bins", f"--target={TARGET_TRIPLE}",
         "-Z=build-std=std,panic_abort",
@@ -140,15 +158,22 @@ def build_harnesses():
             folder_ = folder_.parent
         bins_path /= "debug" if args.debug else "release"
 
-        for wasm in bins_path.glob("*.wasm"):
-            print(wasm)
-            slug = wasm.parts[2]
-            if "crates" in wasm.parts:
-                slug += "-" + wasm.parts[wasm.parts.index("crates")+1]
-            slug += "-" + wasm.stem.replace("-fuzzer", "").replace("_fuzzer", "")
+        for module in bins_path.glob("*"):
+            if not (module.is_file() and os.access(module, os.X_OK)):
+                continue
+            print(module)
+            slug = module.parts[2]
+            if "crates" in module.parts:
+                slug += "-" + module.parts[module.parts.index("crates")+1]
+            slug += "-" + module.stem.replace("-fuzzer", "").replace("_fuzzer", "")
             if args.debug:
                 slug += "-dbg"
-            shutil.copyfile(wasm, OUT / f"{slug}.wasm")
+
+            if BUILD_TYPE == "x86_64-libfuzzer":
+                shutil.copyfile(module, OUT / f"{slug}.exe")
+                os.chmod(OUT / f"{slug}.exe", 0o755)
+            else:
+                shutil.copyfile(module, OUT / f"{slug}.wasm")
         # subprocess.run([CARGO, "clean"], cwd=folder, env=env)
 
 

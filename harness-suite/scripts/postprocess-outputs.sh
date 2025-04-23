@@ -1,5 +1,8 @@
 #!/bin/bash
 
+if [ "$BUILD_TYPE" = "x86_64-libfuzzer" ]; then
+    exit 0
+fi
 
 if [ "$(ls -A '/out/')" ]; then
     file-rename 's/_fuzzer//' /out/*.wasm
@@ -10,7 +13,7 @@ for module in /out/*.wasm;
 do
     chmod -x "$module"
     # inject build-id
-    wasm-split -q "$module"
+    # wasm-split -q "$module"
     # # bundle source files to /out/$module-src.zip
     # sentry-cli debug-files bundle-sources "$module"
     # # pretty output

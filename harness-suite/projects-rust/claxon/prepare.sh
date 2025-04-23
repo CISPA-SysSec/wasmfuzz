@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/ruuda/claxon.git "$PROJECT/repo" 20fd6a78830ec75918175b2375c21dd667b894ce
+git clone-rev.sh https://github.com/ruuda/claxon.git "$PROJECT/repo" 890338d08cbf02f70767fa01580603b91828261d
 git -C "$PROJECT/repo" apply "$PROJECT/0001-update-fuzzers.patch"

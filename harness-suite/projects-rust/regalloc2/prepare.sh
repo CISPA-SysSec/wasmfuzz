@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/bytecodealliance/regalloc2.git "$PROJECT/repo" 925df1b4674435a9322e21912926a68749517861
+git clone-rev.sh https://github.com/bytecodealliance/regalloc2.git "$PROJECT/repo" b2bb25ddcfe7cf91ba65e969037ca4a141fd7250

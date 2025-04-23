@@ -14,16 +14,10 @@ tar xf libz-1.2.13-wasi-sdk-20.0.tar.gz --directory="${WASI_SDK_PATH}/share/wasi
 
 mv "$WASI_SDK_PATH" /wasi-sdk
 
-wget -q "https://github.com/bytecodealliance/wizer/releases/download/v3.0.1/wizer-v3.0.1-x86_64-linux.tar.xz"
-tar xf wizer-v3.0.1-x86_64-linux.tar.xz \
-    -C /usr/bin/ --strip-components 1 \
-    wizer-v3.0.1-x86_64-linux/wizer
-
-wget -q https://github.com/getsentry/symbolicator/releases/download/23.11.2/wasm-split-Linux-x86_64 -O /usr/bin/wasm-split
-chmod +x /usr/bin/wasm-split
-
-wget -q https://github.com/getsentry/sentry-cli/releases/download/2.23.0/sentry-cli-Linux-x86_64 -O /usr/bin/sentry-cli
-chmod +x /usr/bin/sentry-cli
+# wget -q https://github.com/getsentry/symbolicator/releases/download/23.11.2/wasm-split-Linux-x86_64 -O /usr/bin/wasm-split
+# chmod +x /usr/bin/wasm-split
+# wget -q https://github.com/getsentry/sentry-cli/releases/download/2.23.0/sentry-cli-Linux-x86_64 -O /usr/bin/sentry-cli
+# chmod +x /usr/bin/sentry-cli
 
 # Install a pinned Rust nightly toolchain
 build-rust-harness.py --init-toolchain

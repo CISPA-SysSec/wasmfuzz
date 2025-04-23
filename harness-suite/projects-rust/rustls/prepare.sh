@@ -1,3 +1,3 @@
 #!/bin/bash
 set -e +x
-git clone-rev.sh https://github.com/rustls/rustls rustls 4ec06b638c427b333401af8b96f014a293e236df
+git clone-rev.sh https://github.com/rustls/rustls "$PROJECT/repo" 0f5b44d5fafbf06aab1844baa6d45144685a62a4
