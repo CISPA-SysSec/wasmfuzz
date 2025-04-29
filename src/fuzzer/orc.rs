@@ -362,7 +362,7 @@ impl Orchestrator {
             let res = self.add_corpus(input);
             if let Some(res) = res {
                 if res.is_crash() {
-                    eprintln!("load_corpus with crashing input! {:?}", res);
+                    eprintln!("load_corpus with crashing input! {res:?}");
                     return Err(());
                 }
             }

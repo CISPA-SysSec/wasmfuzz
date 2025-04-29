@@ -97,9 +97,9 @@ fn print_system_info() {
     println!("Compile-time features:");
     for (enabled, feature) in default_features {
         if *enabled {
-            println!("  [+] {}", feature);
+            println!("  [+] {feature}");
         } else {
-            println!("  [-] {} (disabled!)", feature);
+            println!("  [-] {feature} (disabled!)");
         }
     }
 
@@ -107,7 +107,7 @@ fn print_system_info() {
         println!("Non-default features:");
         for (enabled, feature) in extra_features {
             if *enabled {
-                println!("[+] {}", feature);
+                println!("[+] {feature}");
             }
         }
     }

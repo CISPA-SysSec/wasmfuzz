@@ -511,7 +511,7 @@ pub(crate) fn translate_operator(op: Operator) -> WFOperator {
         }
         _ => {
             eprintln!("TODO: unimplemented operator: {op:?}");
-            WFO::TodoUnimplemented(format!("{:?}", op))
+            WFO::TodoUnimplemented(format!("{op:?}"))
         }
     }
 }

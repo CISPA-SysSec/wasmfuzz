@@ -1174,7 +1174,7 @@ impl RunResult {
         // assert!(self.trap_kind.is_none());
         if self.is_crash() {
             let trap_kind = self.trap_kind.as_ref().unwrap();
-            panic!("execution trapped with {:?} which indicates a crash. crashing runs are not expected in this context", trap_kind);
+            panic!("execution trapped with {trap_kind:?} which indicates a crash. crashing runs are not expected in this context");
         }
     }
 
@@ -1200,8 +1200,7 @@ impl RunResult {
             .max()
             .unwrap_or(0);
         println!(
-            "[funcs: {:>3} edges: {:>5} corp: {:>4}] new features: {}",
-            funcs, edges, corpus_count, new_fts
+            "[funcs: {funcs:>3} edges: {edges:>5} corp: {corpus_count:>4}] new features: {new_fts}"
         );
     }
 }

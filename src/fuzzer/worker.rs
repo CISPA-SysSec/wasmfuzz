@@ -78,7 +78,7 @@ impl Worker {
         let sess = match orc {
             Some(ref handle) => {
                 let config = handle.suggest();
-                eprintln!("got config: {:#?}", config);
+                eprintln!("got config: {config:#?}");
                 schedule.timeout = Some(config.timeout);
                 JitFuzzingSession::builder(mod_spec.clone())
                     .passes_generator(Arc::new(config.passes))

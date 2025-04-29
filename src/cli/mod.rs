@@ -244,12 +244,11 @@ pub(crate) fn main() {
                 if let Some(trap_kind) = res {
                     if trap_kind.is_crash() {
                         println!(
-                            "execution trapped with {:?} which indicates that the target crashed",
-                            trap_kind
+                            "execution trapped with {trap_kind:?} which indicates that the target crashed"
                         );
                         break;
                     } else {
-                        println!("execution stopped with {:?} ", trap_kind);
+                        println!("execution stopped with {trap_kind:?} ");
                     }
                 }
             }
@@ -627,7 +626,7 @@ pub(crate) fn main() {
             let _ = child.wait();
             moving_score = moving_score * 0.5 + calculate_score(&sess) * 0.5;
             dbg!(moving_score);
-            println!("{}", moving_score);
+            println!("{moving_score}");
 
             if let Some(json_out_path) = json_out {
                 let mut out_file = std::fs::File::create(json_out_path).unwrap();
@@ -637,7 +636,7 @@ pub(crate) fn main() {
                     "stops": stops,
                 });
                 let log_line = serde_json::to_string(&log_obj).unwrap();
-                println!("{}", log_line);
+                println!("{log_line}");
                 out_file.write_all(log_line.as_bytes()).unwrap();
                 out_file.write_all(b"\n").unwrap();
             }

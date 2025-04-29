@@ -122,7 +122,7 @@ fn run_inputs(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf]) -> JitFuzzingS
     sess.initialize(&mut stats);
 
     for path in input_paths {
-        eprint!("{:?}\r", path);
+        eprint!("{path:?}\r");
         let input = std::fs::read(path).unwrap();
         if input.len() > crate::TEST_CASE_SIZE_LIMIT {
             println!("skipping testcase {path:?} due to size limit");

@@ -23,7 +23,7 @@ pub(crate) fn eval_pass_corr(program: &PathBuf, corpus: &PathBuf, jsonl_out_path
 
     for entry in files {
         let inp = entry.path();
-        println!("{:?}", inp);
+        println!("{inp:?}");
         let testcase = std::fs::read(inp).expect("couldn't read seed");
         assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
         // let before = sess.covdb.features().to_map();
@@ -40,7 +40,7 @@ pub(crate) fn eval_pass_corr(program: &PathBuf, corpus: &PathBuf, jsonl_out_path
         // check_dom("covered_basic_blocks", "covered_functions");
 
         let log_line = serde_json::to_string(&changed).unwrap();
-        println!("{}", log_line);
+        println!("{log_line}");
         out_file.write_all(log_line.as_bytes()).unwrap();
         out_file.write_all(b"\n").unwrap();
     }
@@ -119,7 +119,7 @@ pub(crate) fn eval_pass_speed(program: &PathBuf, corpus: &PathBuf, jsonl_out_pat
             "reusable_jit_code_bytes": sess.reusable_stage.instance.as_ref().unwrap().code_size,
         });
         let log_line = serde_json::to_string(&log_obj).unwrap();
-        println!("{}", log_line);
+        println!("{log_line}");
         out_file.write_all(log_line.as_bytes()).unwrap();
         out_file.write_all(b"\n").unwrap();
     }
@@ -172,7 +172,7 @@ pub(crate) fn eval_pages_touched(program: &PathBuf, corpus: &PathBuf, jsonl_out_
             "pages_4k": pages_4k,
         });
         let log_line = serde_json::to_string(&log_obj).unwrap();
-        println!("{}", log_line);
+        println!("{log_line}");
         out_file.write_all(log_line.as_bytes()).unwrap();
         out_file.write_all(b"\n").unwrap();
     }

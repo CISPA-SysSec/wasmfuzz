@@ -94,7 +94,7 @@ impl TestModule {
         expr += "let data: [u8; 8] = data.try_into().unwrap(); ";
         expr += "let mut cnt = 0; ";
         for i in 0..8 {
-            expr += &format!("if data[{}] == {} {{ cnt += 1; }};", i, i);
+            expr += &format!("if data[{i}] == {i} {{ cnt += 1; }};");
             // expr += &format!("if data[{}] == {} {{ cnt -= 1; }};", i, 0xf0 + i);
         }
         expr += " cnt == 8 }";
