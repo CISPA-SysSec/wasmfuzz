@@ -228,8 +228,10 @@ tag_manually("wgpu-glsl_parser.wasm", "d55bb2956a2391e3cd003b837bb406b4c1440bc7"
 # [STDOUT] index out of bounds: the len is 1 but the index is 3132799673
 tag_manually("wgpu-ir.wasm", "d55bb2956a2391e3cd003b837bb406b4c1440bc7", Tag.CRASHING, Tag.BUGGY_PROJECT)
 
-# Note: naga's wgsl frontend is exposed in browsers, so keep it in the benchmark suite
+# Note: naga's wgsl frontend is exposed in Firefox's WebGPU API, so keep it in the benchmark suite
 tag_manually("wgpu-wgsl_parser.wasm", "d55bb2956a2391e3cd003b837bb406b4c1440bc7", Tag.SUITE)
+# https://github.com/gfx-rs/wgpu/issues/5757#issuecomment-2830427879
+tag_manually("wgpu-wgsl_parser.wasm", "d55bb2956a2391e3cd003b837bb406b4c1440bc7", Tag.CRASHING)
 
 # rust-analyzer's syntax crate crashes instantly with the native fuzzing setup...
 tag_manually("rust-analyzer-syntax-reparse.wasm", "1c72e5403b016513cead49b7b65dc0a96b252dcd", Tag.CRASHING, Tag.BUGGY_PROJECT)
@@ -295,13 +297,16 @@ tag_manually("zune-image-zune-png-decode_buffer.wasm", "4a073b12947f9d1003ae931b
 tag_manually("zune-image-zune-ppm-decode_buffer.wasm", "4a073b12947f9d1003ae931b7b7cd9da2914d4d8", Tag.CRASHING, Tag.BUGGY_PROJECT)
 tag_manually("zune-image-zune-psd-decode_buffer.wasm", "4a073b12947f9d1003ae931b7b7cd9da2914d4d8", Tag.CRASHING, Tag.BUGGY_PROJECT)
 tag_manually("zune-image-zune-qoi-decode_buffer.wasm", "4a073b12947f9d1003ae931b7b7cd9da2914d4d8", Tag.CRASHING, Tag.BUGGY_PROJECT)
-tag_manually("zune-image-zune-png-roundtrip.wasm", "4a073b12947f9d1003ae931b7b7cd9da2914d4d8", Tag.CRASHING, Tag.BUGGY_PROJECT)
-
+tag_manually("zune-image-zune-png-roundtrip.wasm",     "4a073b12947f9d1003ae931b7b7cd9da2914d4d8", Tag.CRASHING, Tag.BUGGY_PROJECT)
 
 PROJS = {"libpng", "freetype2", "jsoncpp"}
 for harness in harnesses:
     if any(harness.startswith(proj) for proj in PROJS):
         tags[harness].add(Tag.REQUIRES_SJLJ)
+
+for harness in harnesses:
+    if harness.startswith("fuzzer-challenges"):
+        tags[harness].add(Tag.CRASHING)
 
 tag_from_corpus()
 

@@ -74,6 +74,8 @@ pub(crate) struct InstrumentationOpts {
     pub cmpcov_hamming: FlagBool,
     #[clap(long, default_value = "true")]
     pub cmpcov_absdist: FlagBool,
+    #[clap(long, default_value = "false")]
+    pub cmpcov_u16dist: FlagBool,
     #[clap(long, default_value = "true")]
     pub perffuzz_func: FlagBool,
     #[clap(long, default_value = "false")]
@@ -118,6 +120,7 @@ impl InstrumentationOpts {
             cov_edges,
             cmpcov_hamming,
             cmpcov_absdist,
+            cmpcov_u16dist,
             perffuzz_func,
             perffuzz_bb,
             perffuzz_edge_local,
@@ -142,6 +145,7 @@ impl InstrumentationOpts {
             live_edges: **cov_edges,
             cmpcov_hamming: **cmpcov_hamming,
             cmpcov_absdist: **cmpcov_absdist,
+            cmpcov_u16dist: **cmpcov_u16dist,
             perffuzz_func: **perffuzz_func,
             perffuzz_bb: **perffuzz_bb,
             perffuzz_edge: **perffuzz_edge_local,

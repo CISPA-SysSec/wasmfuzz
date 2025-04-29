@@ -100,6 +100,10 @@ impl TestModule {
         expr += " cnt == 8 }";
         Self::compile_simple_rust_expr("path-cov-test", &expr)
     }
+
+    fn input_len_eq_2048() -> Self {
+        Self::compile_simple_rust_expr("input-len-eq-2048", "data.len() == 2048")
+    }
 }
 
 struct Fuzzer {
@@ -110,6 +114,7 @@ impl Fuzzer {
     fn with_config<F: FnOnce(&mut FuzzOpts)>(f: F) -> Self {
         let mut opts = FuzzOpts::parse_from(vec!["wasmfuzz-fuzz", "test.wasm"]);
         opts.verbose_corpus = true;
+
         opts.i.cov_funcs = false.into();
         opts.i.cov_bbs = false.into();
         opts.i.cov_edges = false.into();
@@ -317,4 +322,54 @@ fn test_path_cov() {
         opts.i.path_hash_edge = true.into();
     })
     .assert_solves(TestModule::path_cov_test(), 5_000_000);
+}
+
+#[test]
+fn test_input_len_eq_2048() {
+    Fuzzer::with_config(|opts| {
+        opts.i.cmpcov_absdist = true.into();
+    })
+    .assert_feedback_run(
+        TestModule::input_len_eq_2048(),
+        &[
+            // lower sensitivity for larger distances
+            &[&[b'A'; 3], &[b'A'; 4], &[b'A'; 5], &[b'A'; 1000]],
+            &[&[b'A'; 1025], &[b'A'; 1026], &[b'A'; 1027]],
+            // high sensitivity for small distances
+            &[&[b'A'; 2044]],
+            &[&[b'A'; 2045]],
+            &[&[b'A'; 2046]],
+            &[&[b'A'; 2047]],
+        ],
+        &[b'A'; 2048],
+    );
+
+    Fuzzer::with_config(|opts| {
+        opts.i.cmpcov_u16dist = true.into();
+    })
+    .assert_feedback_run(
+        TestModule::input_len_eq_2048(),
+        &[
+            &[&[b'A'; 3]],
+            &[&[b'A'; 4]],
+            &[&[b'A'; 5]],
+            &[&[b'A'; 6]],
+            &[&[b'A'; 1025]],
+            &[&[b'A'; 1026]],
+            &[&[b'A'; 1027]],
+            &[&[b'A'; 2046]],
+            &[&[b'A'; 2047]],
+        ],
+        &[b'A'; 2048],
+    )
+    .assert_solves(TestModule::input_len_eq_2048(), 1_000_000);
+}
+
+#[test]
+#[should_panic]
+fn test_input_len_eq_2048_fails() {
+    Fuzzer::with_config(|opts| {
+        opts.i.cmpcov_absdist = true.into();
+    })
+    .assert_solves(TestModule::input_len_eq_2048(), 1_000_000);
 }

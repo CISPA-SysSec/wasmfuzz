@@ -525,6 +525,7 @@ impl Orchestrator {
             live_edges,
             cmpcov_hamming,
             cmpcov_absdist,
+            cmpcov_u16dist,
             perffuzz_func,
             perffuzz_bb,
             perffuzz_edge,
@@ -569,6 +570,7 @@ impl Orchestrator {
                 &mut *call_value_profile,
                 &mut *cmpcov_absdist,
                 &mut *cmpcov_hamming,
+                &mut *cmpcov_u16dist,
                 &mut *perffuzz_func,
                 &mut *perffuzz_bb,
                 &mut *perffuzz_edge,
@@ -728,6 +730,7 @@ impl PassesGen for OrcPassesGen {
             live_edges,
             cmpcov_hamming,
             cmpcov_absdist,
+            cmpcov_u16dist,
             perffuzz_func,
             perffuzz_bb,
             perffuzz_edge,
@@ -783,6 +786,7 @@ impl PassesGen for OrcPassesGen {
             cmpcov_absdist,
             CmpCoveragePass::new(CmpCovKind::AbsDist, &self.spec, key_filter)
         );
+        add_pass!(cmpcov_u16dist, CmpDistU16Pass::new(&self.spec, key_filter));
 
         add_pass!(
             func_input_size,

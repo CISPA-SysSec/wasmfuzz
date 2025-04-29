@@ -85,31 +85,30 @@ impl CmpCoveragePass {
                 bcx.ins().ireduce(I8, val)
             }
             ir::types::I32 | ir::types::I64 => {
-                // Note: is this correct?
+                // Note: is this correct? Why signed here?
                 let smaller = bcx.ins().smin(value_a, value_b);
                 let bigger = bcx.ins().smax(value_a, value_b);
                 let dist = bcx.ins().isub(bigger, smaller);
 
-                let val = bcx.ins().clz(dist);
-
-                let val = if true {
-                    // progress:
-                    // 0-128: 128-distance
-                    // 128-192: 128+clz(distance)
-
+                let res = if true {
+                    // combined distance:
+                    // 0-128: distance
+                    // 128-192: 255-clz(distance)
                     let thresh = 255 - value_ty.bits() as i64;
                     let v_thresh = bcx.ins().iconst(value_ty, thresh);
                     let is_small = bcx.ins().icmp(IntCC::UnsignedLessThan, dist, v_thresh);
 
-                    let x = bcx.ins().irsub_imm(dist, thresh);
-                    let y = bcx.ins().iadd_imm(dist, thresh);
+                    let lz = bcx.ins().clz(dist);
+                    let lz_dist = bcx.ins().irsub_imm(lz, 255);
 
-                    bcx.ins().select(is_small, x, y)
+                    bcx.ins().select(is_small, dist, lz_dist)
                 } else {
-                    val
+                    // More leading zeros => smaller distance
+                    let progress = bcx.ins().clz(dist);
+                    bcx.ins().irsub_imm(progress, value_ty.bits() as i64)
                 };
 
-                bcx.ins().ireduce(I8, val)
+                bcx.ins().ireduce(I8, res)
             }
             _ => unreachable!(),
         }
@@ -141,6 +140,78 @@ impl KVInstrumentationPass for CmpCoveragePass {
             CmpCovKind::AbsDist => Self::calculate_absdist_distance,
         };
         let dist = dist_fn(self, value_ty, value_a, value_b, ctx.bcx);
+
+        self.coverage
+            .instrument_coverage(&ctx.state.loc(), dist, ctx, self);
+    }
+}
+
+pub(crate) struct CmpDistU16Pass {
+    coverage: AssociatedCoverageArray<Location, Minimize<u16>>,
+}
+
+impl CmpDistU16Pass {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
+        Self {
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(key_filter)
+                    .collect::<Vec<_>>(),
+            ),
+        }
+    }
+
+    fn calculate_distance(
+        &self,
+        value_ty: Type,
+        value_a: Value,
+        value_b: Value,
+        bcx: &mut FunctionBuilder,
+    ) -> ir::Value {
+        use ir::types::*;
+        match value_ty {
+            ir::types::F32 | ir::types::F64 => {
+                // TODO
+                bcx.ins().iconst(I16, 0)
+            }
+            ir::types::I32 | ir::types::I64 => {
+                // Note: is this correct? Why signed here?
+                let smaller = bcx.ins().smin(value_a, value_b);
+                let bigger = bcx.ins().smax(value_a, value_b);
+                let dist = bcx.ins().isub(bigger, smaller);
+
+                // saturating ireduce to u16
+                let thresh = u16::MAX as i64;
+                let v_thresh = bcx.ins().iconst(value_ty, thresh);
+                let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, dist, v_thresh);
+                let res = bcx.ins().select(in_range, dist, v_thresh);
+                bcx.ins().ireduce(I16, res)
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl KVInstrumentationPass for CmpDistU16Pass {
+    type Key = Location;
+    type Value = Minimize<u16>;
+    super::traits::impl_kv_instrumentation_pass!();
+
+    fn shortcode(&self) -> &'static str {
+        "cmpcov-u16dist"
+    }
+
+    fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
+        super::iter_cmp_instrs(spec)
+    }
+
+    fn instrument_cmp(&self, value_ty: Type, value_a: Value, value_b: Value, ctx: InstrCtx) {
+        if !self.coverage.has_key(&ctx.state.loc()) {
+            return;
+        }
+
+        let dist = self.calculate_distance(value_ty, value_a, value_b, ctx.bcx);
+
         self.coverage
             .instrument_coverage(&ctx.state.loc(), dist, ctx, self);
     }

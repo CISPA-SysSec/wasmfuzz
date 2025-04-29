@@ -295,6 +295,7 @@ impl PassesGen for FullFeedbackPasses {
             live_edges,
             cmpcov_hamming,
             cmpcov_absdist,
+            cmpcov_u16dist,
             perffuzz_func,
             perffuzz_bb,
             perffuzz_edge,
@@ -343,6 +344,7 @@ impl PassesGen for FullFeedbackPasses {
             cmpcov_absdist,
             CmpCoveragePass::new(CmpCovKind::AbsDist, &self.spec, filter)
         );
+        add_pass!(cmpcov_u16dist, CmpDistU16Pass::new(&self.spec, filter));
 
         add_pass!(
             func_input_size,
@@ -514,6 +516,7 @@ pub(crate) struct FeedbackOptions {
     pub live_edges: bool,
     pub cmpcov_hamming: bool,
     pub cmpcov_absdist: bool,
+    pub cmpcov_u16dist: bool,
     pub perffuzz_func: bool,
     pub perffuzz_bb: bool,
     pub perffuzz_edge: bool,
@@ -552,6 +555,7 @@ impl FeedbackOptions {
             live_edges: false,
             cmpcov_hamming: false,
             cmpcov_absdist: false,
+            cmpcov_u16dist: false,
             perffuzz_func: false,
             perffuzz_bb: false,
             perffuzz_edge: false,
@@ -579,6 +583,7 @@ impl FeedbackOptions {
             live_edges: true,
             cmpcov_hamming: true,
             cmpcov_absdist: true,
+            cmpcov_u16dist: true,
             perffuzz_func: true,
             perffuzz_bb: true,
             perffuzz_edge: true,
