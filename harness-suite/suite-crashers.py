@@ -13,6 +13,7 @@ parser.add_argument('--harness-dir', default="./out")
 parser.add_argument('--corpus-dir', default="./corpus")
 parser.add_argument('--crashes-dir', default="./crashes")
 parser.add_argument('--tags', default="./tags.csv")
+parser.add_argument('--only-target', default=None)
 
 args = parser.parse_args()
 harness_dir = Path(args.harness_dir)
@@ -59,12 +60,16 @@ def check_harness(harness_path):
                     return
 
 for harness_path in harness_paths:
+    if args.only_target is not None and args.only_target not in harness_path.name:
+        continue
     check_harness(harness_path)
 
 mismatches = set()
 with open(tags_path) as f:
     for row in csv.DictReader(f):
         harness = Path(row["harness"]).name
+        if args.only_target is not None and args.only_target not in harness:
+            continue
         tagged_crash = row["crashing"] and bool(int(row["crashing"]))
         if tagged_crash != (harness in verified):
             mismatches.add(harness)
@@ -75,6 +80,8 @@ print(f"{len(mismatches)} mismatches found" + ".:"[bool(mismatches)])
 with open(tags_path) as f:
     for row in csv.DictReader(f):
         harness = Path(row["harness"])
+        if args.only_target is not None and args.only_target not in harness.name:
+            continue
         crash_path = crashes_dir / f"{harness.stem}.bin"
         tagged_crash = row["crashing"] and bool(int(row["crashing"]))
         if tagged_crash and harness.name not in verified:
