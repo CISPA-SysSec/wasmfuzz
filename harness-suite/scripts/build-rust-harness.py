@@ -19,7 +19,7 @@ args = parser.parse_args()
 
 BUILD_TYPE = os.environ.get("BUILD_TYPE", "wasi-lime1")
 assert BUILD_TYPE in ["wasi-lime1", "wasi-mvp", "x86_64-libfuzzer"]
-RUSTUP_TOOLCHAIN = "nightly-2025-04-14"
+RUSTUP_TOOLCHAIN = "nightly-2025-05-13"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
 os.environ["RUSTUP_TOOLCHAIN"] = RUSTUP_TOOLCHAIN
@@ -34,22 +34,59 @@ def patch_cargo_toml(path):
     print(f"patching {path} for custom libfuzzer-sys")
     with open(path) as f:
         cargo_toml = tomlkit.load(f)
-    deps = cargo_toml["dependencies"]
-    deps["libfuzzer-sys"] = {
+
+    libfuzzer_sys_dep = {
         "git": "https://github.com/Mrmaxmeier/libfuzzer",
-        "rev": "b608dcf44c2071a54393cb92a2bc305a5e2a6799" # "target-wasm" branch
+        "rev": "b608dcf44c2071a54393cb92a2bc305a5e2a6799", # "target-wasm" branch
+        "features": ["arbitrary-derive"],
     }
-    deps["arbitrary"] = {
-        "git": "https://github.com/rust-fuzz/arbitrary.git",
-        "rev": "ef80790c5bbcd24f342967e2388aa14f2c0d4a6b",
+    # This contains PR #181 (282cc87277d9aab93bcbe154b136625d66ddd1a6)
+    arbitrary_dep = {
+        "version": "1.4.1",
         "features": ["derive"]
     }
-    # fix rare cases of remaining libfuzzer-sys dependencies (regalloc2)
+    if os.environ.get("ARBITRARY_FEAT", "") == "simple-encoding":
+        # Note: "simple-encoding" is actually more difficult to solve
+        # for non-grammar-aware fuzzers
+        arbitrary_dep = {
+            "git": "https://github.com/Mrmaxmeier/arbitrary.git",
+            "rev": "7a98f5970df24501866c3f2aa0ec49649731c18f",
+            "features": ["derive", "simple-encoding"]
+        }
+
+    def make_inline(x: dict):
+        # Ref: https://github.com/python-poetry/tomlkit/issues/414
+        if True:
+            return x
+        res = tomlkit.inline_table()
+        res.update(x)
+        return res
+
+    if "dependencies" in cargo_toml:
+        deps = cargo_toml["dependencies"]
+    elif "dependencies" in cargo_toml.get("workspace", {}):
+        deps = cargo_toml["workspace"]["dependencies"]
+    else:
+        return
+
+    if "libfuzzer-sys" in deps:
+        deps.update({"libfuzzer-sys": make_inline(libfuzzer_sys_dep)})
+    if "arbitrary" in deps:
+        was_optional = not isinstance(deps["arbitrary"], str) and deps["arbitrary"].get("optional", None)
+        deps.update({"arbitrary": make_inline(arbitrary_dep)})
+        if was_optional is not None:
+            deps["arbitrary"]["optional"] = was_optional
+
+    # Fix rare cases of remaining libfuzzer-sys dependencies (regalloc2)
     if "patch" not in cargo_toml:
-        cargo_toml.add("patch", tomlkit.table())
-        cargo_toml["patch"].add("crates-io", tomlkit.table())
-    cargo_toml["patch"]["crates-io"]["libfuzzer-sys"] = deps["libfuzzer-sys"]
-    cargo_toml["patch"]["crates-io"]["arbitrary"] = deps["arbitrary"]
+        cargo_toml.update({"patch": tomlkit.table()})
+        cargo_toml["patch"].update({"crates-io": tomlkit.table()})
+    # Note: patch mechanism doesn't support injecting feautres. This should be fine for us though.
+    cargo_toml["patch"]["crates-io"]["libfuzzer-sys"] = make_inline(libfuzzer_sys_dep)
+    del cargo_toml["patch"]["crates-io"]["libfuzzer-sys"]["features"]
+    if "git" in arbitrary_dep:
+        cargo_toml["patch"]["crates-io"]["arbitrary"] = make_inline(arbitrary_dep)
+        del cargo_toml["patch"]["crates-io"]["arbitrary"]["features"]
     with open(path, "w") as f:
         tomlkit.dump(cargo_toml, f)
 
@@ -90,7 +127,7 @@ def build_folder(folder, verb="build"):
         # default: 16 pages, 1MB
         #    smol: 1 page, 64kb
         env["RUSTFLAGS"] += f" -C link-arg=-zstack-size={1<<16}"
-    
+
     if BUILD_TYPE != "x86_64-libfuzzer":
         # embed build-id into WASM module (requires LLVM 17)
         env["RUSTFLAGS"] += " -C link-arg=--build-id"
@@ -148,14 +185,20 @@ def build_harnesses():
     for folder in folders:
         print(f"{folder = }")
         patch_cargo_toml(f"{folder}/Cargo.toml")
+        for parent in Path(folder).parents:
+            cargo_toml = parent / "Cargo.toml"
+            if cargo_toml.exists():
+                patch_cargo_toml(cargo_toml)
         build_folder(folder)
 
         # find target folder (depends on workspace setup)
         folder_ = Path(folder)
+        bins_path = None
         for _ in range(5):
             bins_path = folder_ / "target" / TARGET_TRIPLE
             if bins_path.exists(): break
             folder_ = folder_.parent
+        assert bins_path is not None
         bins_path /= "debug" if args.debug else "release"
 
         for module in bins_path.glob("*"):
