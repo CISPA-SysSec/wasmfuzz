@@ -233,12 +233,13 @@ impl Worker {
         self.save_input(input);
 
         if *self.opts.x.exhaustive_stage && !is_seed {
-            self.exhaustive_queue
-                .push_back(Box::new(super::exhaustive::FlipEveryBit::new(input)));
             if input.len() <= 1024 {
                 self.exhaustive_queue.push_back(Box::new(
                     super::exhaustive::ReplaceEveryInputByte::new(input, &mut self.rand),
                 ));
+            } else if input.len() <= 8192 {
+                self.exhaustive_queue
+                    .push_back(Box::new(super::exhaustive::FlipEveryBit::new(input)));
             }
         }
 

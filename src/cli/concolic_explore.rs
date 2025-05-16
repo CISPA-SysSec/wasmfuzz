@@ -250,9 +250,7 @@ impl<'a> ConcolicExplorer<'a> {
         let event = &trace.events[event_idx];
         trace.symvals.debug_event(event);
         let mut submitted = HashSet::default();
-        let mut i = 0;
-        let mut skip = 0;
-        for (precond_event, precond_inputs) in trace.events[..event_idx]
+        for (precond_event, _precond_inputs) in trace.events[..event_idx]
             .iter()
             .zip(trace.event_inputs[..event_idx].iter())
         {

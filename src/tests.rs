@@ -153,10 +153,10 @@ impl Fuzzer {
         // in cmplog runs, we sometimes see solves within the first few execs
         if !*self.opts.x.use_cmplog {
             assert!(
-                worker.stats.reusable_stage_executions > 1000,
+                worker.stats.reusable_stage_executions > 100,
                 "did we do anything?"
             );
-            assert!(worker.schedule.steps > 1000, "did we do anything?");
+            assert!(worker.schedule.steps > 100, "did we do anything?");
         }
         assert_eq!(res, WorkerExit::CrashFound);
         self

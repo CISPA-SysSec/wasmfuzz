@@ -546,12 +546,13 @@ impl Orchestrator {
         } = &mut opts;
 
         // We always enable edge coverage, and edge coverage subsumes function and bb coverage.
-        *live_funcs = false;
+        // Function coverage is enabled for the CLI status line.
+        *live_funcs = true;
         *live_bbs = false;
         *live_edges = true;
 
-        if !is_saturated {
-            let mut light_opts = [
+        if !is_saturated && self.rng.random_ratio(8, 10) {
+            let mut light_knobs = [
                 &mut *cmpcov_absdist,
                 &mut *cmpcov_hamming,
                 &mut *func_input_size_color,
@@ -559,14 +560,14 @@ impl Orchestrator {
                 &mut *perffuzz_edge_global,
             ];
             for _ in 0..3 {
-                let opt = light_opts.choose_mut(&mut self.rng).unwrap();
+                let opt = light_knobs.choose_mut(&mut self.rng).unwrap();
                 if **opt {
                     break;
                 }
                 **opt = true;
             }
         } else {
-            let mut heavy_opts = [
+            let mut all_knobs = [
                 &mut *call_value_profile,
                 &mut *cmpcov_absdist,
                 &mut *cmpcov_hamming,
@@ -589,7 +590,7 @@ impl Orchestrator {
                 &mut *func_longest_trace,
             ];
             for _ in 0..3 {
-                let opt = heavy_opts.choose_mut(&mut self.rng).unwrap();
+                let opt = all_knobs.choose_mut(&mut self.rng).unwrap();
                 if **opt {
                     break;
                 }

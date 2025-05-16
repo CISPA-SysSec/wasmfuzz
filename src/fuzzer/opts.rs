@@ -196,7 +196,7 @@ pub(crate) struct StrategyOpts {
     pub corpus_cmin_drop_pct: u64,
     #[clap(long, default_value = "5")]
     pub cmin_after_corpus_additions: u64,
-    #[clap(long, default_value = "false")]
+    #[clap(long, default_value = "true")]
     pub exhaustive_stage: FlagBool,
     #[clap(long, default_value = "false")]
     pub use_concolic: FlagBool,

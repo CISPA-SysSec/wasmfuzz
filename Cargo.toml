@@ -8,7 +8,7 @@ rust-version = "1.83"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.229"
+wasmparser = "0.230"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive", "env"] }
 md5 = "0.7"
@@ -22,7 +22,7 @@ anyhow = "1.0"
 dirs = "6.0"
 serde = "1.0"
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
-gimli = { version = "0.31" }
+gimli = "0.31"
 # We pin symbolic since DWARFv5 embedded source code support was removed >.>
 symbolic = { version = "12.11.1", features = ["demangle", "symcache"] }
 symbolic-debuginfo = "=12.11.1"
@@ -47,7 +47,7 @@ libafl = { version = "=0.15.2", default-features = false, features = [
     "rand_trait",
 ] }
 libafl_bolts = "0.15"
-# cranelift is ~0.114
+# TODO: bump cranelift to crates.io after 2025-05-20
 cranelift = { git = "https://github.com/bytecodealliance/wasmtime", rev = "18c6d1d16bfea914b3ccd090b596aa1aab0b6f2a", features = [
     # cranelift = { path = "../wasmtime/cranelift/umbrella", package = "cranelift", features = [
     "jit",
@@ -65,7 +65,7 @@ bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = t
 mimalloc = { version = "0.1", optional = true, default-features = false }
 
 # feat:reports
-askama = { version = "0.13", optional = true }
+askama = { version = "0.14", optional = true }
 lcov = { version = "0.8", optional = true }
 syntect = { version = "5.1", optional = true }
 
@@ -73,7 +73,6 @@ syntect = { version = "5.1", optional = true }
 zstd = { version = "0.13.1", optional = true }
 
 # enable via feat:tracy
-# tracy_full = { path = "../_others/tracy_full", default-features = false, features = [
 tracy_full = { version = "1.10.0", default-features = false, features = [
     "system-tracing",
     "context-switch-tracing",
