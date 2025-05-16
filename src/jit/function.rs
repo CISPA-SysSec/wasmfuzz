@@ -621,17 +621,16 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 let end = bcx.create_block();
                 let end_count = bcx.append_block_param(end, I32);
 
-                // Note: This is not correct but is probably fine.
-                self.set_concolic_concrete(I32, block_iovs_addr, bcx);
-                self.set_concolic_concrete(I32, block_iovs_len, bcx);
-                self.set_concolic_concrete(I32, block_count, bcx);
-                self.set_concolic_concrete(I32, end_count, bcx);
-
                 let zero = bcx.ins().iconst(I32, 0);
                 bcx.ins()
                     .jump(block, &[iovs_addr.into(), iovs_len.into(), zero.into()]);
 
                 bcx.switch_to_block(block);
+
+                // Note: This is not correct but is probably fine.
+                self.set_concolic_concrete(I32, block_iovs_addr, bcx);
+                self.set_concolic_concrete(I32, block_iovs_len, bcx);
+                self.set_concolic_concrete(I32, block_count, bcx);
 
                 // write_stdout(iovs[0]->buf, iovs[0]->len);
                 self.push1(I32, block_iovs_addr);
@@ -692,6 +691,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 bcx.seal_block(block);
                 bcx.seal_block(end);
                 bcx.switch_to_block(end);
+                self.set_concolic_concrete(I32, end_count, bcx);
 
                 // *nwritten = count;
                 self.push1(I32, nwritten_addr);
