@@ -19,6 +19,7 @@ args = parser.parse_args()
 
 BUILD_TYPE = os.environ.get("BUILD_TYPE", "wasi-lime1")
 assert BUILD_TYPE in ["wasi-lime1", "wasi-mvp", "x86_64-libfuzzer"]
+BUILD_FLAGS = os.environ.get("BUILD_FLAGS", "").split(";")
 RUSTUP_TOOLCHAIN = "nightly-2025-05-13"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
@@ -45,7 +46,7 @@ def patch_cargo_toml(path):
         "version": "1.4.1",
         "features": ["derive"]
     }
-    if os.environ.get("ARBITRARY_FEAT", "") == "simple-encoding":
+    if "arbitrary-simple-encoding" in BUILD_FLAGS:
         # Note: "simple-encoding" is actually more difficult to solve
         # for non-grammar-aware fuzzers
         arbitrary_dep = {
@@ -69,15 +70,18 @@ def patch_cargo_toml(path):
     else:
         return
 
-    if "libfuzzer-sys" in deps:
-        deps.update({"libfuzzer-sys": make_inline(libfuzzer_sys_dep)})
-    if "arbitrary" in deps:
-        was_optional = not isinstance(deps["arbitrary"], str) and deps["arbitrary"].get("optional", None)
-        deps.update({"arbitrary": make_inline(arbitrary_dep)})
+    def replace_dep(name, dep, add_if_missing=False):
+        if name not in deps and not add_if_missing:
+            return
+        was_optional = name in deps and not isinstance(deps[name], str) and deps[name].get("optional", None)
+        deps.update({name: make_inline(dep)})
         if was_optional is not None:
-            deps["arbitrary"]["optional"] = was_optional
+            deps[name]["optional"] = was_optional
 
-    # Fix rare cases of remaining libfuzzer-sys dependencies (regalloc2)
+    replace_dep("libfuzzer-sys", libfuzzer_sys_dep)
+    replace_dep("arbitrary", arbitrary_dep, add_if_missing="arbitrary-simple-encoding" in BUILD_FLAGS)
+
+    # Fix rare cases of remaining deps-of-deps
     if "patch" not in cargo_toml:
         cargo_toml.update({"patch": tomlkit.table()})
         cargo_toml["patch"].update({"crates-io": tomlkit.table()})
@@ -97,15 +101,7 @@ def build_folder(folder, verb="build"):
     # https://github.com/rust-lang/rust/pull/126985
     env["RUSTFLAGS"] += " -Zembed-source=yes -Zdwarf-version=5 -g"
 
-    if BUILD_TYPE != "x86_64-libfuzzer":
-        if "CFLAGS" not in env:
-            env["CFLAGS"] = f"--sysroot {WASI_SYSROOT}"
-        env["PKG_CONFIG_SYSROOT_DIR"] = WASI_SYSROOT
-        env["RUSTFLAGS"] += " -C target-feature=+crt-static"
-        target_cpu = {"wasi-lime1": "lime1", "wasi-mvp": "mvp"}[BUILD_TYPE]
-        env["RUSTFLAGS"] += f" -C target-cpu={target_cpu}"
-        env["RUSTFLAGS"] += " -Zwasi-exec-model=reactor"
-    else:
+    if BUILD_TYPE == "x86_64-libfuzzer":
         # https://github.com/rust-fuzz/cargo-fuzz/blob/65e3279c9602375037cb3aaabd3209c5b746375c/src/project.rs#L175-L191
         env["RUSTFLAGS"] = " -Cpasses=sancov-module" \
                            " -Cllvm-args=-sanitizer-coverage-level=4" \
@@ -113,6 +109,14 @@ def build_folder(folder, verb="build"):
                            " -Cllvm-args=-sanitizer-coverage-pc-table" \
                            " -Cllvm-args=-sanitizer-coverage-trace-compares" \
                            " -Cllvm-args=-sanitizer-coverage-stack-depth"
+    else:
+        if "CFLAGS" not in env:
+            env["CFLAGS"] = f"--sysroot {WASI_SYSROOT}"
+        env["PKG_CONFIG_SYSROOT_DIR"] = WASI_SYSROOT
+        env["RUSTFLAGS"] += " -C target-feature=+crt-static"
+        target_cpu = {"wasi-lime1": "lime1", "wasi-mvp": "mvp"}[BUILD_TYPE]
+        env["RUSTFLAGS"] += f" -C target-cpu={target_cpu}"
+        env["RUSTFLAGS"] += " -Zwasi-exec-model=reactor"
 
 
     env["CARGO_PROFILE_RELEASE_OPT_LEVEL"] = "s"

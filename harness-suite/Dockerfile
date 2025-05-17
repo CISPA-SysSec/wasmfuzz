@@ -14,8 +14,10 @@ RUN prepare-toolchain.sh && mkdir /out/
 ARG project_name
 ARG project_path
 ARG build_type="wasi-lime1"
+ARG build_flags="foo;bar"
 ENV PROJECT=/projects/${project_name}
 ENV BUILD_TYPE=${build_type}
+ENV BUILD_FLAGS=${build_flags}
 
 WORKDIR ${PROJECT}
 # COPY ${project_name}/prepare.sh ${PROJECT}/prepare.sh
