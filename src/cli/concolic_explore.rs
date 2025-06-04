@@ -95,7 +95,7 @@ impl<'a> ConcolicExplorer<'a> {
             match &work {
                 Work::Trace { input: _ } => eprintln!("Work::Trace"),
                 Work::VerifyMutated { input: _ } => eprintln!("Work::VerifyMutated"),
-                _ => eprintln!("{:?}", work),
+                _ => eprintln!("{work:?}"),
             }
             match work {
                 Work::Trace { input } => self.work_trace(input),
@@ -203,7 +203,7 @@ impl<'a> ConcolicExplorer<'a> {
         for (event_idx, event) in trace.events.iter().enumerate() {
             // TODO: what about other events?
             dbg!(event);
-            if let ConcolicEvent::PathConstraint { location, .. } = *event {
+            if let ConcolicEvent::PathConstraint {  .. } = *event {
                 // if location == loc || true { // TODO
                 self.wq.push_back(Work::CheckSatNoConstraints {
                     trace_idx,

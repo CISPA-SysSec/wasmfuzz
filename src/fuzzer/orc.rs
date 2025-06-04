@@ -52,6 +52,7 @@ pub(crate) enum Experiment {
     UseBusInputs,
     SwarmFocusEdge,
     NoSnapshot,
+    OnlyEdgeCoverage,
 }
 impl std::str::FromStr for Experiment {
     type Err = String;
@@ -60,6 +61,7 @@ impl std::str::FromStr for Experiment {
             "use-bus-inputs" => Self::UseBusInputs,
             "no-snapshot" => Self::NoSnapshot,
             "swarm-focus-edge" => Self::SwarmFocusEdge,
+            "only-edge-coverage" => Self::OnlyEdgeCoverage,
             _ => return Err("unknown Experiment".to_owned()),
         })
     }
@@ -596,6 +598,11 @@ impl Orchestrator {
                 }
                 **opt = true;
             }
+        }
+
+        if matches!(self.opts.experiment, Some(Experiment::OnlyEdgeCoverage)) {
+            opts = FeedbackOptions::minimal_code_coverage();
+            opts.live_edges = false;
         }
 
         Config {

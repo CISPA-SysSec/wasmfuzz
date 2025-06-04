@@ -611,13 +611,17 @@ pub(crate) fn translate_concolic_debug_verify(
     let ty_ = bcx.ins().iconst(types::I8, ty_ as i64);
     let location = bcx.ins().iconst(types::I64, state.loc().as_u64() as i64);
 
+    #[cfg(feature = "concolic")]
     state.host_call(
         bcx,
         builtin_concolic_debug_verify as unsafe extern "C" fn(_, _, _, _, _),
         &[symval, value, ty_, location],
     );
+    #[cfg(not(feature = "concolic"))]
+    let _ = (symval, value, ty_, location);
 }
 
+#[cfg(feature = "concolic")]
 unsafe extern "C" fn builtin_concolic_debug_verify(
     value_sym: SymValRef,
     value: u64,

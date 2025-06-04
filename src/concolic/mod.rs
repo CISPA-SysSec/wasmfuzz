@@ -12,6 +12,13 @@ use bitvec::slice::BitSlice;
 use ordered_float::OrderedFloat;
 use speedy::{Readable, Writable};
 
+#[cfg(feature = "concolic")]
+pub(crate) mod smtlib_backend;
+#[cfg(feature = "concolic")]
+mod smtlib_helpers;
+#[cfg(feature = "concolic")]
+pub(crate) use smtlib_backend::SolverInstance as SmtlibSolver;
+
 #[cfg(feature = "concolic_bitwuzla")]
 pub(crate) mod bitwuzla_backend;
 #[cfg(feature = "concolic_bitwuzla")]
@@ -22,9 +29,12 @@ pub(crate) mod z3_backend;
 #[cfg(feature = "concolic_z3")]
 pub(crate) use z3_backend::SolverInstance as Z3Solver;
 
+#[allow(unused)]
 pub(crate) enum SolverKind {
     Z3,
     Bitwuzla,
+    SmtlibZ3,
+    SmtlibCVC5,
 }
 
 // Note: There doesn't seem to be a better way to avoid "unused 'ctx parameter"
@@ -35,18 +45,22 @@ pub(crate) enum ConcolicSolver<'ctx> {
     Z3(Z3Solver<'ctx>),
     #[cfg(feature = "concolic_bitwuzla")]
     Bitwuzla(BitwuzlaSolver),
+    #[cfg(feature = "concolic")]
+    Smtlib(SmtlibSolver<'ctx>),
     _Unsupported(std::convert::Infallible, PhantomData<&'ctx ()>),
 }
 
 // TODO: refactor as trait?
 #[cfg_attr(not(feature = "concolic"), allow(unused))]
 impl ConcolicSolver<'_> {
-    pub(crate) fn apply_model(&self, input: &mut [u8]) {
+    pub(crate) fn apply_model(&mut self, input: &mut [u8]) {
         match self {
             #[cfg(feature = "concolic_z3")]
             ConcolicSolver::Z3(x) => x.apply_model(input),
             #[cfg(feature = "concolic_bitwuzla")]
             ConcolicSolver::Bitwuzla(x) => x.apply_model(input),
+            #[cfg(feature = "concolic")]
+            ConcolicSolver::Smtlib(x) => x.apply_model(input),
             _ => unreachable!(),
         }
     }
@@ -57,6 +71,8 @@ impl ConcolicSolver<'_> {
             ConcolicSolver::Z3(x) => x.provide_hint(input, mask),
             #[cfg(feature = "concolic_bitwuzla")]
             ConcolicSolver::Bitwuzla(x) => x.provide_hint(input, mask),
+            #[cfg(feature = "concolic")]
+            ConcolicSolver::Smtlib(x) => x.provide_hint(input, mask),
             _ => unreachable!(),
         }
     }
@@ -71,6 +87,8 @@ impl ConcolicSolver<'_> {
             ConcolicSolver::Z3(x) => x.try_negate(event, context),
             #[cfg(feature = "concolic_bitwuzla")]
             ConcolicSolver::Bitwuzla(x) => x.try_negate(event, context),
+            #[cfg(feature = "concolic")]
+            ConcolicSolver::Smtlib(x) => x.try_negate(event, context),
             _ => unreachable!(),
         }
     }
@@ -87,6 +105,8 @@ impl ConcolicSolver<'_> {
             ConcolicSolver::Z3(x) => x.assert(event, input, context, try_solve),
             #[cfg(feature = "concolic_bitwuzla")]
             ConcolicSolver::Bitwuzla(x) => x.assert(event, input, context, try_solve),
+            #[cfg(feature = "concolic")]
+            ConcolicSolver::Smtlib(x) => x.assert(event, input, context, try_solve),
             _ => unreachable!(),
         }
     }
@@ -95,6 +115,9 @@ impl ConcolicSolver<'_> {
 pub(crate) struct ConcolicProvider {
     #[cfg(feature = "concolic_z3")]
     z3_ctx: z3::Context,
+
+    #[cfg(feature = "concolic")]
+    smtlib_storage: smtlib::Storage,
 
     spec: Option<Arc<ModuleSpec>>,
 }
@@ -114,6 +137,8 @@ impl ConcolicProvider {
         Self {
             #[cfg(feature = "concolic_z3")]
             z3_ctx,
+            #[cfg(feature = "concolic")]
+            smtlib_storage: smtlib::Storage::new(),
             spec,
         }
     }
@@ -128,6 +153,10 @@ impl ConcolicProvider {
         {
             kind = kind.or(Some(SolverKind::Bitwuzla));
         }
+        #[cfg(feature = "concolic")]
+        {
+            kind = kind.or(Some(SolverKind::SmtlibCVC5));
+        }
         match kind {
             #[cfg(feature = "concolic_bitwuzla")]
             Some(SolverKind::Bitwuzla) => Some(ConcolicSolver::Bitwuzla(BitwuzlaSolver::new(
@@ -137,6 +166,17 @@ impl ConcolicProvider {
             Some(SolverKind::Z3) => Some(ConcolicSolver::Z3(Z3Solver::new(
                 self.spec.clone(),
                 &self.z3_ctx,
+            ))),
+            #[cfg(feature = "concolic")]
+            Some(SolverKind::SmtlibCVC5) => Some(ConcolicSolver::Smtlib(SmtlibSolver::new(
+                self.spec.clone(),
+                &self.smtlib_storage,
+                smtlib::Solver::new(
+                    &self.smtlib_storage,
+                    Box::new(smtlib::backend::cvc5_binary::Cvc5Binary::new("cvc5").unwrap())
+                        as Box<dyn smtlib::Backend>,
+                )
+                .unwrap(),
             ))),
             _ => None,
         }
@@ -291,6 +331,7 @@ impl MemoryAccessKind {
         }
     }
 
+    #[expect(unused)]
     fn sign_extend(&self) -> bool {
         matches!(
             self,
@@ -990,9 +1031,19 @@ impl ConcolicContext {
         });
     }
 
-    #[cfg(not(feature = "concolic_bitwuzla"))]
-    pub(crate) fn eval_as_u64_with_input(&self, _val: SymValRef, _input: &[u8]) -> Option<u64> {
-        unimplemented!()
+    #[cfg(all(feature = "concolic", not(feature = "concolic_bitwuzla")))]
+    pub(crate) fn eval_as_u64_with_input(&self, val: SymValRef, input: &[u8]) -> Option<u64> {
+        let storage = smtlib::Storage::new();
+        let solver = smtlib::Solver::new(
+            &storage,
+            Box::new(smtlib::backend::cvc5_binary::Cvc5Binary::new("cvc5").unwrap())
+                as Box<dyn smtlib::Backend>,
+        )
+        .unwrap();
+        let mut solver = SmtlibSolver::new(None, &storage, solver);
+        solver
+            .eval_as_u64_with_input(val, input, &self.symvals)
+            .unwrap()
     }
     #[cfg(feature = "concolic_bitwuzla")]
     pub(crate) fn eval_as_u64_with_input(&self, val: SymValRef, input: &[u8]) -> Option<u64> {
