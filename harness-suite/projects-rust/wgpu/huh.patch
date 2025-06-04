@@ -27,19 +27,6 @@ index 32461ed..677d560 100644
      "naga/hlsl-snapshots",
      "player",
      "tests",
-diff --git a/naga/Cargo.toml b/naga/Cargo.toml
-index 4458405..0a28e01 100644
---- a/naga/Cargo.toml
-+++ b/naga/Cargo.toml
-@@ -74,7 +74,7 @@ hlsl-out-if-target-windows = []
- compact = []
- 
- [dependencies]
--arbitrary = { version = "1.4", features = ["derive"], optional = true }
-+arbitrary = { git = "https://github.com/rust-fuzz/arbitrary.git", rev = "ef80790c5bbcd24f342967e2388aa14f2c0d4a6b", features = ["derive"], optional = true }
- arrayvec.workspace = true
- bitflags.workspace = true
- bit-set.workspace = true
 diff --git a/naga/fuzz/Cargo.toml b/naga/fuzz/Cargo.toml
 index 5d8647f..e44f3e4 100644
 --- a/naga/fuzz/Cargo.toml

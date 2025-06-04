@@ -19,6 +19,7 @@ parser.add_argument('--wasmfuzz', default="wasmfuzz")
 DEFAULT_TIMEOUTS = ["8m", "22m", "1h30m", "2h"]
 parser.add_argument('--timeout', default=DEFAULT_TIMEOUTS[:], action='append')
 parser.add_argument('--cores-per-harness', default=8)
+parser.add_argument('--cores', default=None)
 parser.add_argument('--harness-dir', default="./out")
 parser.add_argument('--corpus-dir', default="./corpus")
 
@@ -30,6 +31,8 @@ timeouts = [int(pd.Timedelta(x).total_seconds()) for x in args.timeout]
 
 available_parallelism = math.ceil((os.cpu_count() or 1) * 0.98)
 cores_available = available_parallelism
+if args.cores:
+    cores_available = int(args.cores)
 cores_cond = asyncio.Condition()
 @contextlib.asynccontextmanager
 async def cores(n):

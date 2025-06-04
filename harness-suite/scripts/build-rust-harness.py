@@ -74,7 +74,13 @@ def patch_cargo_toml(path):
         if name not in deps and not add_if_missing:
             return
         was_optional = name in deps and not isinstance(deps[name], str) and deps[name].get("optional", None)
-        deps.update({name: make_inline(dep)})
+        if name in deps and not isinstance(deps[name], str):
+            deps[name].update(dep)
+            for k in list(deps[name].keys()):
+                if k not in dep:
+                    del deps[name][k]
+        else:
+            deps.update({name: make_inline(dep)})
         if was_optional is not None:
             deps[name]["optional"] = was_optional
 
