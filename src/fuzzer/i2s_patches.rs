@@ -195,6 +195,14 @@ where
 
         Ok(result)
     }
+
+    fn post_exec(
+        &mut self,
+        _state: &mut S,
+        _new_corpus_id: Option<libafl::corpus::CorpusId>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 impl Named for I2SRandReplace {

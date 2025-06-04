@@ -7,7 +7,7 @@ use std::{sync::Arc, time::Instant};
 use crate::simple_bus::MessageBus;
 use libafl::corpus::CorpusId;
 use libafl::inputs::ResizableMutator;
-use libafl::mutators::{havoc_mutations, StdMOptMutator};
+use libafl::mutators::{havoc_mutations, HavocScheduledMutator, StdMOptMutator};
 use libafl::observers::CmplogBytes;
 use libafl::stages::StageId;
 use libafl::state::HasCurrentStageId;
@@ -15,7 +15,7 @@ use libafl::state::{HasSolutions, Stoppable};
 use libafl::{
     corpus::{Corpus, HasCurrentCorpusId, InMemoryCorpus, Testcase},
     inputs::BytesInput,
-    mutators::{scheduled::StdScheduledMutator, Mutator},
+    mutators::Mutator,
     observers::{CmpValues, CmpValuesMetadata},
     state::{HasCorpus, HasMaxSize, HasRand},
     HasMetadata,
@@ -382,7 +382,7 @@ impl Worker {
         let mut mutator: Box<dyn Mutator<BytesInput, Self>> = if *self.opts.x.mopt {
             Box::new(StdMOptMutator::new(self, mutations, 3, 7)?)
         } else {
-            Box::new(StdScheduledMutator::with_max_stack_pow(mutations, 1)) // default is six max_iterations
+            Box::new(HavocScheduledMutator::with_max_stack_pow(mutations, 1)) // default is six max_iterations
         };
 
         let mut input = BytesInput::new(
