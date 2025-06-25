@@ -1,0 +1,12 @@
+diff --git a/tests/fuzz/radio-one-node.cpp b/tests/fuzz/radio-one-node.cpp
+index b4535f339..1f9c75f84 100644
+--- a/tests/fuzz/radio-one-node.cpp
++++ b/tests/fuzz/radio-one-node.cpp
+@@ -30,6 +30,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <assert.h>
+ 
+ #include "platform/nexus_core.hpp"
+ #include "platform/nexus_node.hpp"

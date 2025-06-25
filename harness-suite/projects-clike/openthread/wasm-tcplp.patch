@@ -1,0 +1,13 @@
+diff --git a/third_party/tcplp/bsdtcp/tcp_output.c b/third_party/tcplp/bsdtcp/tcp_output.c
+index 08f147f78..800be5b9b 100644
+--- a/third_party/tcplp/bsdtcp/tcp_output.c
++++ b/third_party/tcplp/bsdtcp/tcp_output.c
+@@ -1367,7 +1367,7 @@ timer:
+ 				goto again;
+ 			}
+ 			return (error);
+-		case EHOSTDOWN:
++		// case EHOSTDOWN:
+ 		case EHOSTUNREACH:
+ 		case ENETDOWN:
+ 		case ENETUNREACH:
