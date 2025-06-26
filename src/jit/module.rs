@@ -1,19 +1,19 @@
-use crate::{instrumentation::Passes, HashMap, HashSet};
+use crate::{HashMap, HashSet, instrumentation::Passes};
 use std::{any::Any, sync::Arc};
 
 use crate::{
-    ir::{FuncSpec, InsnIdx, Location, ModuleSpec},
     AbortCode,
+    ir::{FuncSpec, InsnIdx, Location, ModuleSpec},
 };
 use codegen::ir::{self, UserFuncName};
-use cranelift::module::{default_libcall_names, FuncId, Linkage, Module};
+use cranelift::module::{FuncId, Linkage, Module, default_libcall_names};
 use cranelift::prelude::*;
 use cranelift::{
     codegen::MachTrap,
     jit::{JITBuilder, JITModule},
 };
 
-use super::{instance::ModuleInstance, util::wasm2tys, vmcontext::VMContext, CompilationOptions};
+use super::{CompilationOptions, instance::ModuleInstance, util::wasm2tys, vmcontext::VMContext};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TrapKind {

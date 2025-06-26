@@ -5,8 +5,8 @@ use cranelift::codegen::ir::{self, Type, Value};
 use crate::ir::{Location, ModuleSpec};
 
 use super::{
-    code_coverage::CoverageBitset, path_hash::HashBitset, AssociatedCoverageArray, CovSnapshot,
-    Edge, ErasedInstrumentationPassHelper, FeedbackLattice, FuncIdx, InstrCtx,
+    AssociatedCoverageArray, CovSnapshot, Edge, ErasedInstrumentationPassHelper, FeedbackLattice,
+    FuncIdx, InstrCtx, code_coverage::CoverageBitset, path_hash::HashBitset,
 };
 
 macro_rules! _def {

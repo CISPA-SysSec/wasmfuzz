@@ -108,7 +108,9 @@ impl Stats {
                 let execs_per_second_total = execs as f64 / elapsed.as_secs_f64();
                 let execs_per_second =
                     execs as f64 / Duration::from_nanos(accounting_ns).as_secs_f64();
-                res += &format!("  {kind} stage execs: {execs:>9} ({execs_per_second_total:>9.2}/s wall, {execs_per_second:>10.2}/s perf)\n");
+                res += &format!(
+                    "  {kind} stage execs: {execs:>9} ({execs_per_second_total:>9.2}/s wall, {execs_per_second:>10.2}/s perf)\n"
+                );
             }
         }
         let kv = [
@@ -1051,7 +1053,10 @@ impl JitFuzzingSession {
         };
 
         if !fuzzing && res.is_crash() {
-            println!("[!!] vanilla reusable stage died with {}, saving execution history before going down...", res.trap_kind.as_ref().unwrap().display(&self.spec));
+            println!(
+                "[!!] vanilla reusable stage died with {}, saving execution history before going down...",
+                res.trap_kind.as_ref().unwrap().display(&self.spec)
+            );
             let _ = std::fs::create_dir("/tmp/wasmfuzz-flight-recorder/");
             let _ = std::fs::write("/tmp/wasmfuzz-flight-recorder/last.bin", inp);
             for (i, el) in self.reusable_exec_history.iter().enumerate() {
@@ -1179,7 +1184,9 @@ impl RunResult {
         // assert!(self.trap_kind.is_none());
         if self.is_crash() {
             let trap_kind = self.trap_kind.as_ref().unwrap();
-            panic!("execution trapped with {trap_kind:?} which indicates a crash. crashing runs are not expected in this context");
+            panic!(
+                "execution trapped with {trap_kind:?} which indicates a crash. crashing runs are not expected in this context"
+            );
         }
     }
 

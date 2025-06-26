@@ -1,12 +1,12 @@
 use crate::instrumentation::FuncIdx;
 use crate::ir::WFOperator;
-use crate::{ir::ControlInstruction, AbortCode};
+use crate::{AbortCode, ir::ControlInstruction};
 
+use super::FuncTranslator;
 use super::concolic::{
     translate_concolic_push_path_constraint_eq, translate_concolic_push_path_constraint_nz,
 };
 use super::util::{values_to_blockargs, wasm2tys};
-use super::FuncTranslator;
 use codegen::ir::SigRef;
 use cranelift::codegen::ir::{self, ArgumentPurpose};
 use cranelift::prelude::types::*;

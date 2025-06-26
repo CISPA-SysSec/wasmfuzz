@@ -342,7 +342,7 @@ impl MemoryAccessKind {
         opcode: cranelift::codegen::ir::Opcode,
         ty: cranelift::prelude::Type,
     ) -> Self {
-        use cranelift::codegen::ir::{types, Opcode};
+        use cranelift::codegen::ir::{Opcode, types};
         match (opcode, ty) {
             (Opcode::Load, types::I32) => Self::I32,
             (Opcode::Load, types::I64) => Self::I64,

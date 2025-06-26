@@ -1,9 +1,9 @@
 use crate::{
+    AbortCode,
     fuzzer::{FuzzOpts, Worker, WorkerExit},
     ir::ModuleSpec,
-    jit::{module::TrapKind, JitFuzzingSession, Stats},
+    jit::{JitFuzzingSession, Stats, module::TrapKind},
     simple_bus::MessageBus,
-    AbortCode,
 };
 use clap::Parser;
 use std::sync::{Arc, Mutex};
@@ -77,14 +77,14 @@ impl TestModule {
     fn u64_cmp() -> Self {
         Self::compile_simple_rust_expr(
             "u64-cmp",
-                "data.len() == 8 && data.try_into().map(u64::from_be_bytes).unwrap() == 0xdeadbeefcafebabe"
+            "data.len() == 8 && data.try_into().map(u64::from_be_bytes).unwrap() == 0xdeadbeefcafebabe",
         )
     }
 
     fn hashset_lookup() -> Self {
         Self::compile_simple_rust_expr(
             "hashset-lookup",
-                "{ use std::collections::HashSet; let mut col = HashSet::new(); col.insert(&b\"the_target_key\"[..]); col.contains(&data) }"
+            "{ use std::collections::HashSet; let mut col = HashSet::new(); col.insert(&b\"the_target_key\"[..]); col.contains(&data) }",
         )
     }
 

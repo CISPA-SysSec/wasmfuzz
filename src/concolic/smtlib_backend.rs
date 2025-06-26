@@ -1,4 +1,4 @@
-use crate::{ir::ModuleSpec, HashMap, HashSet};
+use crate::{HashMap, HashSet, ir::ModuleSpec};
 use std::sync::Arc;
 
 use crate::concolic::MemoryAccessKind;
@@ -8,9 +8,9 @@ use super::{BinaryOp, ConcolicEvent, SolverBackendError, SymVal, SymValRef, Symv
 
 use smtlib::Logic;
 use smtlib::{
+    BitVec, Bool, SatResult,
     prelude::*,
     terms::{Const, Dynamic},
-    BitVec, Bool, SatResult,
 };
 
 #[derive(Clone, Debug)]
@@ -134,12 +134,10 @@ impl<'ctx> SolverInstance<'ctx> {
     }
 
     fn get_inp_bv(&mut self, i: u16) -> Const<'ctx, BitVec<'ctx, 8>> {
-        *self.inp_vals
-            .entry(i)
-            .or_insert_with(|| {
-                let symbol = format!("inp-{i}");
-                BitVec::new_const(self.storage, &symbol)
-            })
+        *self.inp_vals.entry(i).or_insert_with(|| {
+            let symbol = format!("inp-{i}");
+            BitVec::new_const(self.storage, &symbol)
+        })
     }
 
     fn new_prop(&mut self) -> Const<'ctx, Bool<'ctx>> {
@@ -193,7 +191,7 @@ impl<'ctx> SolverInstance<'ctx> {
             SymVal::ConstI32(v) => BitVec::<32>::new(self.storage, v as i64).into(),
             SymVal::ConstI64(v) => BitVec::<64>::new(self.storage, v as i64).into(),
             SymVal::ConstF32(_) | SymVal::ConstF64(_) => {
-                return Err(SolverBackendError::UnsupportedFloatingpointOperation)
+                return Err(SolverBackendError::UnsupportedFloatingpointOperation);
             }
             SymVal::Unary(op, bv) => {
                 let val = self.get_symval(bv, context)?;
@@ -268,7 +266,7 @@ impl<'ctx> SolverInstance<'ctx> {
                     MemoryAccessKind::I64AsS32 => combine_32(&bytes).sext::<32, 64>().into(),
                     MemoryAccessKind::I64AsU32 => combine_32(&bytes).uext::<32, 64>().into(),
                     MemoryAccessKind::F32 | MemoryAccessKind::F64 => {
-                        return Err(SolverBackendError::UnsupportedFloatingpointOperation)
+                        return Err(SolverBackendError::UnsupportedFloatingpointOperation);
                     }
                 }
                 // zero-width bvs are not allowed :(

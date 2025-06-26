@@ -2,8 +2,8 @@
 //              this suggest that high line coverage accuracy should be possible for -O0 (fig 10):
 //              https://arxiv.org/abs/2402.04811v1
 
-use crate::instrumentation::BBCoveragePass;
 use crate::HashMap;
+use crate::instrumentation::BBCoveragePass;
 use std::path::PathBuf;
 use std::sync::Arc;
 

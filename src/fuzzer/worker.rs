@@ -1,24 +1,24 @@
+use crate::HashSet;
 use crate::instrumentation::InstrumentationSnapshot;
 use crate::jit::tracing::CmpLog;
-use crate::HashSet;
 use std::collections::VecDeque;
 use std::{sync::Arc, time::Instant};
 
 use crate::simple_bus::MessageBus;
 use libafl::corpus::CorpusId;
 use libafl::inputs::ResizableMutator;
-use libafl::mutators::{havoc_mutations, HavocScheduledMutator, StdMOptMutator};
+use libafl::mutators::{HavocScheduledMutator, StdMOptMutator, havoc_mutations};
 use libafl::observers::CmplogBytes;
 use libafl::stages::StageId;
 use libafl::state::HasCurrentStageId;
 use libafl::state::{HasSolutions, Stoppable};
 use libafl::{
+    HasMetadata,
     corpus::{Corpus, HasCurrentCorpusId, InMemoryCorpus, Testcase},
     inputs::BytesInput,
     mutators::Mutator,
     observers::{CmpValues, CmpValuesMetadata},
     state::{HasCorpus, HasMaxSize, HasRand},
-    HasMetadata,
 };
 use libafl_bolts::{
     current_nanos,
@@ -31,9 +31,9 @@ use rand::prelude::SliceRandom;
 use crate::jit::{JitFuzzingSession, SwarmConfig, TracingOptions};
 use crate::{ir::ModuleSpec, jit::Stats};
 
+use super::FuzzOpts;
 use super::exhaustive::QueuedInputMutation;
 use super::worker_schedule::WorkerSchedule;
-use super::FuzzOpts;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {

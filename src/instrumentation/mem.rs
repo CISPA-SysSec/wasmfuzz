@@ -1,9 +1,9 @@
-use cranelift::codegen::ir::{self, types, InstBuilder, MemFlags, Type, Value};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlags, Type, Value, types};
 
 use crate::ir::{Location, ModuleSpec};
 
 use super::{
-    feedback_lattice::ValueRange, AssociatedCoverageArray, InstrCtx, KVInstrumentationPass,
+    AssociatedCoverageArray, InstrCtx, KVInstrumentationPass, feedback_lattice::ValueRange,
 };
 
 fn iter_memory(

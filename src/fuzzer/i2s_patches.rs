@@ -1,14 +1,14 @@
 use std::{borrow::Cow, mem::size_of};
 
 use libafl::{
+    Error, HasMetadata,
     corpus::Corpus,
     inputs::{BytesInput, HasMutatorBytes},
     mutators::{MutationResult, Mutator},
     observers::{CmpValues, CmpValuesMetadata},
     state::{HasCorpus, HasMaxSize, HasRand},
-    Error, HasMetadata,
 };
-use libafl_bolts::{rands::Rand, AsSlice, HasLen, Named};
+use libafl_bolts::{AsSlice, HasLen, Named, rands::Rand};
 
 /// A `I2SRandReplace` [`Mutator`] replaces a random matching input-2-state comparison operand with the other.
 /// It needs a valid [`CmpValuesMetadata`] in the state.

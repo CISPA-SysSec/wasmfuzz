@@ -1,12 +1,12 @@
-use super::instrumentation::instrument_cmp;
 use super::FuncTranslator;
+use super::instrumentation::instrument_cmp;
 use crate::ir::operators::ConversionOp;
 use crate::ir::{
-    operators::FRelOp, FBinaryOp, FUnaryOp, IBinaryOp, IRelOp, ITestOp, IUnaryOp,
-    NumericInstruction,
+    FBinaryOp, FUnaryOp, IBinaryOp, IRelOp, ITestOp, IUnaryOp, NumericInstruction,
+    operators::FRelOp,
 };
 use cranelift::codegen::ir;
-use cranelift::prelude::{types::*, FloatCC, IntCC, MemFlags};
+use cranelift::prelude::{FloatCC, IntCC, MemFlags, types::*};
 use cranelift::{frontend::FunctionBuilder, prelude::InstBuilder};
 
 pub(crate) fn translate_const(

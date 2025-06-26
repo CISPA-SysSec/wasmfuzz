@@ -3,13 +3,13 @@ use cranelift::frontend::Variable;
 use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::{
-    ir::{Location, ModuleSpec},
     HashMap,
+    ir::{Location, ModuleSpec},
 };
 
 use super::{
-    feedback_lattice::Maximize, AssociatedCoverageArray, Edge, FeedbackLattice,
-    FeedbackLatticeCodegen, FuncIdx, InstrCtx, KVInstrumentationPass,
+    AssociatedCoverageArray, Edge, FeedbackLattice, FeedbackLatticeCodegen, FuncIdx, InstrCtx,
+    KVInstrumentationPass, feedback_lattice::Maximize,
 };
 
 pub(crate) struct EdgeHitsInAFunctionPass {

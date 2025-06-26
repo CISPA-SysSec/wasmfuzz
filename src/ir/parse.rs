@@ -10,10 +10,10 @@ use super::parse_cfg::{FuncCFG, StackEntry};
 use super::{InsnIdx, Value};
 use crate::ir::heuristics::recognize_libfunc;
 
-use super::heuristics::Libfunc;
-use super::operators::{op_to_const, translate_operator};
 use super::ControlInstruction;
 use super::WFOperator;
+use super::heuristics::Libfunc;
+use super::operators::{op_to_const, translate_operator};
 
 pub(crate) struct FuncSpec {
     pub locals: Vec<wasmparser::ValType>,

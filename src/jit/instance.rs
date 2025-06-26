@@ -1,9 +1,9 @@
-use crate::{jit::signals::TrapReason, HashMap};
+use crate::{HashMap, jit::signals::TrapReason};
 
 use super::signals::catch_traps;
 use cranelift::jit::JITModule;
 
-use super::{module::TrapKind, vmcontext::VMContext, CompilationOptions};
+use super::{CompilationOptions, module::TrapKind, vmcontext::VMContext};
 
 pub(crate) struct ModuleInstance {
     pub vmctx: Box<VMContext>,

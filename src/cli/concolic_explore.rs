@@ -1,6 +1,6 @@
 use crate::{
-    ir::{Location, ModuleSpec},
     HashSet,
+    ir::{Location, ModuleSpec},
 };
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
@@ -202,7 +202,7 @@ impl<'a> ConcolicExplorer<'a> {
         for (event_idx, event) in trace.events.iter().enumerate() {
             // TODO: what about other events?
             dbg!(event);
-            if let ConcolicEvent::PathConstraint {  .. } = *event {
+            if let ConcolicEvent::PathConstraint { .. } = *event {
                 // if location == loc || true { // TODO
                 self.wq.push_back(Work::CheckSatNoConstraints {
                     trace_idx,

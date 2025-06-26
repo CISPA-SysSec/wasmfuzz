@@ -1,11 +1,11 @@
 use std::hash::Hash;
 
 use bitvec::{prelude::*, ptr::Mut, slice};
-use cranelift::codegen::ir::{self, types::I8, InstBuilder, MemFlags};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlags, types::I8};
 use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::jit::vmcontext::VMContext;
-use crate::{ir::ModuleSpec, jit::CompilationKind, HashSet};
+use crate::{HashSet, ir::ModuleSpec, jit::CompilationKind};
 
 use super::{Edge, FuncIdx, HashBitsetInstrumentationPass, InstrCtx, Location};
 
@@ -110,37 +110,40 @@ impl HashBitset {
             bitslice_len: u32,
             contribution: u32,
             _: *mut VMContext,
-        ) { unsafe {
-            // let new_val = hash_to_u64((*hash_ptr, contribution));
-            // let new_val = *hash_ptr ^ contribution as u64;
-            // *hash_ptr = new_val;
+        ) {
+            unsafe {
+                // let new_val = hash_to_u64((*hash_ptr, contribution));
+                // let new_val = *hash_ptr ^ contribution as u64;
+                // *hash_ptr = new_val;
 
-            // TODO: better gear-style rolling hash?
-            // also do something that can squash similar edges in a row?
+                // TODO: better gear-style rolling hash?
+                // also do something that can squash similar edges in a row?
 
-            // *hash_ptr = (*hash_ptr << 32).wrapping_add(contribution as u64);
-            // *hash_ptr = (*hash_ptr << 16) | (contribution as u64 & 0xffff);
-            // dbg!(*hash_ptr, contribution);
-            *hash_ptr = (*hash_ptr << 8) | (contribution as u64 & 0xff);
+                // *hash_ptr = (*hash_ptr << 32).wrapping_add(contribution as u64);
+                // *hash_ptr = (*hash_ptr << 16) | (contribution as u64 & 0xffff);
+                // dbg!(*hash_ptr, contribution);
+                *hash_ptr = (*hash_ptr << 8) | (contribution as u64 & 0xff);
 
-            let bitslice_ptr: BitPtr<Mut, usize, Lsb0> = BitPtr::from_mut(&mut *bitslice_ptr);
-            let bitslice = slice::from_raw_parts_unchecked_mut(bitslice_ptr, bitslice_len as usize);
-            let mask = bitslice.len() - 1;
-            // dbg!(new_val, mask, new_val as usize & mask, contribution);
-            let index = hash_to_u64(*hash_ptr) as usize;
-            if !bitslice[index & mask] {
-                // eprintln!("mix_and_instrument: new bit at {:#x}", index & mask);
-                *new_cov = true;
-                bitslice.set(index & mask, true);
+                let bitslice_ptr: BitPtr<Mut, usize, Lsb0> = BitPtr::from_mut(&mut *bitslice_ptr);
+                let bitslice =
+                    slice::from_raw_parts_unchecked_mut(bitslice_ptr, bitslice_len as usize);
+                let mask = bitslice.len() - 1;
+                // dbg!(new_val, mask, new_val as usize & mask, contribution);
+                let index = hash_to_u64(*hash_ptr) as usize;
+                if !bitslice[index & mask] {
+                    // eprintln!("mix_and_instrument: new bit at {:#x}", index & mask);
+                    *new_cov = true;
+                    bitslice.set(index & mask, true);
+                }
+
+                // clear the hash periodically in a context-sensitive manner in
+                // order to get reasonable hitrates
+                // *hash_ptr = new_val;
+                // if new_val % 2 == 0 {
+                //     *hash_ptr = 0;
+                // }
             }
-
-            // clear the hash periodically in a context-sensitive manner in
-            // order to get reasonable hitrates
-            // *hash_ptr = new_val;
-            // if new_val % 2 == 0 {
-            //     *hash_ptr = 0;
-            // }
-        }}
+        }
 
         let contrib = hash_to_u64(contrib) as u32 as i64;
         let contrib = ctx.bcx.ins().iconst(ir::types::I32, contrib);

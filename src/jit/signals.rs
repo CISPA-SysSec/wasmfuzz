@@ -42,19 +42,21 @@ unsafe extern "C" fn trap_handler(
     signum: libc::c_int,
     siginfo: *mut libc::siginfo_t,
     context: *mut libc::c_void,
-) { unsafe {
-    let context = &*(context as *const libc::ucontext_t);
-    let (pc, _fp) = ucontext_get_pc_and_fp(context);
-    let faulting_addr = match signum {
-        libc::SIGSEGV | libc::SIGBUS => Some((*siginfo).si_addr() as usize),
-        _ => None,
-    };
-    raise_trapinfo(TrapInfo {
-        reason: None,
-        pc: pc as usize,
-        faulting_addr,
-    })
-}}
+) {
+    unsafe {
+        let context = &*(context as *const libc::ucontext_t);
+        let (pc, _fp) = ucontext_get_pc_and_fp(context);
+        let faulting_addr = match signum {
+            libc::SIGSEGV | libc::SIGBUS => Some((*siginfo).si_addr() as usize),
+            _ => None,
+        };
+        raise_trapinfo(TrapInfo {
+            reason: None,
+            pc: pc as usize,
+            faulting_addr,
+        })
+    }
+}
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn ucontext_get_pc_and_fp(cx: &libc::ucontext_t) -> (*const u8, usize) {
@@ -133,18 +135,22 @@ thread_local! {
     static INSTALL: Once = const { Once::new() };
 }
 
-pub(crate) unsafe fn raise_trap(trap_reason: TrapReason) -> ! { unsafe {
-    raise_trapinfo(TrapInfo {
-        reason: Some(trap_reason),
-        ..Default::default()
-    })
-}}
+pub(crate) unsafe fn raise_trap(trap_reason: TrapReason) -> ! {
+    unsafe {
+        raise_trapinfo(TrapInfo {
+            reason: Some(trap_reason),
+            ..Default::default()
+        })
+    }
+}
 
-unsafe fn raise_trapinfo(info: TrapInfo) -> ! { unsafe {
-    TRAP_INFO.set(Some(info));
-    let jmp_buf = JMP_BUF.with_borrow_mut(|x| x as *mut _);
-    longjmp(jmp_buf, 1);
-}}
+unsafe fn raise_trapinfo(info: TrapInfo) -> ! {
+    unsafe {
+        TRAP_INFO.set(Some(info));
+        let jmp_buf = JMP_BUF.with_borrow_mut(|x| x as *mut _);
+        longjmp(jmp_buf, 1);
+    }
+}
 
 #[derive(Default, Debug, PartialEq)]
 pub(crate) struct TrapInfo {
@@ -153,19 +159,21 @@ pub(crate) struct TrapInfo {
     pub faulting_addr: Option<usize>,
 }
 
-pub(crate) unsafe fn catch_traps<T, F: Fn() -> T>(f: F) -> Result<T, TrapInfo> { unsafe {
-    INSTALL.with(|x| x.call_once(|| setup_handlers(trap_handler)));
+pub(crate) unsafe fn catch_traps<T, F: Fn() -> T>(f: F) -> Result<T, TrapInfo> {
+    unsafe {
+        INSTALL.with(|x| x.call_once(|| setup_handlers(trap_handler)));
 
-    assert!(!ACTIVE.replace(true));
-    let jmp_buf = JMP_BUF.with_borrow_mut(|x| x as *mut _);
-    let res = match setjmp(jmp_buf) {
-        0 => Ok(f()),
-        1 => Err(TRAP_INFO.take().unwrap()),
-        _ => unreachable!(),
-    };
-    assert!(ACTIVE.replace(false));
-    res
-}}
+        assert!(!ACTIVE.replace(true));
+        let jmp_buf = JMP_BUF.with_borrow_mut(|x| x as *mut _);
+        let res = match setjmp(jmp_buf) {
+            0 => Ok(f()),
+            1 => Err(TRAP_INFO.take().unwrap()),
+            _ => unreachable!(),
+        };
+        assert!(ACTIVE.replace(false));
+        res
+    }
+}
 
 #[cfg(test)]
 mod tests {

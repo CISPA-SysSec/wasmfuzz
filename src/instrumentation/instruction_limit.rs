@@ -5,9 +5,9 @@ use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
 
 use super::Location;
 use super::{
-    feedback_lattice::{Maximize, Minimize},
     AssociatedCoverageArray, Edge, FeedbackLattice, FeedbackLatticeCodegen, FuncIdx, InstrCtx,
     KVInstrumentationPass,
+    feedback_lattice::{Maximize, Minimize},
 };
 
 fn get_var(ctx: &mut InstrCtx) -> DataId {

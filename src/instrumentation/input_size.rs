@@ -5,7 +5,7 @@ use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
 
 use super::Location;
 use super::{
-    feedback_lattice::Minimize, AssociatedCoverageArray, FuncIdx, InstrCtx, KVInstrumentationPass,
+    AssociatedCoverageArray, FuncIdx, InstrCtx, KVInstrumentationPass, feedback_lattice::Minimize,
 };
 
 #[derive(Hash, PartialEq, Eq, Clone, Copy)]
@@ -112,49 +112,53 @@ impl KVInstrumentationPass for InputSizePass {
             inp_ptr: u32,
             inp_size: u32,
             vmctx: *mut VMContext,
-        ) -> u16 { unsafe {
-            let vmctx = &mut *vmctx;
-            let buf = &vmctx.heap()[inp_ptr as usize..][..inp_size as usize];
-            assert_eq!(buf.len(), inp_size as usize);
-            let mut count = [0u8; 256];
-            for el in buf {
-                count[*el as usize] = count[*el as usize].saturating_add(1);
-            }
-            let mut res = 0;
-            for el in count {
-                if el > 0 && el < 8 {
-                    res += 1 << (el as usize - 1);
-                } else if el >= 8 {
-                    res += (el as usize) << 7;
+        ) -> u16 {
+            unsafe {
+                let vmctx = &mut *vmctx;
+                let buf = &vmctx.heap()[inp_ptr as usize..][..inp_size as usize];
+                assert_eq!(buf.len(), inp_size as usize);
+                let mut count = [0u8; 256];
+                for el in buf {
+                    count[*el as usize] = count[*el as usize].saturating_add(1);
                 }
+                let mut res = 0;
+                for el in count {
+                    if el > 0 && el < 8 {
+                        res += 1 << (el as usize - 1);
+                    } else if el >= 8 {
+                        res += (el as usize) << 7;
+                    }
+                }
+                res.try_into().unwrap_or(u16::MAX)
             }
-            res.try_into().unwrap_or(u16::MAX)
-        }}
+        }
 
         unsafe extern "C" fn compute_metric_debrujin(
             inp_ptr: u32,
             inp_size: u32,
             vmctx: *mut VMContext,
-        ) -> u16 { unsafe {
-            let vmctx = &mut *vmctx;
-            let buf = &vmctx.heap()[inp_ptr as usize..][..inp_size as usize];
-            assert_eq!(buf.len(), inp_size as usize);
+        ) -> u16 {
+            unsafe {
+                let vmctx = &mut *vmctx;
+                let buf = &vmctx.heap()[inp_ptr as usize..][..inp_size as usize];
+                assert_eq!(buf.len(), inp_size as usize);
 
-            // i.e. +1 size for every byte that doesn't match cyclic()
-            // b"aaaabaaacaaa"[...]
-            let mut res = 0;
-            for (i, el) in buf.chunks(4).enumerate() {
-                let mut i_ = i;
-                for &c in el {
-                    let expected_char = b'a' + (i_ % 26) as u8;
-                    res += (c != expected_char) as usize;
-                    if i_ != 0 {
-                        i_ /= 26
-                    };
+                // i.e. +1 size for every byte that doesn't match cyclic()
+                // b"aaaabaaacaaa"[...]
+                let mut res = 0;
+                for (i, el) in buf.chunks(4).enumerate() {
+                    let mut i_ = i;
+                    for &c in el {
+                        let expected_char = b'a' + (i_ % 26) as u8;
+                        res += (c != expected_char) as usize;
+                        if i_ != 0 {
+                            i_ /= 26
+                        };
+                    }
                 }
+                res.try_into().unwrap_or(u16::MAX)
             }
-            res.try_into().unwrap_or(u16::MAX)
-        }}
+        }
     }
 }
 

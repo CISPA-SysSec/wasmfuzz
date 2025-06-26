@@ -1,8 +1,8 @@
 use crate::{
+    HashSet,
     instrumentation::{
         BBCoveragePass, CodeCovInstrumentationPass, EdgeCoveragePass, FunctionCoveragePass,
     },
-    HashSet,
 };
 use std::{
     io::Write,

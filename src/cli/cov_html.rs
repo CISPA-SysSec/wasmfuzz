@@ -1,6 +1,6 @@
+use crate::HashMap;
 use crate::instrumentation::BBCoveragePass;
 use crate::ir::debuginfo_helper::resolve_source_location;
-use crate::HashMap;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -11,10 +11,10 @@ use clap::Parser;
 use askama::Template;
 use symbolic::debuginfo::{Object, ObjectError};
 use syntect::highlighting::ThemeSet;
-use syntect::html::{css_for_theme_with_class_style, ClassStyle};
+use syntect::html::{ClassStyle, css_for_theme_with_class_style};
 use syntect::parsing::{
-    BasicScopeStackOp, ParseState, Scope, ScopeRepository, ScopeStack, SyntaxReference, SyntaxSet,
-    SCOPE_REPO,
+    BasicScopeStackOp, ParseState, SCOPE_REPO, Scope, ScopeRepository, ScopeStack, SyntaxReference,
+    SyntaxSet,
 };
 use syntect::util::LinesWithEndings;
 

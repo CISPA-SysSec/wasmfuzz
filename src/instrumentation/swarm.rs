@@ -2,8 +2,8 @@ use cranelift::codegen::ir::{self, InstBuilder, MemFlags, Type, Value};
 use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::ir::Location;
-use crate::jit::module::TrapKind;
 use crate::jit::SwarmConfig;
+use crate::jit::module::TrapKind;
 
 use super::{CovSnapshot, Edge, ErasedInstrumentationPass, FuncIdx, InstrCtx};
 

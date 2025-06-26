@@ -72,9 +72,9 @@ pub(crate) fn translate_memory(
     state: &mut FuncTranslator,
     bcx: &mut FunctionBuilder,
 ) {
-    use ir::types;
-    use ir::Opcode;
     use MemoryInstruction::*;
+    use ir::Opcode;
+    use ir::types;
     match op {
         I32Load(imm) => translate_load(imm, Opcode::Load, types::I32, state, bcx),
         I32Load8U(imm) => translate_load(imm, Opcode::Uload8, types::I32, state, bcx),

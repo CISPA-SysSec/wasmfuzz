@@ -1,9 +1,9 @@
-use cranelift::codegen::ir::{self, condcodes::IntCC, InstBuilder, MemFlags, Type, Value};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlags, Type, Value, condcodes::IntCC};
 use cranelift::frontend::FunctionBuilder;
 
 use crate::ir::{Location, ModuleSpec};
 
-use super::{feedback_lattice::Minimize, AssociatedCoverageArray, InstrCtx, KVInstrumentationPass};
+use super::{AssociatedCoverageArray, InstrCtx, KVInstrumentationPass, feedback_lattice::Minimize};
 
 pub(crate) enum CmpCovKind {
     Hamming,

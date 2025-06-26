@@ -7,7 +7,7 @@ use crate::{
 };
 
 use super::feedback::FeedbackContext;
-use super::signals::{raise_trap, TrapReason};
+use super::signals::{TrapReason, raise_trap};
 
 #[repr(C)]
 pub(crate) struct VMContext {

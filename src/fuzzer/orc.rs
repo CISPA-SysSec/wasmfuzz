@@ -1,14 +1,15 @@
 use std::{
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, RwLock},
+    sync::{Arc, RwLock, mpsc},
     time::Instant,
 };
 
 use clap::Parser;
 use humantime::Duration;
-use rand::{prelude::*, rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, prelude::*, rngs::StdRng};
 
 use crate::{
+    HashSet,
     instrumentation::{
         BBCoveragePass, Edge, EdgeCoveragePass, EdgeShortestExecutionTracePass, FeedbackLattice,
         FuncIdx, FunctionCoveragePass, Passes,
@@ -18,7 +19,6 @@ use crate::{
         FeedbackOptions, JitFuzzingSession, JitFuzzingSessionBuilder, PassesGen, RunResult, Stats,
         SwarmConfig,
     },
-    HashSet,
 };
 
 #[derive(Debug, Parser, Clone)]

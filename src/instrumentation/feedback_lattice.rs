@@ -1,8 +1,8 @@
 use cranelift::codegen::ir::{self, InstBuilder, MemFlags, Value};
 use cranelift::prelude::FunctionBuilder;
 
-use crate::jit::vmcontext::VMContext;
 use crate::jit::CompilationKind;
+use crate::jit::vmcontext::VMContext;
 
 use super::{AssociatedCoverageArray, InstrCtx, KVInstrumentationPass};
 

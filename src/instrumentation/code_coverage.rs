@@ -1,5 +1,5 @@
 use bitvec::prelude::*;
-use cranelift::codegen::ir::{types::I8, InstBuilder, MemFlags};
+use cranelift::codegen::ir::{InstBuilder, MemFlags, types::I8};
 
 use crate::{
     ir::{Location, ModuleSpec},

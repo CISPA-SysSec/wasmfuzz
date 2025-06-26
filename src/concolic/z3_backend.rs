@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use bitvec::slice::BitSlice;
 use z3::{
-    ast::{Ast, Bool, Dynamic, Float, BV},
     SatResult, Solver, Symbol,
+    ast::{Ast, BV, Bool, Dynamic, Float},
 };
 
 use crate::{concolic::MemoryAccessKind, ir::ModuleSpec};

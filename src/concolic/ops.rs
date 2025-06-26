@@ -1,8 +1,8 @@
 use speedy::{Readable, Writable};
 
 use crate::ir::{
-    operators::{ConversionOp, FRelOp},
     FBinaryOp, FUnaryOp, IBinaryOp, IRelOp, ITestOp, IUnaryOp,
+    operators::{ConversionOp, FRelOp},
 };
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Readable, Writable)]

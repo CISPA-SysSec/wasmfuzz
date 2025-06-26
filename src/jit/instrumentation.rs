@@ -1,13 +1,13 @@
 use cranelift::frontend::FunctionBuilder;
-use cranelift::prelude::{types::I64, InstBuilder, IntCC, MemFlags, Type, Value};
+use cranelift::prelude::{InstBuilder, IntCC, MemFlags, Type, Value, types::I64};
 
-use crate::ir::{heuristics::Libfunc, Location};
+use crate::ir::{Location, heuristics::Libfunc};
 
 use super::VMContext;
 use super::{
+    CompilationKind, FuncTranslator,
     module::TrapKind,
     tracing::{trace_cmp, trace_memcmp, trace_strcmp},
-    CompilationKind, FuncTranslator,
 };
 
 fn bail(state: &mut FuncTranslator, bcx: &mut FunctionBuilder) -> bool {

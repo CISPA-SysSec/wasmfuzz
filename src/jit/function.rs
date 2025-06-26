@@ -1,16 +1,17 @@
 use std::any::Any;
 
-use crate::{instrumentation::Passes, HashMap, HashSet};
+use crate::{HashMap, HashSet, instrumentation::Passes};
 
 use cranelift::codegen::ir::{self, FuncRef, GlobalValue};
 use cranelift::frontend::{FunctionBuilder, Variable};
 use cranelift::jit::JITModule;
 use cranelift::module::{FuncId, Module};
 use cranelift::prelude::{InstBuilder, MemFlags, Signature, TrapCode, Value};
-use ir::types::{Type, I32, I64};
+use ir::types::{I32, I64, Type};
 use wasmparser::FuncType;
 
 use super::{
+    CompilationKind, CompilationOptions,
     builtins::{
         builtin_debug_wasmfuzz_write_stdout, builtin_memory_copy, builtin_memory_fill,
         builtin_memory_grow, builtin_memory_size, builtin_random_get,
@@ -24,14 +25,13 @@ use super::{
     },
     memory::translate_memory,
     module::TrapKind,
-    util::{wasm2tys, MemFlagsExt},
+    util::{MemFlagsExt, wasm2tys},
     vmcontext::VMContext,
-    CompilationKind, CompilationOptions,
 };
 use crate::{
+    AbortCode,
     instrumentation::{ErasedInstrumentationPass, InstrCtx},
     ir::{InsnIdx, Location, MemoryInstruction, ModuleSpec, WFOperator},
-    AbortCode,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -164,14 +164,14 @@ impl<'a, 's> FuncTranslator<'a, 's> {
     pub(crate) fn peekn(&mut self, n: usize, bcx: &mut FunctionBuilder) -> Vec<ir::Value> {
         assert!(self.stack.len() >= n);
         let rvals = self.stack[self.stack.len() - n..].to_vec();
-        let rvals = rvals
+
+        rvals
             .iter()
             .map(|entry| match entry {
                 StackEntry::Undefined(ty) => self.undef(*ty, bcx),
                 StackEntry::Value(_ty, val) => *val,
             })
-            .collect();
-        rvals
+            .collect()
     }
 
     pub(crate) fn peek1(&mut self, ty: Type, bcx: &mut FunctionBuilder) -> ir::Value {
@@ -986,8 +986,8 @@ mod fn_sig_impls {
     use super::{HostCallFn, HostCallTy};
     use crate::concolic::*;
     use crate::jit::concolic::ValTy;
-    use cranelift::codegen::ir::types::*;
     use cranelift::codegen::ir::Value;
+    use cranelift::codegen::ir::types::*;
 
     macro_rules! count {
         () => (0usize);

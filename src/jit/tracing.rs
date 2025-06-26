@@ -2,7 +2,7 @@ use cranelift::prelude::*;
 
 use crate::ir::Location;
 
-use super::{vmcontext::VMContext, CompilationKind, FuncTranslator};
+use super::{CompilationKind, FuncTranslator, vmcontext::VMContext};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 // TODO: move?
@@ -44,21 +44,23 @@ pub(crate) fn trace_cmp(
     );
 }
 
-pub(crate) unsafe extern "C" fn builtin_trace_cmp(a: u64, b: u64, loc: u64, vmctx: *mut VMContext) { unsafe {
-    if a == b {
-        return;
-    };
-    if let Some(v) = values_to_cmplog(a, b) {
-        let loc = Location::from_u64(loc);
-        let loc_set = (*vmctx).feedback.cmplog.entry(loc).or_default();
-        if loc_set.len() > 1000 {
-            // Make sure that we won't run out of memory.
-            // Can't handle so many I2S observations anyways...
+pub(crate) unsafe extern "C" fn builtin_trace_cmp(a: u64, b: u64, loc: u64, vmctx: *mut VMContext) {
+    unsafe {
+        if a == b {
             return;
+        };
+        if let Some(v) = values_to_cmplog(a, b) {
+            let loc = Location::from_u64(loc);
+            let loc_set = (*vmctx).feedback.cmplog.entry(loc).or_default();
+            if loc_set.len() > 1000 {
+                // Make sure that we won't run out of memory.
+                // Can't handle so many I2S observations anyways...
+                return;
+            }
+            loc_set.insert(v);
         }
-        loc_set.insert(v);
     }
-}}
+}
 
 fn values_to_cmplog(a: u64, b: u64) -> Option<CmpLog> {
     if let (Ok(a), Ok(b)) = (a.try_into(), b.try_into()) {
@@ -110,24 +112,26 @@ pub(crate) unsafe extern "C" fn builtin_trace_memcmp(
     n: u32,
     loc: u64,
     vmctx: *mut VMContext,
-) { unsafe {
-    let loc = Location::from_u64(loc);
-    let heap = (*vmctx).heap();
-    let (a, b, n) = (a as usize, b as usize, n as usize);
-    let (Some(a), Some(b)) = (heap.get(a..a + n), heap.get(b..b + n)) else {
-        // ignore out-of-bounds pointers
-        return;
-    };
-    if a == b {
-        return;
+) {
+    unsafe {
+        let loc = Location::from_u64(loc);
+        let heap = (*vmctx).heap();
+        let (a, b, n) = (a as usize, b as usize, n as usize);
+        let (Some(a), Some(b)) = (heap.get(a..a + n), heap.get(b..b + n)) else {
+            // ignore out-of-bounds pointers
+            return;
+        };
+        if a == b {
+            return;
+        }
+        (*vmctx)
+            .feedback
+            .cmplog
+            .entry(loc)
+            .or_default()
+            .insert(CmpLog::Memcmp(a.to_vec(), b.to_vec()));
     }
-    (*vmctx)
-        .feedback
-        .cmplog
-        .entry(loc)
-        .or_default()
-        .insert(CmpLog::Memcmp(a.to_vec(), b.to_vec()));
-}}
+}
 
 pub(crate) fn trace_strcmp(
     state: &mut FuncTranslator,
@@ -153,28 +157,30 @@ pub(crate) unsafe extern "C" fn builtin_trace_strcmp(
     b: u32,
     loc: u64,
     vmctx: *mut VMContext,
-) { unsafe {
-    let (a, b) = (a as usize, b as usize);
-    let loc = Location::from_u64(loc);
-    let heap = (*vmctx).heap();
-    if a + 1 >= heap.len() || b + 1 >= heap.len() {
-        // ignore out-of-bounds pointers
-        return;
+) {
+    unsafe {
+        let (a, b) = (a as usize, b as usize);
+        let loc = Location::from_u64(loc);
+        let heap = (*vmctx).heap();
+        if a + 1 >= heap.len() || b + 1 >= heap.len() {
+            // ignore out-of-bounds pointers
+            return;
+        }
+        let n = {
+            let a_n = heap[a..].iter().position(|&x| x == 0).unwrap_or(0);
+            let b_n = heap[b..].iter().position(|&x| x == 0).unwrap_or(0);
+            a_n.min(b_n) + 1
+        };
+        let a = &heap[a..][..n];
+        let b = &heap[b..][..n];
+        if a == b {
+            return;
+        }
+        (*vmctx)
+            .feedback
+            .cmplog
+            .entry(loc)
+            .or_default()
+            .insert(CmpLog::Memcmp(a.to_vec(), b.to_vec()));
     }
-    let n = {
-        let a_n = heap[a..].iter().position(|&x| x == 0).unwrap_or(0);
-        let b_n = heap[b..].iter().position(|&x| x == 0).unwrap_or(0);
-        a_n.min(b_n) + 1
-    };
-    let a = &heap[a..][..n];
-    let b = &heap[b..][..n];
-    if a == b {
-        return;
-    }
-    (*vmctx)
-        .feedback
-        .cmplog
-        .entry(loc)
-        .or_default()
-        .insert(CmpLog::Memcmp(a.to_vec(), b.to_vec()));
-}}
+}

@@ -4,7 +4,7 @@ use super::FuncTranslator;
 use cranelift::codegen::ir;
 use cranelift::{
     frontend::FunctionBuilder,
-    prelude::{types::I32, InstBuilder},
+    prelude::{InstBuilder, types::I32},
 };
 
 pub(crate) fn translate_parametric(

@@ -3,8 +3,8 @@ use cranelift::codegen::ir::{Type, Value};
 use crate::ir::{Location, ModuleSpec};
 
 use super::{
-    feedback_lattice::{ValueRange, ValueSet},
     AssociatedCoverageArray, FuncIdx, InstrCtx, KVInstrumentationPass,
+    feedback_lattice::{ValueRange, ValueSet},
 };
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]

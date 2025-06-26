@@ -1,10 +1,10 @@
 // TODO(concolic): concretization policies in style of https://github.com/trailofbits/manticore/blob/master/manticore/core/state.py#L387
 
-use crate::{ir::ModuleSpec, HashMap, HashSet};
+use crate::{HashMap, HashSet, ir::ModuleSpec};
 use std::{rc::Rc, sync::Arc, time::Duration};
 
 use bitvec::slice::BitSlice;
-use bitwuzla::{Bool, Btor, RoundingMode, SolverResult, BV, FP};
+use bitwuzla::{BV, Bool, Btor, FP, RoundingMode, SolverResult};
 
 use crate::concolic::MemoryAccessKind;
 
