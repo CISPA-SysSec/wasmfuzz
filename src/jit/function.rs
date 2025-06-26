@@ -353,7 +353,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         self.stack.truncate(depth);
     }
 
-    // adjust_* modifies the stack without requiring a useable codegen context
+    // adjust_* modifies the stack without requiring a usable codegen context
     pub(crate) fn adjust_pop_push(&mut self, pop: &[Type], push: &[Type]) {
         assert!(self.stack.len() >= pop.len());
         for (a, b) in pop.iter().zip(&self.stack[self.stack.len() - pop.len()..]) {

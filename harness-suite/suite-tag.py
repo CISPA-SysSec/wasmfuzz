@@ -196,11 +196,12 @@ tag_fuzzbench([
     "mbedtls-fuzz_dtlsclient.wasm",
     "openssl-x509.wasm",
     # "openthread-ot-ip6-send-fuzzer.wasm",
+    "openthread-radio-one-node.wasm",
     # "proj4-proj_crs_to_crs_fuzzer.wasm",
     # "re2-fuzzer.wasm",
     "sqlite-ossfuzz.wasm",
     # "systemd-fuzz-link-parser.wasm",
-    # "vorbis-decode-fuzzer.wasm",
+    "vorbis-decode.wasm",
     "woff2-convert_woff2ttf.wasm",
     "zlib-uncompress.wasm",
 ])
@@ -270,8 +271,8 @@ tag_manually("image_script_webp.wasm", "c62d3ace614155ac46c95b85b1ec86db337d15c0
 # allocation limit of 512 MB reached with 257 byte input
 tag_manually("image_script_hdr.wasm", "c62d3ace614155ac46c95b85b1ec86db337d15c0", Tag.CRASHING, Tag.SUITE_BUGBENCH)
 
-# wasmfuzz doesn't find after 48+ CPU hours
-# aflpp finds this reliably
+# Note: wasmfuzz doesn't find after 48+ CPU hours
+#       aflpp finds this reliably
 # TODO: triage
 tag_manually("ruff-ruff_formatter_validity.wasm", "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9", Tag.CRASHING, Tag.SUITE_BUGBENCH)
 

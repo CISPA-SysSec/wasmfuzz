@@ -188,7 +188,7 @@ impl ModuleSpec {
         let end_ip = func
             .basic_block_starts
             .pop()
-            .expect("remove function termiator bb");
+            .expect("remove function terminator bb");
         if end_ip.0 == 1 {
             func.basic_block_starts.remove(0);
             assert!(func.basic_block_starts.is_empty());

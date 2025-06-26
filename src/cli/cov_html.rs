@@ -441,7 +441,7 @@ impl<'a> ClassedHTMLLineGenerator<'a> {
         let mut s = String::with_capacity(line.len() + ops.len() * 8); // a guess
         let mut cur_index = 0;
 
-        // check and skip emty inner <span> tags
+        // check and skip empty inner <span> tags
         let mut span_empty = false;
         let mut span_start = 0;
 
