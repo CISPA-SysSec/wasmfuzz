@@ -113,7 +113,9 @@ impl OrchestratorHandle {
                                 update_live_coverage |=
                                     res.map(|x| x.novel_coverage).unwrap_or(false);
                             }
-                            orc.corpus.write().unwrap().cull_and_update_weights();
+                            let mut corpus = orc.corpus.write().unwrap();
+                            corpus.cull_and_update_weights();
+                            drop(corpus);
                             if update_live_coverage {
                                 orc.update_live_coverage();
                                 orc.frontier_bbs = orc.compute_frontier().into_iter().collect();

@@ -21,14 +21,14 @@ unsafe extern "C" fn builtin_build_concolic_unop(
     source: SymValRef,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) -> SymValRef {
+) -> SymValRef { unsafe {
     if source.is_concrete() {
         return SymValRef::concrete();
     }
     let vmctx = &mut *vmctx;
     let sym_val = SymVal::Unary(unop, source);
     vmctx.concolic.store(sym_val, module_byte_offset)
-}
+}}
 
 pub(crate) fn translate_build_concolic_unop(
     op: UnaryOp,
@@ -111,7 +111,7 @@ unsafe extern "C" fn builtin_build_concolic_binop(
     ty: ValTy,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) -> SymValRef {
+) -> SymValRef { unsafe {
     let vmctx = &mut *vmctx;
     if a.is_concrete() && b.is_concrete() {
         return SymValRef::concrete();
@@ -120,7 +120,7 @@ unsafe extern "C" fn builtin_build_concolic_binop(
     b = concrete_to_const(b, b_conc, ty, vmctx, module_byte_offset);
     let sym_val = SymVal::Binary(binop, a, b);
     vmctx.concolic.store(sym_val, module_byte_offset)
-}
+}}
 
 pub(crate) fn translate_build_concolic_binop(
     op: concolic::BinaryOp,
@@ -158,7 +158,7 @@ unsafe extern "C" fn builtin_build_concolic_select(
     ty: ValTy,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) -> SymValRef {
+) -> SymValRef { unsafe {
     let vmctx = &mut *vmctx;
     if cond.is_concrete() && a.is_concrete() && b.is_concrete() {
         return SymValRef::concrete();
@@ -181,7 +181,7 @@ unsafe extern "C" fn builtin_build_concolic_select(
         b,
     };
     vmctx.concolic.store(sym_val, module_byte_offset)
-}
+}}
 
 pub(crate) fn translate_build_concolic_select(
     cond: Value,
@@ -226,7 +226,7 @@ unsafe extern "C" fn builtin_build_concolic_memory_load(
     location: u64,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) -> SymValRef {
+) -> SymValRef { unsafe {
     let vmctx = &mut *vmctx;
     if !addr32.is_concrete() {
         let location = Location::from_u64(location);
@@ -246,7 +246,7 @@ unsafe extern "C" fn builtin_build_concolic_memory_load(
         memory,
         module_byte_offset,
     )
-}
+}}
 
 pub(crate) fn translate_build_concolic_memory_load(
     addr32: Value,
@@ -287,7 +287,7 @@ unsafe extern "C" fn builtin_build_concolic_memory_store(
     location: u64,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let vmctx = &mut *vmctx;
     if !addr32.is_concrete() {
         let location = Location::from_u64(location);
@@ -306,7 +306,7 @@ unsafe extern "C" fn builtin_build_concolic_memory_store(
         kind,
         module_byte_offset,
     );
-}
+}}
 
 pub(crate) fn translate_concolic_memory_store(
     val: Value,
@@ -344,7 +344,7 @@ unsafe extern "C" fn builtin_concolic_push_path_constraint_nz(
     taken: u32,
     location: u64,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     if condition.is_concrete() {
         return;
     }
@@ -354,7 +354,7 @@ unsafe extern "C" fn builtin_concolic_push_path_constraint_nz(
     vmctx
         .concolic
         .push_path_constraint(location, condition, taken);
-}
+}}
 
 pub(crate) fn translate_concolic_push_path_constraint_nz(
     cond: Value,
@@ -380,7 +380,7 @@ unsafe extern "C" fn builtin_concolic_push_path_constraint_eq(
     location: u64,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     if value_sym.is_concrete() {
         return;
     }
@@ -400,7 +400,7 @@ unsafe extern "C" fn builtin_concolic_push_path_constraint_eq(
     vmctx
         .concolic
         .push_path_constraint(location, condition, true);
-}
+}}
 
 pub(crate) fn translate_concolic_push_path_constraint_eq(
     value: Value,
@@ -449,7 +449,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_memcmp(
     location: u64,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     if a_sym.is_concrete() && b_sym.is_concrete() && n_sym.is_concrete() {
         let vmctx = &mut *vmctx;
         let memory = vmctx.heap_alloc.as_mut_slice();
@@ -462,7 +462,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_memcmp(
             module_byte_offset,
         );
     }
-}
+}}
 
 unsafe extern "C" fn builtin_concolic_trace_libcall_strncmp(
     a: u32,
@@ -474,7 +474,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_strncmp(
     location: u64,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     if a_sym.is_concrete() && b_sym.is_concrete() && n_sym.is_concrete() {
         let vmctx = &mut *vmctx;
         let memory = vmctx.heap_alloc.as_mut_slice();
@@ -488,7 +488,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_strncmp(
             module_byte_offset,
         );
     }
-}
+}}
 
 unsafe extern "C" fn builtin_concolic_trace_libcall_strncasecmp(
     a: u32,
@@ -500,7 +500,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_strncasecmp(
     location: u64,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     if a_sym.is_concrete() && b_sym.is_concrete() && n_sym.is_concrete() {
         let vmctx = &mut *vmctx;
         let memory = vmctx.heap_alloc.as_mut_slice();
@@ -514,7 +514,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_strncasecmp(
             module_byte_offset,
         );
     }
-}
+}}
 
 unsafe extern "C" fn builtin_concolic_trace_libcall_strcmp(
     a: u32,
@@ -524,7 +524,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_strcmp(
     location: u64,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     if a_sym.is_concrete() && b_sym.is_concrete() {
         let vmctx = &mut *vmctx;
         let memory = vmctx.heap_alloc.as_mut_slice();
@@ -538,7 +538,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_strcmp(
             module_byte_offset,
         );
     }
-}
+}}
 unsafe extern "C" fn builtin_concolic_trace_libcall_strcasecmp(
     a: u32,
     b: u32,
@@ -547,7 +547,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_strcasecmp(
     location: u64,
     module_byte_offset: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     if a_sym.is_concrete() && b_sym.is_concrete() {
         let vmctx = &mut *vmctx;
         let memory = vmctx.heap_alloc.as_mut_slice();
@@ -561,7 +561,7 @@ unsafe extern "C" fn builtin_concolic_trace_libcall_strcasecmp(
             module_byte_offset,
         );
     }
-}
+}}
 
 pub(crate) fn translate_concolic_trace_libcall(
     libcall: Libfunc,
@@ -656,7 +656,7 @@ unsafe extern "C" fn builtin_concolic_memory_fill(
     len_conc: u32,
     location: u64,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let location = Location::from_u64(location);
     let vmctx = &mut *vmctx;
     if !dst.is_concrete() {
@@ -676,7 +676,7 @@ unsafe extern "C" fn builtin_concolic_memory_fill(
         );
     }
     vmctx.concolic.memory_fill(dst_conc, val, len_conc);
-}
+}}
 
 pub(crate) fn translate_concolic_memory_fill(
     dst: Value,
@@ -710,7 +710,7 @@ unsafe extern "C" fn builtin_concolic_memory_copy(
     len_conc: u32,
     location: u64,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let location = Location::from_u64(location);
     let vmctx = &mut *vmctx;
     if !dst.is_concrete() {
@@ -738,7 +738,7 @@ unsafe extern "C" fn builtin_concolic_memory_copy(
         );
     }
     vmctx.concolic.memory_copy(dst_conc, src_conc, len_conc);
-}
+}}
 
 pub(crate) fn translate_concolic_memory_copy(
     dst: Value,

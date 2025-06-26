@@ -6,11 +6,11 @@ use super::signals::{raise_trap, TrapReason};
 
 use super::{vmcontext::VMContext, FuncTranslator};
 
-pub(crate) unsafe extern "C" fn builtin_memory_size(vmctx: *mut VMContext) -> u32 {
+pub(crate) unsafe extern "C" fn builtin_memory_size(vmctx: *mut VMContext) -> u32 { unsafe {
     (*vmctx).heap_pages
-}
+}}
 
-pub(crate) unsafe extern "C" fn builtin_memory_grow(delta: u32, vmctx: *mut VMContext) -> u32 {
+pub(crate) unsafe extern "C" fn builtin_memory_grow(delta: u32, vmctx: *mut VMContext) -> u32 { unsafe {
     let vmctx = &mut *vmctx;
     if vmctx.heap_pages.saturating_add(delta) > vmctx.heap_pages_limit_hard {
         println!(
@@ -30,14 +30,14 @@ pub(crate) unsafe extern "C" fn builtin_memory_grow(delta: u32, vmctx: *mut VMCo
         vmctx.heap_alloc.resize(byte_len);
     }
     old
-}
+}}
 
 pub(crate) unsafe extern "C" fn builtin_memory_fill(
     dest: u32,
     val: u32,
     len: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let vmctx = &mut *vmctx;
     vmctx.builtin_consume_fuel(len as u64);
 
@@ -49,14 +49,14 @@ pub(crate) unsafe extern "C" fn builtin_memory_fill(
     };
 
     buf.fill(val as u8);
-}
+}}
 
 pub(crate) unsafe extern "C" fn builtin_memory_copy(
     dst_pos: u32,
     src_pos: u32,
     len: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let vmctx = &mut *vmctx;
     vmctx.builtin_consume_fuel(len as u64);
     let heap = vmctx.heap();
@@ -71,9 +71,9 @@ pub(crate) unsafe extern "C" fn builtin_memory_copy(
     };
 
     heap.copy_within(src_pos..(src_pos + len), dst_pos);
-}
+}}
 
-pub(crate) unsafe extern "C" fn builtin_random_get(dest: u32, len: u32, vmctx: *mut VMContext) {
+pub(crate) unsafe extern "C" fn builtin_random_get(dest: u32, len: u32, vmctx: *mut VMContext) { unsafe {
     let vmctx = &mut *vmctx;
     vmctx.builtin_consume_fuel(len as u64);
     let mut rng = XorShift64Rand::with_seed(vmctx.random_get_seed);
@@ -87,7 +87,7 @@ pub(crate) unsafe extern "C" fn builtin_random_get(dest: u32, len: u32, vmctx: *
     use libafl_bolts::rands::XorShift64Rand;
     use rand::RngCore;
     rng.fill_bytes(buf);
-}
+}}
 
 pub(crate) fn signature(
     params: &[ir::types::Type],
@@ -125,32 +125,32 @@ pub(crate) unsafe extern "C" fn builtin_trace_wasmfuzz_write_stdout(
     buf: u32,
     n: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let vmctx = &mut *vmctx;
     let buf = &vmctx.heap()[buf as usize..][..n as usize].to_vec();
     assert!(buf.len() == n as usize);
     if !buf.is_empty() {
         vmctx.feedback.stdout.extend_from_slice(buf);
     }
-}
+}}
 
 pub(crate) unsafe extern "C" fn builtin_debug_wasmfuzz_write_stdout(
     buf: u32,
     n: u32,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let vmctx = &mut *vmctx;
     let buf = &vmctx.heap()[buf as usize..][..n as usize].to_vec();
     assert!(buf.len() == n as usize);
     if !buf.is_empty() {
         eprintln!("[STDOUT] {:?}", String::from_utf8_lossy(buf));
     }
-}
+}}
 
-unsafe extern "C" fn builtin_debug_log(idx: u32, vmctx: *mut VMContext) {
+unsafe extern "C" fn builtin_debug_log(idx: u32, vmctx: *mut VMContext) { unsafe {
     let vmctx = &mut *vmctx;
     eprintln!("JIT-TRACE: {}", vmctx.debugstrs[idx as usize]);
-}
+}}
 
 pub(crate) fn translate_debug_log(
     s: String,

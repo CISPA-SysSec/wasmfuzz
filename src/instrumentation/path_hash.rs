@@ -102,7 +102,7 @@ impl HashBitset {
         let hash_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
 
         assert!(self.entries.len().is_power_of_two());
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         unsafe extern "C" fn mix_and_update_bitset(
             new_cov: *mut bool,
             hash_ptr: *mut u64,
@@ -110,7 +110,7 @@ impl HashBitset {
             bitslice_len: u32,
             contribution: u32,
             _: *mut VMContext,
-        ) {
+        ) { unsafe {
             // let new_val = hash_to_u64((*hash_ptr, contribution));
             // let new_val = *hash_ptr ^ contribution as u64;
             // *hash_ptr = new_val;
@@ -140,7 +140,7 @@ impl HashBitset {
             // if new_val % 2 == 0 {
             //     *hash_ptr = 0;
             // }
-        }
+        }}
 
         let contrib = hash_to_u64(contrib) as u32 as i64;
         let contrib = ctx.bcx.ins().iconst(ir::types::I32, contrib);

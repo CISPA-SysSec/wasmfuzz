@@ -44,7 +44,7 @@ pub(crate) fn trace_cmp(
     );
 }
 
-pub(crate) unsafe extern "C" fn builtin_trace_cmp(a: u64, b: u64, loc: u64, vmctx: *mut VMContext) {
+pub(crate) unsafe extern "C" fn builtin_trace_cmp(a: u64, b: u64, loc: u64, vmctx: *mut VMContext) { unsafe {
     if a == b {
         return;
     };
@@ -58,7 +58,7 @@ pub(crate) unsafe extern "C" fn builtin_trace_cmp(a: u64, b: u64, loc: u64, vmct
         }
         loc_set.insert(v);
     }
-}
+}}
 
 fn values_to_cmplog(a: u64, b: u64) -> Option<CmpLog> {
     if let (Ok(a), Ok(b)) = (a.try_into(), b.try_into()) {
@@ -110,7 +110,7 @@ pub(crate) unsafe extern "C" fn builtin_trace_memcmp(
     n: u32,
     loc: u64,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let loc = Location::from_u64(loc);
     let heap = (*vmctx).heap();
     let (a, b, n) = (a as usize, b as usize, n as usize);
@@ -127,7 +127,7 @@ pub(crate) unsafe extern "C" fn builtin_trace_memcmp(
         .entry(loc)
         .or_default()
         .insert(CmpLog::Memcmp(a.to_vec(), b.to_vec()));
-}
+}}
 
 pub(crate) fn trace_strcmp(
     state: &mut FuncTranslator,
@@ -153,7 +153,7 @@ pub(crate) unsafe extern "C" fn builtin_trace_strcmp(
     b: u32,
     loc: u64,
     vmctx: *mut VMContext,
-) {
+) { unsafe {
     let (a, b) = (a as usize, b as usize);
     let loc = Location::from_u64(loc);
     let heap = (*vmctx).heap();
@@ -177,4 +177,4 @@ pub(crate) unsafe extern "C" fn builtin_trace_strcmp(
         .entry(loc)
         .or_default()
         .insert(CmpLog::Memcmp(a.to_vec(), b.to_vec()));
-}
+}}

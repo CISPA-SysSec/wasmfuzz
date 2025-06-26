@@ -112,7 +112,7 @@ impl KVInstrumentationPass for InputSizePass {
             inp_ptr: u32,
             inp_size: u32,
             vmctx: *mut VMContext,
-        ) -> u16 {
+        ) -> u16 { unsafe {
             let vmctx = &mut *vmctx;
             let buf = &vmctx.heap()[inp_ptr as usize..][..inp_size as usize];
             assert_eq!(buf.len(), inp_size as usize);
@@ -129,13 +129,13 @@ impl KVInstrumentationPass for InputSizePass {
                 }
             }
             res.try_into().unwrap_or(u16::MAX)
-        }
+        }}
 
         unsafe extern "C" fn compute_metric_debrujin(
             inp_ptr: u32,
             inp_size: u32,
             vmctx: *mut VMContext,
-        ) -> u16 {
+        ) -> u16 { unsafe {
             let vmctx = &mut *vmctx;
             let buf = &vmctx.heap()[inp_ptr as usize..][..inp_size as usize];
             assert_eq!(buf.len(), inp_size as usize);
@@ -154,7 +154,7 @@ impl KVInstrumentationPass for InputSizePass {
                 }
             }
             res.try_into().unwrap_or(u16::MAX)
-        }
+        }}
     }
 }
 
