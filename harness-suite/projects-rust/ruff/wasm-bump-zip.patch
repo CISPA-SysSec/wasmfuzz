@@ -1,0 +1,41 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index af94be8bd..d62931a8f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -177,7 +177,7 @@ walkdir = { version = "2.3.2" }
+ wasm-bindgen = { version = "0.2.92" }
+ wasm-bindgen-test = { version = "0.3.42" }
+ wild = { version = "2" }
+-zip = { version = "0.6.6", default-features = false }
++zip = { version = "2", default-features = false }
+ 
+ [workspace.metadata.cargo-shear]
+ ignored = ["getrandom"]
+diff --git a/crates/red_knot_vendored/build.rs b/crates/red_knot_vendored/build.rs
+index 2062db3d6..fd23fd5d5 100644
+--- a/crates/red_knot_vendored/build.rs
++++ b/crates/red_knot_vendored/build.rs
+@@ -41,7 +41,7 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {
+         CompressionMethod::Stored
+     };
+ 
+-    let options = FileOptions::default()
++    let options = zip::write::SimpleFileOptions::default()
+         .compression_method(method)
+         .unix_permissions(0o644);
+ 
+diff --git a/crates/ruff_db/src/vendored.rs b/crates/ruff_db/src/vendored.rs
+index 923824d1e..2d572d541 100644
+--- a/crates/ruff_db/src/vendored.rs
++++ b/crates/ruff_db/src/vendored.rs
+@@ -376,8 +376,8 @@ impl VendoredFileSystemBuilder {
+         VendoredFileSystem::new(buffer.into_inner())
+     }
+ 
+-    fn options(&self) -> FileOptions {
+-        FileOptions::default()
++    fn options(&self) -> zip::write::SimpleFileOptions {
++        zip::write::SimpleFileOptions::default()
+             .compression_method(self.compression_method)
+             .unix_permissions(0o644)
+     }

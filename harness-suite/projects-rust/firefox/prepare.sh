@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/mozilla-firefox/firefox "$PROJECT/repo" f3a00b47868003bc38a1e3e5c4986c04202a1e9f
+git clone-rev.sh https://github.com/mozilla-firefox/firefox "$PROJECT/repo" 6fc67650b6babef728c4d4732e7ef631f64f66a9

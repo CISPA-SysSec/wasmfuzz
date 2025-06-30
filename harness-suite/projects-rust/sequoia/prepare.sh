@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://gitlab.com/sequoia-pgp/sequoia.git "$PROJECT/repo" e7d91ba4d78bf39b4152c553c8038894a92e079f
+git clone-rev.sh https://gitlab.com/sequoia-pgp/sequoia.git "$PROJECT/repo" c948071849fe2b3baf590435eaaaf09fbef138be
 git -C "$PROJECT/repo" apply "$PROJECT/0001-fixes.patch"
