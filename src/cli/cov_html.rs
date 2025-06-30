@@ -253,9 +253,10 @@ impl ReportInfo {
     pub(crate) fn write_html_report(&self, output_path: &PathBuf) {
         tracy_full::zone!("ReportInfo::write_html_report");
         let mut files = Vec::new();
-        // let mut covered: Vec<_> = covered.into_iter().collect();
-        // covered.sort_by_cached_key(|(key, _)| (!key.starts_with('/'), key.clone()));
         for file_info in &self.files {
+            if file_info.line_coverage.instrumented.is_empty() && file_info.source.is_none() {
+                continue;
+            }
             let coverage = file_info.line_coverage.clone();
             files.push(IndexFile {
                 relative_filename: file_info.path.clone(),

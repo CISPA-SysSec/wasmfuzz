@@ -16,28 +16,37 @@ pub(crate) enum StackEntry {
     Loop(InsnIdx),
 }
 
-#[allow(unused)] // TODO
 pub(crate) struct FuncCFG {
+    #[expect(unused)]
     pub cfg_stack: Vec<StackEntry>,
     pub else_ifs: HashMap<InsnIdx, InsnIdx>,
     pub if_elses: HashMap<InsnIdx, InsnIdx>,
     pub if_ends: HashMap<InsnIdx, InsnIdx>,
+    #[expect(unused)]
     pub else_ends: HashMap<InsnIdx, InsnIdx>,
     pub br_blocks: HashMap<InsnIdx, InsnIdx>,
     pub br_loops: HashMap<InsnIdx, InsnIdx>,
     pub block_ends: HashMap<InsnIdx, InsnIdx>,
+    #[expect(unused)]
     pub loop_ends: HashMap<InsnIdx, InsnIdx>,
     pub br_table_insns: HashMap<InsnIdx, Vec<StackEntry>>,
+    #[expect(unused)]
     pub source_tys: HashMap<InsnIdx, BlockType>,
     pub end_tys: HashMap<InsnIdx, BlockType>,
     pub block_starts: HashSet<InsnIdx>,
     pub bb_starts: Vec<InsnIdx>,
     pub end_idx: InsnIdx,
+    #[expect(unused)]
     pub insn_edges: Vec<(InsnIdx, InsnIdx)>,
+    #[expect(unused)]
     pub insn_call_targets: Vec<(InsnIdx, u32)>,
+    #[expect(unused)]
     pub insn_indirect_call_tables: Vec<(InsnIdx, u32)>,
+    #[expect(unused)]
     pub insn_returns: Vec<InsnIdx>,
+    #[expect(unused)]
     pub insn_unreachable: Vec<InsnIdx>,
+    #[expect(unused)]
     pub block_edges: HashSet<(InsnIdx, InsnIdx)>,
     pub critical_insn_edges: HashSet<(InsnIdx, InsnIdx)>,
 }

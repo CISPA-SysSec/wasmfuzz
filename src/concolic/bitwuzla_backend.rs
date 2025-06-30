@@ -562,7 +562,7 @@ impl SolverInstance {
         for (i, bv) in &self.inp_vals {
             let solution = bv.get_a_solution();
             input[*i as usize] = solution.as_u64().unwrap() as u8;
-            eprintln!("apply_model[{}] = {:#x}", *i as usize, input[*i as usize]);
+            // eprintln!("apply_model[{}] = {:#x}", *i as usize, input[*i as usize]);
         }
     }
 

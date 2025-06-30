@@ -75,14 +75,14 @@ fn check_program(spec: &ModuleSpec) {
 
 fn print_system_info() {
     let default_features: &[(bool, &'static str)] = &[
-        (cfg!(feature = "reports"), "HTML Coverage Reports"),
+        (cfg!(feature = "reports"), "HTML coverage reports"),
         (
             cfg!(feature = "compressed_harnesses"),
-            "ZStandard-compressed Harnesses (foo.wasm.zst)",
+            "ZStandard-compressed harnesses (foo.wasm.zst)",
         ),
     ];
     let extra_features: &[(bool, &'static str)] = &[
-        (cfg!(feature = "concolic"), "Concolic Tracing"),
+        (cfg!(feature = "concolic"), "Concolic tracing"),
         (
             cfg!(feature = "concolic_bitwuzla"),
             "Bitwuzla backend for concolic solver",
@@ -91,8 +91,8 @@ fn print_system_info() {
             cfg!(feature = "concolic_z3"),
             "Z3 backend for concolic solver",
         ),
-        (cfg!(feature = "with_mimalloc"), "mimalloc allocator"),
-        (cfg!(feature = "tracy"), "Tracy Profiler Instrumentation"),
+        (cfg!(feature = "with_mimalloc"), "Mimalloc allocator"),
+        (cfg!(feature = "tracy"), "Tracy profiler instrumentation"),
     ];
     println!("Compile-time features:");
     for (enabled, feature) in default_features {

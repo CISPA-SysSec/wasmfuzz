@@ -343,7 +343,7 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
         self.keys.binary_search(key).is_ok()
     }
 
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn iter_entries(&self) -> impl Iterator<Item = (&K, &V)> {
         self.keys.iter().zip(self.entries.iter())
     }
@@ -444,7 +444,7 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
 impl<K: std::fmt::Debug + Ord + Clone, V: std::fmt::Debug + FeedbackLattice>
     AssociatedCoverageArray<K, V>
 {
-    #[allow(unused)]
+    #[expect(unused)]
     fn debug_print(&self) {
         eprintln!();
         for ((k, v), prev) in self

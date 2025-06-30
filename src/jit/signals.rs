@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_catch_raised_via_call() {
-        let res = unsafe { catch_traps(|| raise_trap(TrapReason::OutOfFuel)) };
+        let res = unsafe { catch_traps::<(), _>(|| raise_trap(TrapReason::OutOfFuel)) };
         assert_eq!(
             res,
             Err(TrapInfo {

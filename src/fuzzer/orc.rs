@@ -53,6 +53,7 @@ pub(crate) enum Experiment {
     SwarmFocusEdge,
     NoSnapshot,
     OnlyEdgeCoverage,
+    NoSnapshotOnlyEdges,
 }
 impl std::str::FromStr for Experiment {
     type Err = String;
@@ -62,6 +63,7 @@ impl std::str::FromStr for Experiment {
             "no-snapshot" => Self::NoSnapshot,
             "swarm-focus-edge" => Self::SwarmFocusEdge,
             "only-edge-coverage" => Self::OnlyEdgeCoverage,
+            "no-snapshot-only-edges" => Self::NoSnapshotOnlyEdges,
             _ => return Err("unknown Experiment".to_owned()),
         })
     }
@@ -321,7 +323,6 @@ impl Orchestrator {
                 live_bbs: true,
                 live_edges: true,
                 edge_shortest_trace: true,
-                func_input_size_cyclic: true,
                 ..FeedbackOptions::nothing()
             })
             .instruction_limit(Some(750_000_000))
@@ -600,7 +601,10 @@ impl Orchestrator {
             }
         }
 
-        if matches!(self.opts.experiment, Some(Experiment::OnlyEdgeCoverage)) {
+        if matches!(
+            self.opts.experiment,
+            Some(Experiment::OnlyEdgeCoverage | Experiment::NoSnapshotOnlyEdges)
+        ) {
             opts = FeedbackOptions::minimal_code_coverage();
             opts.live_edges = false;
         }

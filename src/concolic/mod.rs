@@ -29,7 +29,6 @@ pub(crate) mod z3_backend;
 #[cfg(feature = "concolic_z3")]
 pub(crate) use z3_backend::SolverInstance as Z3Solver;
 
-#[allow(unused)]
 pub(crate) enum SolverKind {
     Z3,
     Bitwuzla,
@@ -389,7 +388,7 @@ pub(crate) enum ConcolicEvent {
         purpose: MemoryConstraintPurpose,
     },
     // TODO: Where could we automatically apply tryalternatives? The select instruction? Indirect branches?
-    #[allow(unused)]
+    #[expect(unused)]
     TryAlternative {
         location: Location,
         concrete: SymValRef,
@@ -653,14 +652,12 @@ impl ConcolicContext {
         match sym_val {
             SymVal::Binary(BinaryOp::Add, x, y) => match (self.fetch(x), self.fetch(y)) {
                 (SymVal::ConstI32(0), o) | (o, SymVal::ConstI32(0)) => {
-                    dbg!();
                     sym_val = o;
                 }
                 (SymVal::Binary(BinaryOp::Add, a, b), SymVal::ConstI32(c))
                 | (SymVal::ConstI32(c), SymVal::Binary(BinaryOp::Add, a, b)) => {
                     match (self.fetch(a), self.fetch(b)) {
                         (SymVal::ConstI32(a), _b) => {
-                            dbg!();
                             sym_val = SymVal::Binary(
                                 BinaryOp::Add,
                                 b,
@@ -668,7 +665,6 @@ impl ConcolicContext {
                             )
                         }
                         (_a, SymVal::ConstI32(b)) => {
-                            dbg!();
                             sym_val = SymVal::Binary(
                                 BinaryOp::Add,
                                 a,
@@ -703,7 +699,6 @@ impl ConcolicContext {
                         && matches!(kind, MemoryAccessKind::I32AsS8 | MemoryAccessKind::I32AsU8)
                     {
                         assert_eq!(vals.len(), 1);
-                        dbg!();
                         sym_val = SymVal::CombineBytes {
                             kind: MemoryAccessKind::I32AsU8,
                             vals,

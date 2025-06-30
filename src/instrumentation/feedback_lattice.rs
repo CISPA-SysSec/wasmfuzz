@@ -25,7 +25,7 @@ pub(crate) trait FeedbackLattice: PartialEq + Eq + Clone {
     // should satisfy:
     // a.is_extended_by(b) =>
     // a.as_linear_score() < a.unify(b).as_linear_score()
-    #[allow(unused)]
+    #[expect(unused)]
     fn as_linear_score(&self) -> Option<u64> {
         None
     }
@@ -188,7 +188,7 @@ impl<const N: usize> ValueSet<N> {
         debug_assert!(!self.is_top());
         &self.elems[..self.size]
     }
-    #[allow(unused)]
+    #[expect(unused)]
     fn contains(&self, el: u64) -> bool {
         self.is_top() || self.elems().binary_search(&el).is_ok()
     }
@@ -296,7 +296,7 @@ pub(crate) trait FLInteger: Copy + Clone + Eq + Ord + std::ops::Add + std::ops::
     fn zero() -> Self;
     fn max() -> Self;
     fn cranelift_ty() -> ir::Type;
-    #[allow(unused)]
+    #[expect(unused)]
     fn as_u64(&self) -> u64;
 }
 

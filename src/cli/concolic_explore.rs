@@ -39,7 +39,6 @@ impl<'a> ConcolicExplorer<'a> {
         let mut sess = JitFuzzingSession::builder(mod_spec.clone())
             .feedback(FeedbackOptions {
                 live_funcs: true,
-                live_bbs: true,
                 live_edges: true,
                 perffuzz_func: true,
                 perffuzz_edge: true,

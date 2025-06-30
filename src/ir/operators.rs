@@ -169,9 +169,9 @@ pub(crate) enum MemoryInstruction {
     MemoryGrow,
     MemoryFill,
     MemoryCopy,
-    #[allow(unused)]
+    #[expect(unused)]
     MemoryInit(u32),
-    #[allow(unused)]
+    #[expect(unused)]
     DataDrop(u32),
 }
 
@@ -191,7 +191,7 @@ pub(crate) enum ParametricInstruction {
 }
 
 #[derive(Debug)]
-#[allow(unused)]
+#[expect(unused)]
 pub(crate) enum TableInstruction {
     TableGet(u32),
     TableSet(u32),
@@ -264,7 +264,7 @@ pub(crate) enum WFOperator {
         name: String,
         ty: FuncType,
     },
-    #[allow(unused)]
+    #[expect(unused)]
     TodoUnimplemented(String),
 }
 

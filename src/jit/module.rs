@@ -319,7 +319,7 @@ impl<'s> ModuleTranslator<'s> {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn emit_function(
         func: &FuncSpec,
         ctx: &mut codegen::Context,
@@ -486,7 +486,7 @@ impl<'s> ModuleTranslator<'s> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn emit_export_trampoline(
         &mut self,
         spec: &ModuleSpec,

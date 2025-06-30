@@ -24,7 +24,7 @@ pub(crate) struct FuncSpec {
     pub is_bb_start: BitVec,
     pub ty: wasmparser::FuncType,
     pub idx: u32,
-    #[allow(unused)]
+    #[expect(unused)]
     pub idx_in_code_section: u32,
     pub symbol: String,
     pub _symbol: Option<String>,

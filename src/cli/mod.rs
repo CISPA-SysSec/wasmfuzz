@@ -1,4 +1,5 @@
 use clap::Parser;
+use rand::Rng;
 use std::{
     io::{BufRead, Write},
     path::{Path, PathBuf},
@@ -64,6 +65,8 @@ pub(crate) enum Subcommand {
         generator: String,
         #[clap(long, default_value = "10000")]
         execs: usize,
+        #[clap(long, default_value = "3")]
+        simple_mutations_per_exec: usize,
         #[clap(long, default_value = "1000000")]
         instruction_limit: u64,
         #[clap(long)]
@@ -99,6 +102,11 @@ pub(crate) enum Subcommand {
     Fuzz(crate::fuzzer::orc::CliOpts),
     /// Remove uninteresting inputs from corups.
     Cmin(cmin::CminOpts),
+    /// Minimize crashing input.
+    Tmin {
+        program: PathBuf,
+        input: PathBuf,
+    },
     /// Watch directory for new entries and report total coverage over time.
     MonitorCov(monitor_cov::MonitorCovOpts),
     #[cfg(feature = "concolic_bitwuzla")]
@@ -146,6 +154,13 @@ pub(crate) enum Subcommand {
         touch: usize,
         #[clap(long, default_value = "10000")]
         iters: usize,
+    },
+    #[clap(hide = true)]
+    DumpEmbeddedSources {
+        program: PathBuf,
+        output: PathBuf,
+        #[clap(long)]
+        no_prefix: bool,
     },
 }
 
@@ -420,6 +435,25 @@ pub(crate) fn main() {
             let mod_spec = parse_program(&opts.program);
             cmin::run(mod_spec, opts);
         }
+        Subcommand::Tmin { program, input } => {
+            let mod_spec = parse_program(&PathBuf::from(&program));
+            let input = std::fs::read(input).unwrap();
+
+            {
+                let mut stats = Stats::default();
+                let mut sess = JitFuzzingSession::builder(mod_spec.clone())
+                    .feedback(FeedbackOptions::nothing())
+                    .build();
+                sess.initialize(&mut stats);
+                let res = sess.run(&input, &mut stats);
+                assert!(res.is_crash());
+            }
+
+            let opts = crate::fuzzer::orc::CliOpts::parse_from(vec!["wasmfuzz-fuzz", "dummy.wasm"]);
+            crate::fuzzer::fuzz(mod_spec, opts);
+
+            todo!()
+        }
         #[cfg(feature = "concolic_bitwuzla")]
         Subcommand::CheckConcolic { program, input } => {
             if cfg!(not(feature = "concolic_debug_verify")) {
@@ -545,6 +579,7 @@ pub(crate) fn main() {
             execs,
             instruction_limit,
             cov_html,
+            simple_mutations_per_exec,
             json_out,
         } => {
             use crate::instrumentation::{
@@ -595,6 +630,7 @@ pub(crate) fn main() {
             let mut moving_score = 0.0;
             let mut stops = Vec::new();
             let mut buf = Vec::new();
+            let mut rng = rand::rng();
             for i in 0..execs {
                 let mut len = [0; 4];
                 stdout.read_exact(&mut len).unwrap();
@@ -602,12 +638,28 @@ pub(crate) fn main() {
                 buf.truncate(0);
                 buf.resize(len as usize, 0);
                 stdout.read_exact(&mut buf).unwrap();
-                // dbg!(buf.len());
-                let res = sess.run_reusable(&buf, false, &mut stats);
-                res.expect_ok();
-                if res.novel_coverage {
-                    res.print_cov_update(&sess, i);
-                    // eprintln!("[{:05}] novel coverage {:?}", i, res.novel_coverage_passes);
+
+                if len == 0 {
+                    continue;
+                }
+
+                let mut restore_byte = None;
+                for i in 0..simple_mutations_per_exec + 1 {
+                    if let Some((pos, c)) = restore_byte.take() {
+                        buf[pos] = c;
+                    }
+                    let res = sess.run_reusable(&buf, false, &mut stats);
+                    res.expect_ok();
+                    if res.novel_coverage {
+                        res.print_cov_update(&sess, i);
+                        // eprintln!("[{:05}] novel coverage {:?}", i, res.novel_coverage_passes);
+                    }
+
+                    if simple_mutations_per_exec > 0 {
+                        let pos = rng.random_range(0..buf.len());
+                        restore_byte = Some((pos, buf[pos]));
+                        buf[pos] = rng.random();
+                    }
                 }
 
                 if i.is_power_of_two() && i >= 512 {
@@ -646,6 +698,64 @@ pub(crate) fn main() {
                 crate::cli::cov_html::write_html_cov_report(mod_spec, &sess, &out_path);
                 #[cfg(not(feature = "reports"))]
                 panic!("trying to write html report without 'reports' feature")
+            }
+        }
+        Subcommand::DumpEmbeddedSources {
+            program,
+            output,
+            no_prefix,
+        } => {
+            let mod_spec = parse_program(&program);
+            let object = symbolic_debuginfo::Object::parse(&mod_spec.wasm_binary)
+                .expect("failed to parse file");
+            assert!(object.has_debug_info());
+            assert!(object.has_sources());
+            let debug_session = object.debug_session().expect("failed to process file");
+
+            let mut files = debug_session
+                .files()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            // make sure we keep the copies that contain source code information
+            files.sort_by_key(|f| (f.abs_path_str(), f.source_str().is_none()));
+            files.dedup_by_key(|f| f.abs_path_str());
+
+            let mut filtered = 0;
+            let mut total = 0;
+            let mut done = 0;
+            for file in files {
+                let Some(source) = file.source_str() else {
+                    continue;
+                };
+                total += 1;
+                let path = file.abs_path_str();
+                let mut path = PathBuf::from(path);
+                if !no_prefix {
+                    let mut components = path.iter().collect::<Vec<_>>();
+                    if components.len() < 4
+                        || components[0] != "/"
+                        || components[1] != "projects"
+                        || components[3] != "repo"
+                    {
+                        filtered += 1;
+                        continue;
+                    }
+                    // strip /projects/*/repo/
+                    components.drain(1..4);
+                    path = components.iter().collect();
+                }
+                let mut output_path = output.clone();
+                output_path.push(path.strip_prefix("/").unwrap());
+                std::fs::create_dir_all(output_path.parent().unwrap()).unwrap();
+                std::fs::write(output_path, source.as_bytes()).unwrap();
+                done += 1;
+            }
+
+            println!("Wrote {done} files to {output:?}.");
+            if filtered > 0 {
+                println!(
+                    "Note: skipped {filtered} out of {total} files embedded in the debug info"
+                );
             }
         }
     }

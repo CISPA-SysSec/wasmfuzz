@@ -79,14 +79,17 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                     fuzz_opts.t.idle_timeout = Some("20s".parse().unwrap());
                     fuzz_opts.x.ignore_bus_inputs =
                         (!matches!(opts.experiment, Some(orc::Experiment::UseBusInputs))).into();
-                    if matches!(opts.experiment, Some(orc::Experiment::NoSnapshot)) {
+                    if matches!(
+                        opts.experiment,
+                        Some(orc::Experiment::NoSnapshot | orc::Experiment::NoSnapshotOnlyEdges)
+                    ) {
                         fuzz_opts.x.run_from_snapshot = false.into();
                     }
 
                     let mut worker = Worker::new(
                         mod_spec.clone(),
                         fuzz_opts.clone(),
-                        mq.clone(), // TODO: is this a good idea? we're creating an unbounded amount of subscribers here...
+                        mq.clone(),
                         core_idx,
                         Some(orc_handle.clone()),
                     );

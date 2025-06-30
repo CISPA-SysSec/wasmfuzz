@@ -78,7 +78,7 @@ pub(crate) struct FuncTranslator<'a, 's> {
 }
 
 impl<'a, 's> FuncTranslator<'a, 's> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         vmctx: &'s mut VMContext,
         func_ids: &'s HashMap<u32, FuncId>,
@@ -275,7 +275,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         self.set_concolic(ty, dest, symref, bcx);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn fill_concolic_binop(
         &mut self,
         dest_ty: Type,

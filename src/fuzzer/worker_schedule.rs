@@ -2,14 +2,13 @@ use std::time::{Duration, Instant};
 
 use super::FuzzOpts;
 
-#[allow(unused)]
 struct Throttle {
     events: Vec<Instant>,
     interval: Duration,
     limit: usize,
 }
 
-#[allow(unused)]
+#[expect(unused)]
 impl Throttle {
     fn new(limit: usize, interval: Duration) -> Self {
         Self {

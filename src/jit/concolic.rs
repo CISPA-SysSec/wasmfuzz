@@ -423,7 +423,7 @@ pub(crate) fn translate_concolic_push_path_constraint_eq(
     );
 }
 
-#[allow(unused)]
+#[expect(unused)]
 pub(crate) fn translate_concolic_try_alternative(
     value: Value,
     description: &'static str,

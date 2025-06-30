@@ -62,7 +62,7 @@ impl HashBitset {
         self.entries.fill(false);
     }
 
-    #[allow(unused)]
+    #[expect(unused)]
     fn instrument<P: HashBitsetInstrumentationPass>(
         &self,
         key: ir::Value,

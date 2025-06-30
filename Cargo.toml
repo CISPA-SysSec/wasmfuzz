@@ -4,17 +4,17 @@ version = "0.1.0"
 authors = []
 license = "Apache-2.0 OR MIT"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.85"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.233"
+wasmparser = "0.235"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive", "env"] }
 md5 = "0.7"
 rand = "0.9"
 bitvec = "1.0.1"
-roaring = "0.10.9"
+roaring = "0.11"
 target-lexicon = "0.13"
 speedy = "0.8"
 colored = "3.0"
@@ -22,7 +22,7 @@ anyhow = "1.0"
 dirs = "6.0"
 serde = "1.0"
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
-gimli = "0.31"
+gimli = "0.32"
 # We pin symbolic since DWARFv5 embedded source code support was removed >.>
 symbolic = { version = "12.11.1", features = ["demangle", "symcache"] }
 symbolic-debuginfo = "=12.11.1"
@@ -34,7 +34,7 @@ crossbeam-channel = "0.5"
 ordered-float = { version = "5.0", features = ["speedy"] }
 decurse = "0.0.4"
 rustix = { version = "1.0", features = ["mm", "param", "fs"] }
-object = { version = "0.36", default-features = false, features = [
+object = { version = "0.37", default-features = false, features = [
     "read_core",
     "compression",
     "wasm",
@@ -43,11 +43,10 @@ ouroboros = "0.18.3"
 # NOTE: LibAFL tends to play it fast and loose with SemVer and version bumps.
 #       We pin to an exact minor release in order to avoid breakage.
 libafl = { version = "=0.15.3", default-features = false, features = [
-    "std",
     "rand_trait",
 ] }
-libafl_bolts = "0.15"
-cranelift = { version = "0.120.0", features = [
+libafl_bolts = { version = "0.15", default-features = false, features = ["std", "derive", "serdeany_autoreg"] }
+cranelift = { version = "0.121", features = [
     # cranelift = { path = "../wasmtime/cranelift/umbrella", package = "cranelift", features = [
     "jit",
     "module",

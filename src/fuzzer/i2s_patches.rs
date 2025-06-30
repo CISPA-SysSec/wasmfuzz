@@ -20,7 +20,7 @@ where
     S: HasCorpus<BytesInput> + HasMetadata + HasRand + HasMaxSize,
     I: HasMutatorBytes,
 {
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         if input.is_empty() {
             return Ok(MutationResult::Skipped);
