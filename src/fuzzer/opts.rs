@@ -203,7 +203,7 @@ pub(crate) struct StrategyOpts {
     #[clap(long, value_parser=cli_parse_humancount, default_value="750m")]
     pub instruction_limit: Option<u64>,
     // Reset VMContext's memory for deterministic (re-)execution
-    #[clap(long, default_value = "true")]
+    #[clap(long, default_value = "false")]
     pub run_from_snapshot: FlagBool,
     #[clap(long, default_value = "false")]
     pub fuzz_through_crashes: FlagBool,

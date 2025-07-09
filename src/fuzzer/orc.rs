@@ -51,19 +51,17 @@ pub(crate) struct CliOpts {
 pub(crate) enum Experiment {
     UseBusInputs,
     SwarmFocusEdge,
-    NoSnapshot,
+    Snapshot,
     OnlyEdgeCoverage,
-    NoSnapshotOnlyEdges,
 }
 impl std::str::FromStr for Experiment {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "use-bus-inputs" => Self::UseBusInputs,
-            "no-snapshot" => Self::NoSnapshot,
+            "snapshot" => Self::Snapshot,
             "swarm-focus-edge" => Self::SwarmFocusEdge,
             "only-edge-coverage" => Self::OnlyEdgeCoverage,
-            "no-snapshot-only-edges" => Self::NoSnapshotOnlyEdges,
             _ => return Err("unknown Experiment".to_owned()),
         })
     }
@@ -603,10 +601,7 @@ impl Orchestrator {
             }
         }
 
-        if matches!(
-            self.opts.experiment,
-            Some(Experiment::OnlyEdgeCoverage | Experiment::NoSnapshotOnlyEdges)
-        ) {
+        if matches!(self.opts.experiment, Some(Experiment::OnlyEdgeCoverage)) {
             opts = FeedbackOptions::minimal_code_coverage();
             opts.live_edges = false;
         }

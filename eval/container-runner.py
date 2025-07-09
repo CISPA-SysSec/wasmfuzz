@@ -87,7 +87,6 @@ parser.add_argument('--tags-csv', default="./harness-suite/tags.csv")
 # TODO: remove this? re-use the container binary?
 parser.add_argument('--wasmfuzz', default="wasmfuzz", help="Path to wasmfuzz binary for coverage collection")
 
-parser.add_argument('--native-bins', default="./wasmfuzz-native")
 parser.add_argument('--native-cov', action='store_true')
 
 parser.add_argument('--target', action='append', help="Only run harnesses that contain this string")
@@ -277,7 +276,7 @@ class FuzzJob:
 
         self.monitor_native = None
         if args.native_cov: # TRACK LIBFUZZER COV
-            native_bin = self.target_wasm.parent.parent / "wasmfuzz-native" / self.target_wasm.stem
+            native_bin = self.target_wasm.with_suffix(".exe")
             if not native_bin.exists():
                 print(f"[-] missing native_bin for {self.target_wasm.stem}")
                 return
@@ -315,10 +314,9 @@ class FuzzJob:
         fuzzer_cmd += ["--name", self.job_uuid]
         if fuzzer.endswith("-native"):
             assert fuzzer in ["libfuzzer-native", "libafl-libfuzzer-native"]
-            sd = "wasmfuzz-native" if fuzzer == "libfuzzer-native" else "wasmfuzz-libafl"
             # image = "docker.io/i386/ubuntu:focal" if fuzzer == "libfuzzer-native" else "docker.io/ubuntu:24.04"
             image = "docker.io/ubuntu:24.04"
-            source = self.target_wasm.parent.parent / sd / self.target_wasm.stem
+            source = self.target_wasm.with_suffix(".exe")
             fuzzer_cmd += ["--mount", f"type=bind,source={source.absolute()},destination=/{self.target_wasm.stem}-{fuzzer},ro=true,relabel=shared"]
             fuzzer_cmd += [image]
             num_cores = int(env["FUZZER_CORES"])
@@ -429,6 +427,6 @@ if __name__ == "__main__":
     assert Path(args.harness_suite).is_dir(), f"--bins={args.harness_suite!r} not found"
     if args.core_limit:
         assert args.core_limit <= os.cpu_count()
-        cores_available = args.core_limit
+        cores_available = list(range(args.core_limit))
 
     asyncio.run(main(), debug=True)

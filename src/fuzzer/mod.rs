@@ -79,11 +79,8 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                     fuzz_opts.t.idle_timeout = Some("20s".parse().unwrap());
                     fuzz_opts.x.ignore_bus_inputs =
                         (!matches!(opts.experiment, Some(orc::Experiment::UseBusInputs))).into();
-                    if matches!(
-                        opts.experiment,
-                        Some(orc::Experiment::NoSnapshot | orc::Experiment::NoSnapshotOnlyEdges)
-                    ) {
-                        fuzz_opts.x.run_from_snapshot = false.into();
+                    if matches!(opts.experiment, Some(orc::Experiment::Snapshot)) {
+                        fuzz_opts.x.run_from_snapshot = true.into();
                     }
 
                     let mut worker = Worker::new(
