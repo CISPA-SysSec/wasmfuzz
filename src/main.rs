@@ -2,10 +2,6 @@
 //!
 //! See [the whitepaper](https://isotropic.org/papers/chicken.pdf) for more details.
 
-// Workaround for "overflow evaluating the requirement `[(); tracy_full::::zone::get_function_name_from_local_type::{constant#0}] well-formed`"
-// https://github.com/SparkyPotato/tracy_full/issues/5
-#![cfg_attr(feature = "tracy", feature(generic_const_exprs))]
-
 mod cli;
 mod concolic;
 pub mod cow_memory;
