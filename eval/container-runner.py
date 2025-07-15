@@ -93,6 +93,7 @@ parser.add_argument('--target', action='append', help="Only run harnesses that c
 parser.add_argument('--tag', action='append', help="Only run targets with this tag")
 parser.add_argument('--skip-tag', action='append', help="Don't run targets with this tag")
 parser.add_argument('--fuzzer', action='append', help="Run with this fuzzer")
+parser.add_argument('--keep-corpora', default=None, help="Copy resulting corpora to this path")
 
 args = parser.parse_args()
 fuzzers: list[str] = args.fuzzer or [
@@ -356,25 +357,31 @@ class FuzzJob:
 
 async def run_target(target, fuzzer, config=None, num_cores=1):
     async with cores(num_cores) as core_ids:
+        config_str = None
+        config_env = {"FUZZER_CONFIG": None, "FUZZER_CORES": str(num_cores)}
+        if config is not None:
+            if isinstance(config, str) and fuzzer == "wasmfuzz":
+                config = dict(name=config, config=config, args=f"--experiment={config}")
+            if isinstance(config, str):
+                config = dict(name=config, config=config)
+            config_str = config["name"]
+            config_env.update({f"FUZZER_{k.upper()}": v for k, v in config.items()})
+        bucket = f"{fuzzer}-{config_str}" if config_str is not None else fuzzer
+        bucket += f"-{gethostname()}"
+        slug = f"{target.stem}-{bucket}"
+
         try:
-            with tempfile.TemporaryDirectory() as corpus_dir:
-                config_str = None
-                config_env = {"FUZZER_CONFIG": None, "FUZZER_CORES": str(num_cores)}
-                if config is not None:
-                    if isinstance(config, str) and fuzzer == "wasmfuzz":
-                        config = dict(name=config, config=config, args=f"--experiment={config}")
-                    if isinstance(config, str):
-                        config = dict(name=config, config=config)
-                    config_str = config["name"]
-                    config_env.update({f"FUZZER_{k.upper()}": v for k, v in config.items()})
-                bucket = f"{fuzzer}-{config_str}" if config_str is not None else fuzzer
-                bucket += f"-{gethostname()}"
+            with tempfile.TemporaryDirectory(prefix="wasmfuzz-eval", suffix=slug) as corpus_dir:
                 wasm_job = FuzzJob(
                     target, bucket=bucket, timeout=args.timeout,
                     corpus_dir=Path(corpus_dir), runs_dir=Path(args.runs_dir),
                     core_ids=core_ids if args.pin_cores else None
                 )
                 await wasm_job.run(fuzzer=fuzzer, env=config_env)
+                if args.keep_corpora:
+                    t_dir = Path(args.keep_corpora) / slug
+                    t_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(corpus_dir, t_dir, dirs_exist_ok=True)
         except Exception as e:
             print(f"exception in run_target for {target=} {e=}")
             raise e

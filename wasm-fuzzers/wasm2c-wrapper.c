@@ -74,11 +74,9 @@ u32 Z_envZ___main_argc_argv(struct Z_env_instance_t* _inst, u32 _a, u32 _b) { ab
 #endif
 
 #ifdef IMPORT_WASI
-/* import: 'wasi_snapshot_preview1' 'fd_close' */
+// Stubbed WASI APIs
 u32 Z_wasi_snapshot_preview1Z_fd_close(struct Z_wasi_snapshot_preview1_instance_t* _inst, u32 x2) { return 0; }
-/* import: 'wasi_snapshot_preview1' 'fd_seek' */
 u32 Z_wasi_snapshot_preview1Z_fd_seek(struct Z_wasi_snapshot_preview1_instance_t* _inst, u32 x2, u64 x3, u32 x4, u32 x5) { return 0; }
-/* import: 'wasi_snapshot_preview1' 'fd_write' */
 u32 Z_wasi_snapshot_preview1Z_fd_write(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 fd, u32 iovs_ptr, u32 iovs_len, u32 nwritten_ptr) {
   // void* mem = Z_harnessZ_memory(instance)->data;
   void* mem = Z_harnessZ_memory(&module)->data;
@@ -102,27 +100,36 @@ u32 Z_wasi_snapshot_preview1Z_environ_sizes_get(struct Z_wasi_snapshot_preview1_
   *(uint32_t*)&mem[buf2] = 0;
   return 0;
 }
-
 u32 Z_wasi_snapshot_preview1Z_fd_fdstat_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 fd, u32 buf_ptr) { return 0; }
 u32 Z_wasi_snapshot_preview1Z_clock_time_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u64 _b, u32 _c) { return 0; }
 u32 Z_wasi_snapshot_preview1Z_random_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { return 0; }
+u32 Z_wasi_snapshot_preview1Z_fd_prestat_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { return 8; /* __WASI_ERRNO_BADF */ }
 
-u32 Z_wasi_snapshot_preview1Z_fd_tell(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_fd_read(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_environ_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_fd_fdstat_set_flags(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_path_unlink_file(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_fd_filestat_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_path_open(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d, u32 _e, u64 _f, u64 _g, u32 _h, u32 _i) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_path_filestat_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d, u32 _e) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_fd_filestat_set_size(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u64 _b) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_path_remove_directory(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_fd_prestat_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_fd_prestat_dir_name(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c) { abort(); }
-u32 Z_wasi_snapshot_preview1Z_args_sizes_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
+// Trapping WASI APIs
 u32 Z_wasi_snapshot_preview1Z_args_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_args_sizes_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_environ_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_datasync(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_fdstat_set_flags(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_filestat_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_filestat_set_size(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u64 _b) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_pread(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u64 _d, u32 _e) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_prestat_dir_name(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_pwrite(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u64 _d, u32 _e) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_read(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_fd_readdir(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u64 _d, u32 _e) { abort(); };
+u32 Z_wasi_snapshot_preview1Z_fd_tell(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_path_create_directory(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_path_filestat_get(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d, u32 _e) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_path_filestat_set_times(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d, u64 _e, u64 _f, u32 _g) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_path_open(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d, u32 _e, u64 _f, u64 _g, u32 _h, u32 _i) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_path_readlink(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d, u32 _e, u32 _f) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_path_remove_directory(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_path_unlink_file(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c) { abort(); }
+u32 Z_wasi_snapshot_preview1Z_poll_oneoff(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a, u32 _b, u32 _c, u32 _d) { abort(); }
 u32 Z_wasi_snapshot_preview1Z_sched_yield(struct Z_wasi_snapshot_preview1_instance_t* instance) { abort(); }
 void Z_wasi_snapshot_preview1Z_proc_exit(struct Z_wasi_snapshot_preview1_instance_t* instance, u32 _a) { abort(); }
+
 #endif
 
 

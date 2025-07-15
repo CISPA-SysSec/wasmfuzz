@@ -4,17 +4,37 @@ from subprocess import check_output
 from pathlib import Path
 import concurrent.futures
 import os
+import argparse
+import json
 
-perf_dir = Path("/tmp/pass-stats/perf")
-corr_dir = Path("/tmp/pass-stats/corr")
+parser = argparse.ArgumentParser()
+parser.add_argument('--wasmfuzz', default="wasmfuzz")
+parser.add_argument('--perf-dir', default="/tmp/pass-stats/perf")
+parser.add_argument('--corr-dir', default="/tmp/pass-stats/corr")
+parser.add_argument('--harness-suite', default="./harness-suite/")
+parser.add_argument('--tags-json', default="./harness-suite/tags.json")
+
+args = parser.parse_args()
+
+perf_dir = Path(args.perf_dir)
+corr_dir = Path(args.corr_dir)
+corpus_dir = Path(args.harness_suite) / "corpus"
+harness_dir = Path(args.harness_suite) / "out"
 perf_dir.mkdir(parents=True, exist_ok=True)
 corr_dir.mkdir(parents=True, exist_ok=True)
 
+with open(args.tags_json) as f:
+    tags = json.load(f)
+
 if __name__ == "__main__":
     cmds = []
-    for corpus_dir in Path("harness-suite/corpus/").glob("*"):
+    for corpus_dir in corpus_dir.glob("*"):
         target = corpus_dir.parts[-1]
-        bin_path = Path("harness-suite/out/") / (target + ".wasm")
+        target_tags = tags[target + ".wasm"]
+        if "suite" not in target_tags:
+            print(f"Skipping {target}: not tagged as suite")
+            continue
+        bin_path = harness_dir / (target + ".wasm")
         if not bin_path.exists():
             print(f"Skipping {target} because {bin_path} does not exist")
             continue
@@ -25,9 +45,9 @@ if __name__ == "__main__":
         csvs.sort(key=lambda x: x.stem)
         corpus_dir = corpus_dir / csvs[-1].stem
         if not (perf_dir / f"{target}.jsonl").exists():
-            cmds.append(["wasmfuzz", "eval-pass-speed", "--jsonl-out-path", perf_dir / f"{target}.jsonl", bin_path, corpus_dir])
+            cmds.append([args.wasmfuzz, "eval-pass-speed", "--jsonl-out-path", perf_dir / f"{target}.jsonl", bin_path, corpus_dir])
         if not (corr_dir / f"{target}.jsonl").exists():
-            cmds.append(["wasmfuzz", "eval-pass-corr", "--jsonl-out-path", corr_dir / f"{target}.jsonl", bin_path, corpus_dir])
+            cmds.append([args.wasmfuzz, "eval-pass-corr", "--jsonl-out-path", corr_dir / f"{target}.jsonl", bin_path, corpus_dir])
 
 
     def run_cmd(cmd):
