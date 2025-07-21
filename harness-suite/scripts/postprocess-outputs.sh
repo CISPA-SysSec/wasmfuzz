@@ -5,8 +5,8 @@ if [ "$BUILD_TYPE" = "x86_64-libfuzzer" ]; then
 fi
 
 if [ "$(ls -A '/out/')" ]; then
-    file-rename 's/_fuzzer//' /out/*.wasm
-    file-rename 's/-fuzzer//' /out/*.wasm
+    file-rename 's/_fuzzer//' /out/*
+    file-rename 's/-fuzzer//' /out/*
 fi
 
 for module in /out/*.wasm;

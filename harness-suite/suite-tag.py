@@ -276,6 +276,10 @@ tag_manually("image_script_webp.wasm", "8371fae97239be01131bc47ebd79896d0a65537a
 # allocation limit of 512 MB reached with 257 byte input
 tag_manually("image_script_hdr.wasm", "8371fae97239be01131bc47ebd79896d0a65537a", Tag.CRASHING, Tag.SUITE_BUGBENCH)
 tag_manually("image_script_tga.wasm", "8371fae97239be01131bc47ebd79896d0a65537a", Tag.CRASHING, Tag.SUITE_BUGBENCH)
+# thread '<unnamed>' panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/png-0.17.16/src/decoder/transform/palette.rs:74:61:
+# range end index 3 out of range for slice of length 1
+tag_manually("image_script_png.wasm", "8371fae97239be01131bc47ebd79896d0a65537a", Tag.CRASHING)
+tag_manually("image_script_guess.wasm", "8371fae97239be01131bc47ebd79896d0a65537a", Tag.CRASHING)
 
 # Note: wasmfuzz doesn't find after 48+ CPU hours
 #       aflpp finds this reliably

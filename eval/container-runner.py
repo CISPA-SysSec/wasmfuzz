@@ -279,7 +279,7 @@ class FuzzJob:
         if args.native_cov: # TRACK LIBFUZZER COV
             native_bin = self.target_wasm.with_suffix(".exe")
             if not native_bin.exists():
-                print(f"[-] missing native_bin for {self.target_wasm.stem}")
+                print(f"[-] missing native_bin for {self.target_wasm.stem}: {native_bin}")
                 return
             out_path = self.runs_dir / f"{self.job_id}-libfuzzer.jsonl"
             task = LibfuzzerMonitor(native_bin, self.bucket, target_name=self.target_wasm.name, interval_secs=interval_secs)

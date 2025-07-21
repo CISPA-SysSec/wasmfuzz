@@ -1,5 +1,5 @@
 FROM wasm-fuzzers-w2c2-base
-RUN apt-get install -y clang
+RUN apt-get update && apt-get install -y clang
 COPY libfuzzer-w2c2.sh /usr/bin/libfuzzer-w2c2.sh
 RUN chmod +x /usr/bin/libfuzzer-w2c2.sh
 ENTRYPOINT [ "libfuzzer-w2c2.sh" ]
