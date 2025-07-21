@@ -10,7 +10,7 @@ proj_path = Path(sys.argv[1])
 build_type = sys.argv[2] if len(sys.argv) > 2 else "wasi-lime1"
 build_flags = os.environ.get("BUILD_FLAGS", "foo;bar")
 name = proj_path.stem
-tag = f"wasmfuzz-builder-{name}"
+tag = f"wasmfuzz-bld-{name}-{build_type}"
 cid = f"{tag}-extract"
 
 PODMAN = os.environ.get("PODMAN", "podman" if shutil.which("podman") else "docker")

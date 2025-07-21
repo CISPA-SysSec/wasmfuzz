@@ -409,8 +409,8 @@ async def main():
                 continue
 
             tags = all_tags[target.stem]
-            # if we specify tags: make sure our target contains one of them
-            if args.tag and not any(t in tags for t in args.tag):
+            # if we specify tags: make sure our target contains all of them
+            if args.tag and not all(t in tags for t in args.tag):
                 continue
 
             # if we specify tags to skip
