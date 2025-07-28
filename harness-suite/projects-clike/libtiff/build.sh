@@ -2,7 +2,9 @@
 set -e +x
 source set-buildflags.sh
 
-# NOTE: our wasi-sdk installation includes zlib
+cd "$PROJECT/zlib"
+./configure $CONFIGUREFLAGS
+make -j7 install prefix=/wasi-sdk/share/wasi-sysroot/ libdir=/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/
 
 cd "$PROJECT/repo/jbigkit"
 make lib CC="$CC" CFLAGS="$CFLAGS" -j

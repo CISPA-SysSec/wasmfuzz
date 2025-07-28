@@ -41,11 +41,11 @@ class Tag(Enum):
 
     # Note: These are tagged manually
     FUZZBENCH = "fuzzbench"
-    REQUIRES_SJLJ = "requires-sjlj"
     BUGGY_HARNESS_UPSTREAM = "buggy-harness-upstream"
     WASM_SPECIFIC_CRASH = "wasm-specific-crash"
     BUGGY_PORT = "buggy-port"
     BUGGY_PROJECT = "buggy-project"
+    SKIP = "skip"
 
 
 tags = defaultdict(set)
@@ -352,11 +352,18 @@ tag_manually("jsoncpp.wasm", "ca98c98457b1163cca1f7d8db62827c115fec6d1", Tag.CRA
 PROJS = {"libpng", "freetype2", "jsoncpp"}
 for harness in harnesses:
     if any(harness.startswith(proj) for proj in PROJS):
-        tags[harness].add(Tag.REQUIRES_SJLJ)
+        # The other WebAssembly fuzzers in our evaluation can't handle our
+        # setjmp/longjmp harnesses since they are not snapshot-based and exiting
+        # fuzz test cases would leak memory or corrupt state.
+        tags[harness].add(Tag.SKIP)
 
 for harness in harnesses:
     if harness.startswith("fuzzer-challenges"):
         tags[harness].add(Tag.CRASHING)
+
+# This is the only harness with `LLVMFuzzerCustomMutator`. Our fuzzers don't
+# support custom mutators currently.
+tag_manually("x509-parser-x509_with_mutator.wasm", "a92bbab5cdc630f7d2c0410736bee55f0e3710e8", Tag.SKIP)
 
 tag_from_corpus()
 
@@ -378,10 +385,8 @@ for harness in harnesses:
     # These harnesses aren't useful for evaluation since there doesn't seem to
     # be enough different code-paths to explore.
     if Tag.SHALLOW in t: continue
-    # The other WebAssembly fuzzers in our evaluation can't handle our
-    # SetJump/LongJump harnesses since they are not snapshot-based and exiting
-    # fuzz test cases would leak memory or corrupt state.
-    if Tag.REQUIRES_SJLJ in t: continue
+    # Skip explicitly ignored targets that shouldn't end up in the harness suite.
+    if Tag.SKIP in t: continue
 
     if Tag.CRASHING in t:
         t.add(Tag.SUITE_BUGBENCH)

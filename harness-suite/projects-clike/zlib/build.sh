@@ -9,12 +9,8 @@ export SRC="$PROJECT/repo"
 ##################################################################
 
 
-./configure \
-	--enable-shared=no \
-	--with-wasi-sdk="$WASI_SDK_PREFIX" \
-	$CONFIGUREFLAGS
-
-make -j"$(nproc)"
+./configure $CONFIGUREFLAGS
+make -j7
 
 $CC $CFLAGS -I. ../zlib_uncompress_fuzzer.c \
     -o /out/zlib-uncompress.wasm \

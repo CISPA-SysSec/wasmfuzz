@@ -20,7 +20,7 @@ args = parser.parse_args()
 BUILD_TYPE = os.environ.get("BUILD_TYPE", "wasi-lime1")
 assert BUILD_TYPE in ["wasi-lime1", "wasi-mvp", "x86_64-libfuzzer"]
 BUILD_FLAGS = os.environ.get("BUILD_FLAGS", "").split(";")
-RUSTUP_TOOLCHAIN = "nightly-2025-05-13"
+RUSTUP_TOOLCHAIN = "nightly-2025-07-26"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
 os.environ["RUSTUP_TOOLCHAIN"] = RUSTUP_TOOLCHAIN
@@ -104,18 +104,18 @@ def patch_cargo_toml(path):
 def build_folder(folder, verb="build"):
     env = os.environ.copy()
     env["RUSTFLAGS"] = "--cfg=fuzzing"
-    # https://github.com/rust-lang/rust/pull/126985
-    env["RUSTFLAGS"] += " -Zembed-source=yes -Zdwarf-version=5 -g"
-
     if BUILD_TYPE == "x86_64-libfuzzer":
         # https://github.com/rust-fuzz/cargo-fuzz/blob/65e3279c9602375037cb3aaabd3209c5b746375c/src/project.rs#L175-L191
-        env["RUSTFLAGS"] = " -Cpasses=sancov-module" \
-                           " -Cllvm-args=-sanitizer-coverage-level=4" \
-                           " -Cllvm-args=-sanitizer-coverage-inline-8bit-counters" \
-                           " -Cllvm-args=-sanitizer-coverage-pc-table" \
-                           " -Cllvm-args=-sanitizer-coverage-trace-compares" \
-                           " -Cllvm-args=-sanitizer-coverage-stack-depth"
+        env["RUSTFLAGS"] += " -Cpasses=sancov-module" \
+                            " -Cllvm-args=-sanitizer-coverage-level=4" \
+                            " -Cllvm-args=-sanitizer-coverage-inline-8bit-counters" \
+                            " -Cllvm-args=-sanitizer-coverage-pc-table" \
+                            " -Cllvm-args=-sanitizer-coverage-trace-compares" \
+                            " -Cllvm-args=-sanitizer-coverage-stack-depth"
     else:
+        # https://github.com/rust-lang/rust/pull/126985
+        env["RUSTFLAGS"] += " -Zembed-source=yes -Zdwarf-version=5 -g"
+
         if "CFLAGS" not in env:
             env["CFLAGS"] = f"--sysroot {WASI_SYSROOT}"
         env["PKG_CONFIG_SYSROOT_DIR"] = WASI_SYSROOT

@@ -3,7 +3,6 @@ set -e +x
 source set-buildflags.sh
 
 cd "$PROJECT/repo"
-
 make clean
 make
 mkdir -p ./out/

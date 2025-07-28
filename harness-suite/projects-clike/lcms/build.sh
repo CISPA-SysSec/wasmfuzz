@@ -6,9 +6,9 @@ cd "$PROJECT/repo"
 
 cp "$PROJECT"/oss-fuzz/projects/lcms/*.c .
 
-# build libpng
+# build lcms
 autoreconf -f -i
-./configure --enable-shared=no --host=wasm32-wasi
+./configure --without-threads --enable-shared=no $CONFIGUREFLAGS
 make all
 
 # build your fuzzer(s)

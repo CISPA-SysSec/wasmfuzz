@@ -4,8 +4,7 @@ export WASI_SDK_PREFIX=/wasi-sdk/
 
 case $BUILD_TYPE in
     wasi-lime1)
-        TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi -mcpu=generic"
-	# TODO: switch to lime1 when wasi-sdk releases with LLVM 20
+        TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi -mcpu=lime1"
         ;;
     wasi-mvp)
         TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi -mcpu=mvp"
@@ -53,4 +52,3 @@ export FUZZ_LDFLAGS="-Wl,--export=malloc,--export=LLVMFuzzerTestOneInput,\
 export LIB_FUZZING_ENGINE="$FUZZ_LDFLAGS"
 
 . "$HOME/.cargo/env"
-

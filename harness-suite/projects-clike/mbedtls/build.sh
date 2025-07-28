@@ -3,7 +3,6 @@ set -e +x
 source set-buildflags.sh
 
 cd "$PROJECT/repo"
-
 python3 scripts/config.py baremetal
 python3 scripts/config.py set MBEDTLS_SSL_PROTO_DTLS
 python3 scripts/config.py set MBEDTLS_SSL_CLI_C
