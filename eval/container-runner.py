@@ -133,6 +133,9 @@ class LibfuzzerMonitor:
             "-runs=0",
             "/corpus"
         ]
+        if PODMAN == "docker":
+            # HACK: if we're using docker as a backend: don't add relable=shared to mount arguments
+            fuzzer_cmd = [x.replace(",relabel=shared", "").replace(",rw=true", "") for x in fuzzer_cmd]
         p = await asyncio.create_subprocess_exec(
             *fuzzer_cmd,
             stdout=asyncio.subprocess.PIPE,
