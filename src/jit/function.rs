@@ -72,7 +72,6 @@ pub(crate) struct FuncTranslator<'a, 's> {
     pub sigrefs: HashMap<Signature, ir::SigRef>,
     pub builtin_level: u32,
     pub(crate) pass_meta: &'a mut HashMap<u64, Box<dyn Any>>,
-    variable_counter: u32,
     ptr_ty: Type,
     pub module: &'a mut JITModule,
 }
@@ -111,7 +110,6 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             caller: None,
             slot: HashMap::default(),
             sigrefs: HashMap::default(),
-            variable_counter: 0,
             builtin_level: 0,
             pass_meta,
             ptr_ty,
@@ -790,24 +788,23 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         self.get_trap_code(TrapKind::Abort(abort))
     }
 
-    pub(crate) fn alloc_slot(&mut self) -> Variable {
-        let idx = self.variable_counter;
-        self.variable_counter += 1;
-        Variable::from_u32(idx)
-    }
-
-    pub(crate) fn get_slot(&mut self, idx: u32) -> Variable {
+    pub(crate) fn get_slot(
+        &mut self,
+        idx: u32,
+        bcx: &mut FunctionBuilder,
+        ty: ir::Type,
+    ) -> Variable {
         if let Some(x) = self.slot.get(&idx) {
             *x
         } else {
-            let res = self.alloc_slot();
-            self.slot.insert(idx, res);
-            res
+            let var = bcx.declare_var(ty);
+            self.slot.insert(idx, var);
+            var
         }
     }
 
-    pub(crate) fn get_slot_concolic(&mut self, idx: u32) -> Variable {
-        self.get_slot(u32::MAX - idx)
+    pub(crate) fn get_slot_concolic(&mut self, idx: u32, bcx: &mut FunctionBuilder) -> Variable {
+        self.get_slot(u32::MAX - idx, bcx, ir::types::I32)
     }
 
     // #[deprecated]

@@ -53,8 +53,7 @@ impl KVInstrumentationPass for EdgeHitsInAFunctionPass {
         for edge in self.coverage.keys.iter() {
             if edge.function == ctx.state.fidx {
                 // ctr += 1;
-                let var = ctx.state.alloc_slot();
-                ctx.bcx.declare_var(var, ir::types::I32);
+                let var = ctx.bcx.declare_var(ir::types::I32);
                 ctx.bcx.def_var(var, val);
                 *ctx.instance_meta((self.shortcode(), edge)) = Some(var);
             }

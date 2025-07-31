@@ -364,13 +364,11 @@ impl<'s> ModuleTranslator<'s> {
         // populate parameters as locals
         for (i, ty) in func.ty.params().iter().enumerate() {
             let param = params[i];
-            let var = functrans.get_slot(i as u32);
-            bcx.declare_var(var, super::wasm2ty(ty));
+            let var = functrans.get_slot(i as u32, &mut bcx, super::wasm2ty(ty));
             bcx.def_var(var, param);
 
             if functrans.options.is_concolic() {
-                let var_sym = functrans.get_slot_concolic(i as u32);
-                bcx.declare_var(var_sym, types::I32);
+                let var_sym = functrans.get_slot_concolic(i as u32, &mut bcx);
                 bcx.def_var(var_sym, params[func.ty.params().len() + i]);
             }
         }
@@ -379,13 +377,11 @@ impl<'s> ModuleTranslator<'s> {
             let i = func.ty.params().len() + ii;
             let val = crate::ir::Value::default_for_ty(ty);
             let (_, val) = super::numeric::translate_const(&val, &mut bcx);
-            let var = functrans.get_slot(i as u32);
-            bcx.declare_var(var, super::wasm2ty(ty));
+            let var = functrans.get_slot(i as u32, &mut bcx, super::wasm2ty(ty));
             bcx.def_var(var, val);
 
             if functrans.options.is_concolic() {
-                let var_sym = functrans.get_slot_concolic(i as u32);
-                bcx.declare_var(var_sym, types::I32);
+                let var_sym = functrans.get_slot_concolic(i as u32, &mut bcx);
                 let concrete = bcx.ins().iconst(types::I32, 0);
                 bcx.def_var(var_sym, concrete);
             }

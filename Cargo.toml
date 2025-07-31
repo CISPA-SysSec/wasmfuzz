@@ -4,14 +4,14 @@ version = "0.1.0"
 authors = []
 license = "Apache-2.0 OR MIT"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.235"
+wasmparser = "0.236"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive", "env"] }
-md5 = "0.7"
+md5 = "0.8"
 rand = "0.9"
 bitvec = "1.0.1"
 roaring = "0.11"
@@ -46,7 +46,7 @@ libafl = { version = "=0.15.3", default-features = false, features = [
     "rand_trait",
 ] }
 libafl_bolts = { version = "0.15", default-features = false, features = ["std", "derive", "serdeany_autoreg"] }
-cranelift = { version = "0.121", features = [
+cranelift = { version = "0.122", features = [
     # cranelift = { path = "../wasmtime/cranelift/umbrella", package = "cranelift", features = [
     "jit",
     "module",
@@ -58,7 +58,7 @@ libc = "0.2.158"
 # feat:concolic
 # Note: waiting for 0.3.1 upstream
 smtlib = { git = "https://github.com/oeb25/smtlib-rs.git", rev = "72bd4038bc4f60b67808251bf3a4fd5aa212466f", optional = true}
-z3 = { version = "0.12.1", optional = true }
+z3 = { version = "0.13", optional = true }
 bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = true }
 
 # feat:with_mimalloc

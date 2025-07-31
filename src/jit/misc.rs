@@ -56,10 +56,10 @@ pub(crate) fn translate_variable(
             if state.dead(bcx) {
                 return state.adjust_pop_push(&[], &[ty]);
             }
-            let var = state.get_slot(index);
+            let var = state.get_slot(index, bcx, ty);
             let val = bcx.use_var(var);
             if state.options.is_concolic() {
-                let var_sym = state.get_slot_concolic(index);
+                let var_sym = state.get_slot_concolic(index, bcx);
                 let val_sym = bcx.use_var(var_sym);
                 state.set_concolic(ty, val, val_sym, bcx);
             }
@@ -71,11 +71,11 @@ pub(crate) fn translate_variable(
                 return state.adjust_pop_push(&[ty], &[]);
             }
             let val = state.pop1(ty, bcx);
-            let var = state.get_slot(index);
+            let var = state.get_slot(index, bcx, ty);
             bcx.def_var(var, val);
 
             if state.options.is_concolic() {
-                let var_sym = state.get_slot_concolic(index);
+                let var_sym = state.get_slot_concolic(index, bcx);
                 let val_sym = state.get_concolic(&val);
                 bcx.def_var(var_sym, val_sym);
             }
@@ -86,11 +86,11 @@ pub(crate) fn translate_variable(
                 return state.adjust_pop_push(&[ty], &[ty]);
             }
             let val = state.peek1(ty, bcx);
-            let var = state.get_slot(index);
+            let var = state.get_slot(index, bcx, ty);
             bcx.def_var(var, val);
 
             if state.options.is_concolic() {
-                let var_sym = state.get_slot_concolic(index);
+                let var_sym = state.get_slot_concolic(index, bcx);
                 let val_sym = state.get_concolic(&val);
                 bcx.def_var(var_sym, val_sym);
             }

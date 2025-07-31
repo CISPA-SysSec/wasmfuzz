@@ -1,3 +1,4 @@
+use cranelift::codegen::ir;
 use cranelift::frontend::FunctionBuilder;
 use cranelift::prelude::{InstBuilder, IntCC, MemFlags, Type, Value, types::I64};
 
@@ -36,17 +37,22 @@ pub(crate) fn instrument_func(
             state.fspec().known_libfunc,
             Some(Libfunc::Memcmp | Libfunc::Strncmp | Libfunc::Strncasecmp)
         ) {
-            let a = bcx.use_var(state.get_slot(0));
-            let b = bcx.use_var(state.get_slot(1));
-            let n = bcx.use_var(state.get_slot(2));
+            let a = state.get_slot(0, bcx, ir::types::I32);
+            let b = state.get_slot(1, bcx, ir::types::I32);
+            let n = state.get_slot(2, bcx, ir::types::I32);
+            let a = bcx.use_var(a);
+            let b = bcx.use_var(b);
+            let n = bcx.use_var(n);
             trace_memcmp(state, bcx, location, a, b, n)
         }
         if matches!(
             state.fspec().known_libfunc,
             Some(Libfunc::Strcmp | Libfunc::Strcasecmp)
         ) {
-            let a = bcx.use_var(state.get_slot(0));
-            let b = bcx.use_var(state.get_slot(1));
+            let a = state.get_slot(0, bcx, ir::types::I32);
+            let b = state.get_slot(1, bcx, ir::types::I32);
+            let a = bcx.use_var(a);
+            let b = bcx.use_var(b);
             trace_strcmp(state, bcx, location, a, b)
         }
         if let Some(libfunc) = state.fspec().known_libfunc {

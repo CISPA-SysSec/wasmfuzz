@@ -606,11 +606,13 @@ pub(crate) fn translate_concolic_trace_libcall(
     param_tys.push(types::I64); // location
     param_tys.push(types::I32); // module_byte_location
     let mut params = Vec::new();
-    for (idx, _) in fty_params.iter().enumerate() {
-        params.push(bcx.use_var(state.get_slot(idx as u32)));
+    for (idx, ty) in fty_params.iter().enumerate() {
+        let var = state.get_slot(idx as u32, bcx, *ty);
+        params.push(bcx.use_var(var));
     }
     for (idx, _) in fty_params.iter().enumerate() {
-        params.push(bcx.use_var(state.get_slot_concolic(idx as u32)));
+        let var = state.get_slot_concolic(idx as u32, bcx);
+        params.push(bcx.use_var(var));
     }
     let loc = state.caller.unwrap_or_else(|| state.loc());
     params.push(bcx.ins().iconst(types::I64, loc.as_u64() as i64));
@@ -656,7 +658,7 @@ unsafe extern "C" fn builtin_concolic_debug_verify(
     if value_sym.is_concrete() {
         return;
     }
-    let vmctx = &mut *vmctx;
+    let vmctx = unsafe { &mut *vmctx };
     let location = Location::from_u64(location);
 
     if let Some(res) = vmctx
