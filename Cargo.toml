@@ -55,6 +55,8 @@ cranelift = { version = "0.122", features = [
 ] }
 libc = "0.2.158"
 
+patlang = { path = "/code/patlang-rs" }
+
 # feat:concolic
 # Note: waiting for 0.3.1 upstream
 smtlib = { git = "https://github.com/oeb25/smtlib-rs.git", rev = "72bd4038bc4f60b67808251bf3a4fd5aa212466f", optional = true}
