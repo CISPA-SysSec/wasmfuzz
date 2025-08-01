@@ -508,6 +508,7 @@ impl Orchestrator {
             Some(fuel_limit.unwrap_or(self.codecov_sess.swarm.instruction_limit.unwrap()));
         swarm.memory_limit_pages = self.rng.random_ratio(9, 10).then_some(memory_limit_pages);
         swarm.input_size_limit = Some(input_size_limit);
+        swarm.only_grammar_inputs = self.rng.random_ratio(1, 2);
 
         let extra_musts_and_avoids = self.rng.random_ratio(5, 10);
         if extra_musts_and_avoids {
@@ -584,6 +585,7 @@ impl Orchestrator {
                 **opt = true;
             }
         } else {
+            // TODO: update this with perf, noisyness data from evaluation
             let mut all_knobs = [
                 &mut *call_value_profile,
                 &mut *cmpcov_absdist,
@@ -628,6 +630,7 @@ impl Orchestrator {
                 instr_only_funcs: self.coverage_is_saturated().then(|| {
                     let pass = self.codecov_sess.get_pass::<FunctionCoveragePass>();
                     pass.coverage.iter_covered_keys().collect()
+                    // TODO: possibly only instrument functions/edges in the frontier?
                 }),
             },
             swarm,

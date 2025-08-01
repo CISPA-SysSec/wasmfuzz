@@ -27,6 +27,9 @@ pub(crate) struct GeneralOpts {
     // Note: libfuzzer defaults to 4k
     #[clap(long, default_value = "65535")]
     pub input_size_limit: usize,
+
+    #[clap(long)]
+    pub patlang: Option<PathBuf>,
 }
 
 impl GeneralOpts {
@@ -207,7 +210,6 @@ pub(crate) struct StrategyOpts {
     pub run_from_snapshot: FlagBool,
     #[clap(long, default_value = "false")]
     pub fuzz_through_crashes: FlagBool,
-
     #[clap(long, default_value = "false")]
     pub ignore_bus_inputs: FlagBool,
 }

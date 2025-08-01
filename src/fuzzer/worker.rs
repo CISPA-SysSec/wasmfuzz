@@ -7,7 +7,10 @@ use std::{sync::Arc, time::Instant};
 use crate::simple_bus::MessageBus;
 use libafl::corpus::CorpusId;
 use libafl::inputs::ResizableMutator;
-use libafl::mutators::{HavocScheduledMutator, StdMOptMutator, havoc_mutations};
+use libafl::mutators::{
+    HavocScheduledMutator, StdMOptMutator, havoc_mutations, havoc_mutations_no_crossover,
+};
+use libafl::observers::CmplogBytes;
 use libafl::stages::StageId;
 use libafl::state::HasCurrentStageId;
 use libafl::state::{HasSolutions, Stoppable};
@@ -24,6 +27,7 @@ use libafl_bolts::{
     serdeany::SerdeAnyMap,
 };
 
+use rand::Rng;
 use rand::prelude::SliceRandom;
 
 use crate::jit::{JitFuzzingSession, SwarmConfig, TracingOptions};
@@ -57,6 +61,8 @@ pub(crate) struct Worker {
     stage_id_stack: Vec<StageId>,
     stage_depth: usize,
     stop_requested: bool,
+    grammar_mutator: Option<patlang::engine::Mutator<'static>>,
+    only_grammar_inputs: bool,
 }
 
 impl Worker {
@@ -73,11 +79,14 @@ impl Worker {
 
         let mut schedule = WorkerSchedule::new(&opts);
 
+        let mut only_grammar_inputs = false;
+
         let sess = match orc {
             Some(ref handle) => {
                 let config = handle.suggest();
                 eprintln!("got config: {config:#?}");
                 schedule.timeout = Some(config.timeout);
+                only_grammar_inputs = config.swarm.only_grammar_inputs;
                 JitFuzzingSession::builder(mod_spec.clone())
                     .passes_generator(Arc::new(config.passes))
                     .tracing(TracingOptions {
@@ -104,6 +113,14 @@ impl Worker {
                 .build(),
         };
 
+        let grammar = opts.g.patlang.as_ref().map(|path| {
+            let testir = patlang::ir::load_ir(path).unwrap();
+            patlang::engine::Grammar::lower(&testir)
+        });
+        let grammar_mutator =
+            grammar.map(|x| patlang::engine::Mutator::new(Box::leak(Box::new(x))));
+        only_grammar_inputs &= grammar_mutator.is_some();
+
         let mut worker = Self {
             schedule,
             idx,
@@ -122,6 +139,8 @@ impl Worker {
             stage_id_stack: Vec::new(),
             opts,
             stop_requested: false,
+            grammar_mutator,
+            only_grammar_inputs,
         };
         // TODO: move this somewhere else?
         if let Some(ref orc) = orc {
@@ -137,6 +156,15 @@ impl Worker {
                     if input.len() > worker.sess.swarm.input_alloc_size() {
                         discarded_input_size += 1;
                         continue;
+                    }
+
+                    // if only_grammar_inputs: start with valid-ish inputs
+                    // TODO: possibly roundtrip in different ways? use coverage feedback to determine this?
+                    let mut input = input.as_ref().to_vec();
+                    if let Some(grammar) = &mut worker.grammar_mutator
+                        && only_grammar_inputs
+                    {
+                        input = grammar.roundtrip(&input);
                     }
                     // NOTE: we don't need to trace here if we're going to throw them away anyways!
                     let res = worker.on_corpus(&input, true);
@@ -242,10 +270,13 @@ impl Worker {
         if self.opts.verbose_corpus {
             crate::util::print_input_hexdump(input);
         }
+        if let Some(grammar) = &mut self.grammar_mutator {
+            grammar.feed(input, true);
+        }
 
         self.save_input(input);
 
-        if *self.opts.x.exhaustive_stage && !is_seed {
+        if *self.opts.x.exhaustive_stage && !is_seed && !self.only_grammar_inputs {
             if input.len() <= 1024 {
                 self.exhaustive_queue.push_back(Box::new(
                     super::exhaustive::ReplaceEveryInputByte::new(input, &mut self.rand),
@@ -396,6 +427,30 @@ impl Worker {
             Box::new(HavocScheduledMutator::with_max_stack_pow(mutations, 1)) // default is six max_iterations
         };
 
+        let mut grammar_bytes_mutator =
+            HavocScheduledMutator::with_max_stack_pow(havoc_mutations_no_crossover(), 1);
+        struct StateStub {
+            max_size: usize,
+            rng: StdRand,
+        }
+        impl HasMaxSize for StateStub {
+            fn max_size(&self) -> usize {
+                self.max_size
+            }
+            fn set_max_size(&mut self, max_size: usize) {
+                self.max_size = max_size;
+            }
+        }
+        impl HasRand for StateStub {
+            type Rand = StdRand;
+            fn rand(&self) -> &Self::Rand {
+                &self.rng
+            }
+            fn rand_mut(&mut self) -> &mut Self::Rand {
+                &mut self.rng
+            }
+        }
+
         let mut input = BytesInput::new(
             self.corpus
                 .get(self.corpus.first().unwrap())?
@@ -411,6 +466,94 @@ impl Worker {
         const A_FEW_EXECS: u32 = 4096; // We want these to complete in < ~1ms
         loop {
             tracy_full::zone!("Worker loop");
+
+            if let Some(mut mutator) = self.grammar_mutator.take() {
+                let mut new = false;
+                for _ in 0..64 {
+                    let corp_count = self.corpus.count();
+                    if corp_count > 0 {
+                        let corpus_idx = self.rand.below(corp_count.try_into().unwrap());
+                        let corpus_idx = self.corpus.nth(corpus_idx);
+                        mutator.feed(
+                            self.corpus
+                                .get(corpus_idx)?
+                                .borrow_mut()
+                                .load_input(&self.corpus)?
+                                .as_ref(),
+                            false,
+                        )
+                    }
+
+                    for _ in 0..8 {
+                        let start = Instant::now();
+                        {
+                            tracy_full::zone!("Mutator::mutate");
+                            mutator.mutate_with_byte_mutator(|req| {
+                                assert_eq!(req.min_size, 0);
+                                grammar_bytes_mutator
+                                    .mutate(
+                                        &mut StateStub {
+                                            max_size: req.max_size,
+                                            rng: StdRand::with_seed(req.rng.random()),
+                                        },
+                                        req.target,
+                                    )
+                                    .unwrap();
+                            });
+                        }
+                        {
+                            tracy_full::zone!("Mutator::serialize");
+                            input.drain(..);
+                            mutator.ctx.serialize(input.as_mut());
+                        }
+                        let oversized = input.as_ref().len() >= self.sess.swarm.input_alloc_size();
+                        if input.as_ref().len() >= self.sess.swarm.input_alloc_size() {
+                            dbg!(input.as_ref().len(), self.sess.swarm.input_alloc_size());
+                            input.as_mut().resize(self.sess.swarm.input_alloc_size(), 0);
+                        }
+                        assert!(input.as_ref().len() <= self.sess.swarm.input_alloc_size());
+                        self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
+
+                        let res = self.run_input(input.as_ref())?;
+                        match res {
+                            InputVerdict::Interesting => {
+                                if oversized {
+                                    // Re-parse oversized inputs to make sure we don't have unreasonably-sized corpus entries
+                                    mutator.feed(input.as_ref(), true);
+                                } else {
+                                    mutator.corpus.feed(&mutator.ctx);
+                                }
+                                eprintln!("[PATLANG] found coverage");
+                                new = true;
+                            }
+                            InputVerdict::NotInteresting => {}
+                            InputVerdict::Crashed => eprintln!("[PATLANG] found crash!"),
+                        }
+
+                        self.schedule.step();
+                        let _interesting = match res {
+                            InputVerdict::Interesting => true,
+                            InputVerdict::NotInteresting => false,
+                            InputVerdict::Crashed if ignore_crashes => unreachable!(),
+                            InputVerdict::Crashed => return Ok(WorkerExit::CrashFound),
+                        };
+                        if _interesting {
+                            self.schedule.notify_activity();
+                            corpus_additions_since_cmin += 1;
+                            // TODO: move this to a proper power schedule / favoured inputs?
+                            sticky_input = Some(self.corpus.count() - 1);
+                            sticky_cooldown = A_FEW_EXECS;
+                        }
+                    }
+                }
+                if new {
+                    mutator.corpus.print_stats(&mut std::io::stdout());
+                    let mut f = std::fs::File::create("/tmp/corpus-stats.txt").unwrap();
+                    mutator.corpus.print_stats_verbose(&mut f);
+                }
+                self.grammar_mutator = Some(mutator);
+            }
+
             let mut interesting = false;
 
             let mut exhaustive_queue = std::mem::take(&mut self.exhaustive_queue);
@@ -440,6 +583,9 @@ impl Worker {
                     }
                     self.stats.exhaustive_execs += 1;
                     det.next(input.as_mut());
+                    if true {
+                        continue;
+                    }
                     self.schedule.step();
                     let _interesting = match self.run_input(input.as_ref())? {
                         InputVerdict::Interesting => true,
@@ -474,10 +620,14 @@ impl Worker {
                 }
                 exhaustive_queue.push_back(det);
             }
-            let new_entries = std::mem::replace(&mut self.exhaustive_queue, exhaustive_queue);
+            let new_entries: VecDeque<Box<dyn QueuedInputMutation>> =
+                std::mem::replace(&mut self.exhaustive_queue, exhaustive_queue);
             self.exhaustive_queue.extend(new_entries);
 
             'fast: for _ in 0..A_FEW_EXECS {
+                if self.only_grammar_inputs {
+                    continue;
+                }
                 if interesting && self.exhaustive_queue.len() <= 1 {
                     break;
                 }
@@ -741,6 +891,17 @@ impl Worker {
             self.sess.reset_pass_coverage();
             println!("[warn] adding dummy input to corpus...");
             let _ = CrashOrLibAFLError::convert(self.on_corpus(b"YELLOW SUBMARINE", false));
+        }
+
+        if let Some(mutator) = &mut self.grammar_mutator {
+            if mutator.corpus.count() > self.corpus.count() * 2 {
+                mutator.corpus.reset();
+                for idx in self.corpus.ids() {
+                    let testcase = self.corpus.get(idx).unwrap().borrow();
+                    let input = testcase.input().as_ref().unwrap().as_ref();
+                    mutator.feed(input, true);
+                }
+            }
         }
 
         !to_remove.is_empty()
