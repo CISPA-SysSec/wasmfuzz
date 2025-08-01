@@ -66,6 +66,7 @@ struct IndexFile {
     html_filename: String,
     coverage: FileLineCoverage,
     is_stdlib: bool,
+    source: Option<String>,
 }
 
 struct FileLine<'a> {
@@ -138,6 +139,7 @@ fn run_inputs(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf]) -> JitFuzzingS
 #[derive(Debug, Copy, Clone)]
 struct FileId(u32);
 
+#[derive(Clone)]
 struct FileInfo {
     path: String,
     source: Option<String>,
@@ -271,6 +273,7 @@ impl ReportInfo {
                 is_stdlib: file_info.path.contains("wasisdk://")
                     || file_info.path.contains("/wasi-sysroot/")
                     || file_info.path.contains("/rustlib/"),
+                source: file_info.source.clone(),
             });
         }
 
@@ -298,7 +301,7 @@ impl ReportInfo {
         std::fs::write(output_path.join("index.html"), index.render().unwrap()).unwrap();
 
         let ss = SyntaxSet::load_defaults_newlines();
-        for (file, _file) in files.iter().zip(self.files.iter()) {
+        for file in &files {
             tracy_full::zone!("ReportInfo render file cov report");
             print!(
                 "emitting html cov for: {}{}\r",
@@ -306,7 +309,7 @@ impl ReportInfo {
                 " ".repeat(5)
             );
             let path = PathBuf::from(&file.relative_filename);
-            let Some(source) = &_file.source else {
+            let Some(source) = &file.source else {
                 let t = FileTemplate {
                     nums: file.nums.clone(),
                     relative_filename: &file.relative_filename,
