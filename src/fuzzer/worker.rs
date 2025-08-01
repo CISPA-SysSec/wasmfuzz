@@ -59,6 +59,7 @@ pub(crate) struct Worker {
     stage_id_stack: Vec<StageId>,
     stage_depth: usize,
     stop_requested: bool,
+    grammar_mutator: Option<patlang::engine::Mutator<'static>>,
 }
 
 impl Worker {
@@ -106,6 +107,14 @@ impl Worker {
                 .build(),
         };
 
+        let grammar = opts
+            .g
+            .patlang
+            .as_ref()
+            .map(|path| patlang::ir::hexpat_to_testir(&std::fs::read_to_string(path).unwrap()));
+        let grammar_mutator =
+            grammar.map(|x| patlang::engine::Mutator::new(Box::leak(Box::new(x))));
+
         let mut worker = Self {
             schedule,
             idx,
@@ -124,6 +133,7 @@ impl Worker {
             stage_id_stack: Vec::new(),
             opts,
             stop_requested: false,
+            grammar_mutator,
         };
         // TODO: move this somewhere else?
         if let Some(ref orc) = orc {
@@ -243,6 +253,9 @@ impl Worker {
         self.corpus.add(testcase)?;
         if self.opts.verbose_corpus {
             crate::util::print_input_hexdump(input);
+        }
+        if let Some(grammar) = &mut self.grammar_mutator {
+            grammar.feed(input, true);
         }
 
         self.save_input(input);
@@ -478,6 +491,45 @@ impl Worker {
             }
             let new_entries = std::mem::replace(&mut self.exhaustive_queue, exhaustive_queue);
             self.exhaustive_queue.extend(new_entries);
+
+            if let Some(mut mutator) = self.grammar_mutator.take() {
+                let corp_count = self.corpus.count();
+                if corp_count > 0 {
+                    let corpus_idx = self.rand.below(corp_count.try_into().unwrap());
+                    let corpus_idx = self.corpus.nth(corpus_idx);
+                    mutator.feed(
+                        self.corpus
+                            .get(corpus_idx)?
+                            .borrow_mut()
+                            .load_input(&self.corpus)?
+                            .as_ref(),
+                        false,
+                    )
+                }
+
+                for _ in 0..512 {
+                    let start = Instant::now();
+                    mutator.mutate();
+                    input.drain(..);
+                    mutator.ctx.serialize(input.as_mut());
+                    if input.as_ref().len() >= self.sess.swarm.input_alloc_size() {
+                        input.as_mut().resize(self.sess.swarm.input_alloc_size(), 0);
+                    }
+                    assert!(input.as_ref().len() <= self.sess.swarm.input_alloc_size());
+                    self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
+
+                    let res = self.run_input(input.as_ref())?;
+                    match res {
+                        InputVerdict::Interesting => {
+                            mutator.feed(input.as_ref(), true);
+                            eprintln!("[PATLANG] found coverage");
+                        }
+                        InputVerdict::NotInteresting => {}
+                        InputVerdict::Crashed => eprintln!("[PATLANG] found crash!"),
+                    }
+                }
+                self.grammar_mutator = Some(mutator);
+            }
 
             'fast: for _ in 0..A_FEW_EXECS {
                 if interesting && self.exhaustive_queue.len() <= 1 {
