@@ -7,7 +7,9 @@ use std::{sync::Arc, time::Instant};
 use crate::simple_bus::MessageBus;
 use libafl::corpus::CorpusId;
 use libafl::inputs::ResizableMutator;
-use libafl::mutators::{HavocScheduledMutator, StdMOptMutator, havoc_mutations};
+use libafl::mutators::{
+    HavocScheduledMutator, StdMOptMutator, havoc_mutations, havoc_mutations_no_crossover,
+};
 use libafl::observers::CmplogBytes;
 use libafl::stages::StageId;
 use libafl::state::HasCurrentStageId;
@@ -26,6 +28,7 @@ use libafl_bolts::{
     serdeany::SerdeAnyMap,
 };
 
+use rand::Rng;
 use rand::prelude::SliceRandom;
 
 use crate::jit::{JitFuzzingSession, SwarmConfig, TracingOptions};
@@ -411,6 +414,30 @@ impl Worker {
             Box::new(HavocScheduledMutator::with_max_stack_pow(mutations, 1)) // default is six max_iterations
         };
 
+        let mut grammar_bytes_mutator =
+            HavocScheduledMutator::with_max_stack_pow(havoc_mutations_no_crossover(), 1);
+        struct StateStub {
+            max_size: usize,
+            rng: StdRand,
+        }
+        impl HasMaxSize for StateStub {
+            fn max_size(&self) -> usize {
+                self.max_size
+            }
+            fn set_max_size(&mut self, max_size: usize) {
+                self.max_size = max_size;
+            }
+        }
+        impl HasRand for StateStub {
+            type Rand = StdRand;
+            fn rand(&self) -> &Self::Rand {
+                &self.rng
+            }
+            fn rand_mut(&mut self) -> &mut Self::Rand {
+                &mut self.rng
+            }
+        }
+
         let mut input = BytesInput::new(
             self.corpus
                 .get(self.corpus.first().unwrap())?
@@ -426,6 +453,80 @@ impl Worker {
         const A_FEW_EXECS: u32 = 4096; // We want these to complete in < ~1ms
         loop {
             tracy_full::zone!("Worker loop");
+
+            if let Some(mut mutator) = self.grammar_mutator.take() {
+                let mut new = false;
+                for _ in 0..64 {
+                    let corp_count = self.corpus.count();
+                    if corp_count > 0 {
+                        let corpus_idx = self.rand.below(corp_count.try_into().unwrap());
+                        let corpus_idx = self.corpus.nth(corpus_idx);
+                        mutator.feed(
+                            self.corpus
+                                .get(corpus_idx)?
+                                .borrow_mut()
+                                .load_input(&self.corpus)?
+                                .as_ref(),
+                            false,
+                        )
+                    }
+
+                    for _ in 0..8 {
+                        let start = Instant::now();
+                        mutator.mutate_with_byte_mutator(|req| {
+                            assert_eq!(req.min_size, 0);
+                            grammar_bytes_mutator
+                                .mutate(
+                                    &mut StateStub {
+                                        max_size: req.max_size,
+                                        rng: StdRand::with_seed(req.rng.random()),
+                                    },
+                                    req.target,
+                                )
+                                .unwrap();
+                        });
+                        input.drain(..);
+                        mutator.ctx.serialize(input.as_mut());
+                        if input.as_ref().len() >= self.sess.swarm.input_alloc_size() {
+                            dbg!(input.as_ref().len(), self.sess.swarm.input_alloc_size());
+                            input.as_mut().resize(self.sess.swarm.input_alloc_size(), 0);
+                        }
+                        assert!(input.as_ref().len() <= self.sess.swarm.input_alloc_size());
+                        self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
+
+                        let res = self.run_input(input.as_ref())?;
+                        match res {
+                            InputVerdict::Interesting => {
+                                mutator.feed(input.as_ref(), true);
+                                eprintln!("[PATLANG] found coverage");
+                                new = true;
+                            }
+                            InputVerdict::NotInteresting => {}
+                            InputVerdict::Crashed => eprintln!("[PATLANG] found crash!"),
+                        }
+
+                        self.schedule.step();
+                        let _interesting = match res {
+                            InputVerdict::Interesting => true,
+                            InputVerdict::NotInteresting => false,
+                            InputVerdict::Crashed if ignore_crashes => unreachable!(),
+                            InputVerdict::Crashed => return Ok(WorkerExit::CrashFound),
+                        };
+                        if _interesting {
+                            self.schedule.notify_activity();
+                            corpus_additions_since_cmin += 1;
+                            // TODO: move this to a proper power schedule / favoured inputs?
+                            sticky_input = Some(self.corpus.count() - 1);
+                            sticky_cooldown = A_FEW_EXECS;
+                        }
+                    }
+                }
+                if new {
+                    mutator.corpus.print_stats();
+                }
+                self.grammar_mutator = Some(mutator);
+            }
+
             let mut interesting = false;
 
             let mut exhaustive_queue = std::mem::take(&mut self.exhaustive_queue);
@@ -455,6 +556,9 @@ impl Worker {
                     }
                     self.stats.exhaustive_execs += 1;
                     det.next(input.as_mut());
+                    if true {
+                        continue;
+                    }
                     self.schedule.step();
                     let _interesting = match self.run_input(input.as_ref())? {
                         InputVerdict::Interesting => true,
@@ -492,46 +596,10 @@ impl Worker {
             let new_entries = std::mem::replace(&mut self.exhaustive_queue, exhaustive_queue);
             self.exhaustive_queue.extend(new_entries);
 
-            if let Some(mut mutator) = self.grammar_mutator.take() {
-                let corp_count = self.corpus.count();
-                if corp_count > 0 {
-                    let corpus_idx = self.rand.below(corp_count.try_into().unwrap());
-                    let corpus_idx = self.corpus.nth(corpus_idx);
-                    mutator.feed(
-                        self.corpus
-                            .get(corpus_idx)?
-                            .borrow_mut()
-                            .load_input(&self.corpus)?
-                            .as_ref(),
-                        false,
-                    )
-                }
-
-                for _ in 0..512 {
-                    let start = Instant::now();
-                    mutator.mutate();
-                    input.drain(..);
-                    mutator.ctx.serialize(input.as_mut());
-                    if input.as_ref().len() >= self.sess.swarm.input_alloc_size() {
-                        input.as_mut().resize(self.sess.swarm.input_alloc_size(), 0);
-                    }
-                    assert!(input.as_ref().len() <= self.sess.swarm.input_alloc_size());
-                    self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
-
-                    let res = self.run_input(input.as_ref())?;
-                    match res {
-                        InputVerdict::Interesting => {
-                            mutator.feed(input.as_ref(), true);
-                            eprintln!("[PATLANG] found coverage");
-                        }
-                        InputVerdict::NotInteresting => {}
-                        InputVerdict::Crashed => eprintln!("[PATLANG] found crash!"),
-                    }
-                }
-                self.grammar_mutator = Some(mutator);
-            }
-
             'fast: for _ in 0..A_FEW_EXECS {
+                if true {
+                    continue;
+                }
                 if interesting && self.exhaustive_queue.len() <= 1 {
                     break;
                 }
