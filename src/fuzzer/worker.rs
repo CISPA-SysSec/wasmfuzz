@@ -110,11 +110,10 @@ impl Worker {
                 .build(),
         };
 
-        let grammar = opts
-            .g
-            .patlang
-            .as_ref()
-            .map(|path| patlang::ir::hexpat_to_testir(&std::fs::read_to_string(path).unwrap()));
+        let grammar = opts.g.patlang.as_ref().map(|path| {
+            let testir = patlang::ir::hexpat_to_testir(&std::fs::read_to_string(path).unwrap());
+            patlang::engine::Grammar::lower(&testir)
+        });
         let grammar_mutator =
             grammar.map(|x| patlang::engine::Mutator::new(Box::leak(Box::new(x))));
 
@@ -522,7 +521,9 @@ impl Worker {
                     }
                 }
                 if new {
-                    mutator.corpus.print_stats();
+                    mutator.corpus.print_stats(&mut std::io::stdout());
+                    let mut f = std::fs::File::create("/tmp/corpus-stats.txt").unwrap();
+                    mutator.corpus.print_stats(&mut f);
                 }
                 self.grammar_mutator = Some(mutator);
             }
