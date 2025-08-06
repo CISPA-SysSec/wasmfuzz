@@ -472,20 +472,27 @@ impl Worker {
 
                     for _ in 0..8 {
                         let start = Instant::now();
-                        mutator.mutate_with_byte_mutator(|req| {
-                            assert_eq!(req.min_size, 0);
-                            grammar_bytes_mutator
-                                .mutate(
-                                    &mut StateStub {
-                                        max_size: req.max_size,
-                                        rng: StdRand::with_seed(req.rng.random()),
-                                    },
-                                    req.target,
-                                )
-                                .unwrap();
-                        });
-                        input.drain(..);
-                        mutator.ctx.serialize(input.as_mut());
+                        {
+                            tracy_full::zone!("Mutator::mutate");
+                            mutator.mutate_with_byte_mutator(|req| {
+                                assert_eq!(req.min_size, 0);
+                                grammar_bytes_mutator
+                                    .mutate(
+                                        &mut StateStub {
+                                            max_size: req.max_size,
+                                            rng: StdRand::with_seed(req.rng.random()),
+                                        },
+                                        req.target,
+                                    )
+                                    .unwrap();
+                            });
+                        }
+                        {
+                            tracy_full::zone!("Mutator::serialize");
+                            input.drain(..);
+                            mutator.ctx.serialize(input.as_mut());
+                        }
+                        let oversized = input.as_ref().len() >= self.sess.swarm.input_alloc_size();
                         if input.as_ref().len() >= self.sess.swarm.input_alloc_size() {
                             dbg!(input.as_ref().len(), self.sess.swarm.input_alloc_size());
                             input.as_mut().resize(self.sess.swarm.input_alloc_size(), 0);
@@ -496,7 +503,12 @@ impl Worker {
                         let res = self.run_input(input.as_ref())?;
                         match res {
                             InputVerdict::Interesting => {
-                                mutator.feed(input.as_ref(), true);
+                                if oversized {
+                                    // Re-parse oversized inputs to make sure we don't have unreasonably-sized corpus entries
+                                    mutator.feed(input.as_ref(), true);
+                                } else {
+                                    mutator.corpus.feed(&mutator.ctx);
+                                }
                                 eprintln!("[PATLANG] found coverage");
                                 new = true;
                             }
@@ -598,7 +610,7 @@ impl Worker {
             self.exhaustive_queue.extend(new_entries);
 
             'fast: for _ in 0..A_FEW_EXECS {
-                if true {
+                if true && false {
                     continue;
                 }
                 if interesting && self.exhaustive_queue.len() <= 1 {
