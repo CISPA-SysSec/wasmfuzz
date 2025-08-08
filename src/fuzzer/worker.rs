@@ -878,6 +878,17 @@ impl Worker {
             let _ = CrashOrLibAFLError::convert(self.on_corpus(b"YELLOW SUBMARINE", false));
         }
 
+        if let Some(mutator) = &mut self.grammar_mutator {
+            if mutator.corpus.count() > self.corpus.count() * 2 {
+                mutator.corpus.reset();
+                for idx in self.corpus.ids() {
+                    let testcase = self.corpus.get(idx).unwrap().borrow();
+                    let input = testcase.input().as_ref().unwrap().as_ref();
+                    mutator.feed(input, true);
+                }
+            }
+        }
+
         !to_remove.is_empty()
     }
 }
