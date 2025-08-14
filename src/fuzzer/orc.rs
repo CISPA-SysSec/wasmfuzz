@@ -568,6 +568,7 @@ impl Orchestrator {
                 **opt = true;
             }
         } else {
+            // TODO: update this with perf, noisyness data from evaluation
             let mut all_knobs = [
                 &mut *call_value_profile,
                 &mut *cmpcov_absdist,
@@ -612,6 +613,7 @@ impl Orchestrator {
                 instr_only_funcs: self.coverage_is_saturated().then(|| {
                     let pass = self.codecov_sess.get_pass::<FunctionCoveragePass>();
                     pass.coverage.iter_covered_keys().collect()
+                    // TODO: possibly only instrument functions/edges in the frontier?
                 }),
             },
             swarm,
