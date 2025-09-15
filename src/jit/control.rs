@@ -307,6 +307,11 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                     .collect::<Vec<_>>();
                 rvals.extend_from_slice(&concolic_vars);
             }
+
+            if state.options.debug_trace {
+                let s = format!("returning from {} by explicit return", state.fspec().symbol);
+                super::builtins::translate_debug_log(s, state, bcx);
+            }
             bcx.ins().return_(&rvals);
             state.mark_dead(bcx);
         }
