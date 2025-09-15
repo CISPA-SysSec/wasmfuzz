@@ -489,7 +489,7 @@ impl Orchestrator {
             let res = res.next_power_of_two();
             res.min(self.codecov_sess.swarm.instruction_limit.unwrap())
         });
-        let memory_limit_pages = 1 << self.rng.random_range(7..15);
+        let memory_limit_pages = 1 << self.rng.random_range(8..16);
         let input_size_limit = *[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536 - 1]
             .choose(&mut self.rng)
             .unwrap();

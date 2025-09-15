@@ -53,6 +53,8 @@ pub(crate) enum Subcommand {
         verbose_jit: bool,
         #[clap(long, default_value = "true")]
         print_stdout: FlagBool,
+        #[clap(long, default_value = "false")]
+        run_from_snapshot: FlagBool,
     },
     /// Check the system configuration and WebAssembly module for potential issues.
     Doctor {
@@ -225,6 +227,7 @@ pub(crate) fn main() {
             trace,
             verbose_jit,
             print_stdout,
+            run_from_snapshot,
         } => {
             let inputs = gather_inputs_paths(&None, &inputs, true);
             let mod_spec = parse_program(&program);
@@ -238,7 +241,8 @@ pub(crate) fn main() {
                 })
                 .debug(trace, verbose_jit)
                 .instruction_limit(Some(2_000_000_000))
-                .optimize_for_compilation_time(inputs.len() <= 1)
+                .optimize_for_compilation_time(inputs.len() <= 10)
+                .run_from_snapshot(*run_from_snapshot)
                 .build();
             if inputs.is_empty() {
                 println!("No input specified. Exiting.")

@@ -30,8 +30,9 @@ static ALLOC: tracy_full::alloc::GlobalAllocator = tracy_full::alloc::GlobalAllo
 // Note: This is a hard limit, fuzzer instances set their own limits..
 pub(crate) const TEST_CASE_SIZE_LIMIT: usize = u16::MAX as usize; // 64kb
 
-// Requests for new memory pages (`memory.grow`) will fail after this limit:
-pub(crate) const MEMORY_PAGES_LIMIT: u32 = 1024 * 16; // ~1GB, make configurable?
+// Requests for new memory pages (`memory.grow`) will fail after this limit.
+// Note that fuzzer instances set their own "soft" limits that short-circuit execution instead.
+pub(crate) const MEMORY_PAGES_LIMIT: u32 = 2 * 1024 * 16; // ~2GB
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum AbortCode {
