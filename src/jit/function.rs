@@ -1,5 +1,6 @@
 use std::any::Any;
 
+use crate::jit::builtins::builtin_clock_time_get;
 use crate::{HashMap, HashSet, instrumentation::Passes};
 
 use cranelift::codegen::ir::{self, FuncRef, GlobalValue};
@@ -704,10 +705,19 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 let time_ptr = self.pop1(I32, bcx);
                 let _precision = self.pop1(I64, bcx);
                 let _clock_id = self.pop1(I32, bcx);
-                // store fixed time (in nanos) in `time_ptr`
-                self.push1(I32, time_ptr);
-                self.push_i64(1700000000 * 1000000000, bcx);
-                translate_memory(&MemoryInstruction::I64Store(memarg_offset(0)), self, bcx);
+                if false {
+                    // store fixed time (in nanos) in `time_ptr`
+                    self.push1(I32, time_ptr);
+                    self.push_i64(1700000000 * 1000000000, bcx);
+                    translate_memory(&MemoryInstruction::I64Store(memarg_offset(0)), self, bcx);
+                } else {
+                    // calculate time from ~number of instruction executed
+                    self.host_call(
+                        bcx,
+                        builtin_clock_time_get as unsafe extern "C" fn(_, _),
+                        &[time_ptr],
+                    );
+                }
                 // return 0 (indicate success)
                 self.push_i32(0, bcx);
             }

@@ -97,6 +97,24 @@ pub(crate) unsafe extern "C" fn builtin_random_get(dest: u32, len: u32, vmctx: *
     }
 }
 
+pub(crate) unsafe extern "C" fn builtin_clock_time_get(time_ptr: u32, vmctx: *mut VMContext) {
+    unsafe {
+        let vmctx = &mut *vmctx;
+        vmctx.builtin_consume_fuel(1);
+        let time = vmctx.fuel_init.saturating_sub(vmctx.fuel);
+        // dbg!(vmctx.fuel_init, vmctx.fuel, time);
+        // dbg!(time);
+        let time = 1700000000 * 1000000000 + time * 100; // use a somewhat sensible time in nanos
+        let Some(buf) = vmctx
+            .heap()
+            .get_mut(time_ptr as usize..time_ptr as usize + 8)
+        else {
+            raise_trap(TrapReason::MemoryOutOfBounds)
+        };
+        buf.copy_from_slice(&time.to_le_bytes());
+    }
+}
+
 pub(crate) fn signature(
     params: &[ir::types::Type],
     returns: &[ir::types::Type],
