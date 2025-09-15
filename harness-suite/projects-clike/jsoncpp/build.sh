@@ -4,7 +4,9 @@ source set-buildflags.sh
 
 cd "$PROJECT/repo"
 
-export CCFLAGS="$CCFLAGS -DJSON_USE_EXCEPTION=0"
+# Note: Not sure why HAS_STRING_VIEW is required. Otherwise it'll fail with:
+#    wasm-ld: warning: lto.tmp: undefined symbol: Json::Value::operator[](std::string_view [...]
+export CCFLAGS="$CCFLAGS -DJSON_USE_EXCEPTION=0 -DJSONCPP_HAS_STRING_VIEW=1"
 export CFLAGS="$CCFLAGS"
 export CXXFLAGS="$CCFLAGS -fno-exceptions"
 

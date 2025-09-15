@@ -4,7 +4,7 @@ source set-buildflags.sh
 
 cd "$PROJECT/repo"
 
-export LDFLAGS="$FUZZ_LDFLAGS"
+export LDFLAGS="$FUZZ_LDFLAGS -lwasi-emulated-getpid"
 ./config wasm32-wasi \
 	enable-fuzz-libfuzzer \
 	no-threads no-asm no-thread-pool \
