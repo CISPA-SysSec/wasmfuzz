@@ -8,6 +8,7 @@ import io
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--suite-dir', default="./")
+parser.add_argument('--only-target', default=None)
 
 args = parser.parse_args()
 harness_dir = Path(args.suite_dir) / "out"
@@ -22,6 +23,8 @@ def get_remote_head(remote: str):
 
 
 for harness in harness_dir.glob("*.wasm"):
+    if args.only_target is not None and args.only_target not in harness.name:
+        continue
     print(harness)
 
     try:

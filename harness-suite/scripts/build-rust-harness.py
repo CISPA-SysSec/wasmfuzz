@@ -218,7 +218,7 @@ def build_harnesses():
             slug = module.parts[2]
             if "crates" in module.parts:
                 slug += "-" + module.parts[module.parts.index("crates")+1]
-            slug += "-" + module.stem.replace("-fuzzer", "").replace("_fuzzer", "")
+            slug += "-" + module.stem.replace("fuzzer_", "fuzzer-").replace("-fuzzer", "").replace("_fuzzer", "")
             if args.debug:
                 slug += "-dbg"
 
