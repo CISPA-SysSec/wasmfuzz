@@ -1,3 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/kivikakk/comrak.git "$PROJECT/repo" 886851a5ceeaafd20726643e529365225e70f433
-git -C "$PROJECT/repo" apply "$PROJECT/fix-harnesses.patch"
+git clone-rev.sh https://github.com/kivikakk/comrak.git "$PROJECT/repo" 36b06b8a9466e6109c9e162e18cabcd3ef8aead2
