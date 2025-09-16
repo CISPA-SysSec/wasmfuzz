@@ -140,15 +140,15 @@ fn run_inputs(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf]) -> JitFuzzingS
 struct FileId(u32);
 
 #[derive(Clone)]
-struct FileInfo {
-    path: String,
-    source: Option<String>,
-    line_coverage: FileLineCoverage,
+pub(crate) struct FileInfo {
+    pub(crate) path: String,
+    pub(crate) source: Option<String>,
+    pub(crate) line_coverage: FileLineCoverage,
 }
 
 pub(crate) struct ReportInfo {
     mod_spec: Arc<ModuleSpec>,
-    files: Vec<FileInfo>,
+    pub(crate) files: Vec<FileInfo>,
     path_to_fileid: HashMap<String, FileId>,
 }
 

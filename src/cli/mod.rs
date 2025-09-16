@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::{
+    HashMap,
     fuzzer::opts::{FlagBool, InstrumentationOpts},
     ir::ModuleSpec,
     jit::{FeedbackOptions, JitFuzzingSession, Stats, TracingOptions},
@@ -163,6 +164,12 @@ pub(crate) enum Subcommand {
         output: PathBuf,
         #[clap(long)]
         no_prefix: bool,
+    },
+    #[clap(hide = true)]
+    CorpusBlame {
+        program: PathBuf,
+        corpus: PathBuf,
+        file: Option<String>,
     },
 }
 
@@ -760,6 +767,86 @@ pub(crate) fn main() {
                 println!(
                     "Note: skipped {filtered} out of {total} files embedded in the debug info"
                 );
+            }
+        }
+        Subcommand::CorpusBlame {
+            program,
+            corpus,
+            file: file_filter,
+        } => {
+            let mod_spec = parse_program(&program);
+            let mut corpus_entries = Vec::new();
+            for entry in std::fs::read_dir(corpus).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                let input = std::fs::read(&path).unwrap();
+                corpus_entries.push((path, input));
+            }
+            // Prefer smaller inputs
+            corpus_entries.sort_by_key(|(_, inp)| inp.len());
+
+            let mut stats = Stats::default();
+            let mut sess = JitFuzzingSession::builder(mod_spec.clone())
+                .feedback(FeedbackOptions {
+                    live_bbs: true,
+                    ..FeedbackOptions::nothing()
+                })
+                .build();
+            sess.initialize(&mut stats);
+            struct Blame {
+                map: HashMap<(usize, usize), usize>,
+                inputs: Vec<String>,
+                files: Vec<String>,
+            }
+            fn blame(report_info: &cov_html::ReportInfo, input: &str, blame: &mut Blame) {
+                let inp_idx = blame.inputs.len();
+                blame.inputs.push(input.to_string());
+                for (file_idx, file) in report_info.files.iter().enumerate() {
+                    for line_idx in file.line_coverage.covered.iter_ones() {
+                        let key = (file_idx, line_idx);
+                        if !blame.map.contains_key(&key) {
+                            blame.map.insert(key, inp_idx);
+                        }
+                    }
+                }
+            }
+
+            print!("blaming <init>\r");
+            sess.run(b"YELLOW SUBMARINE", &mut stats).expect_ok();
+            let mut report_info = cov_html::ReportInfo::new(mod_spec).unwrap();
+            report_info.process_line_coverage(&sess);
+            let mut res = Blame {
+                map: HashMap::default(),
+                inputs: Vec::new(),
+                files: report_info.files.iter().map(|f| f.path.clone()).collect(),
+            };
+            blame(&report_info, "<init>", &mut res);
+
+            for (path, input) in corpus_entries {
+                print!("blaming {:?}: run                           \r", path);
+                sess.run(&input, &mut stats).expect_ok();
+                print!("blaming {:?}: process                       \r", path);
+                report_info.process_line_coverage(&sess);
+                print!("blaming {:?}: blame                         \r", path);
+                blame(&report_info, &path.to_string_lossy(), &mut res);
+            }
+
+            for (file_idx, file) in res.files.iter().enumerate() {
+                if let Some(file_filter) = &file_filter {
+                    if !file.contains(file_filter) {
+                        continue;
+                    }
+                }
+                let mut blame_lines = res
+                    .map
+                    .iter()
+                    .filter(|(k, _)| k.0 == file_idx)
+                    .map(|((_, line), inp)| (line, inp))
+                    .collect::<Vec<_>>();
+                blame_lines.sort();
+                for (line, inp) in blame_lines {
+                    println!("[{}:{}] {}", file, line, res.inputs[*inp]);
+                }
             }
         }
     }
