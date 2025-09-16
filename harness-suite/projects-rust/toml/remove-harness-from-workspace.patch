@@ -7,7 +7,7 @@ index 3105492..ace18ea 100644
  members = ["crates/*"]
 +exclude = ["crates/toml_edit_fuzz"]
  resolver = "2"
- 
+
  [workspace.package]
 diff --git a/crates/toml_edit_fuzz/Cargo.toml b/crates/toml_edit_fuzz/Cargo.toml
 index e2abccf..29e3c2d 100644
@@ -21,11 +21,11 @@ index e2abccf..29e3c2d 100644
 -rust-version.workspace = true
 +edition = "2021"
  publish = false
- 
+
  [package.metadata.release]
 @@ -20,5 +19,3 @@ name = "parse_document"
  path = "parse_document.rs"
  test = false
- 
+
 -[lints]
 -workspace = true

@@ -1,0 +1,16 @@
+diff --git a/regex-syntax/src/ast/mod.rs b/regex-syntax/src/ast/mod.rs
+index ce79a89..4ebefc9 100644
+--- a/regex-syntax/src/ast/mod.rs
++++ b/regex-syntax/src/ast/mod.rs
+@@ -1495,10 +1495,7 @@ impl arbitrary::Arbitrary<'_> for CaptureName {
+         }
+         let mut name: String = String::new();
+         for _ in 0..len {
+-            let ch: char = u.arbitrary()?;
+-            let cp = u32::from(ch);
+-            let ascii_letter_offset = u8::try_from(cp % 26).unwrap();
+-            let ascii_letter = b'a' + ascii_letter_offset;
++            let ascii_letter = u.int_in_range(b'a'..=b'z')?;
+             name.push(char::from(ascii_letter));
+         }
+         Ok(CaptureName { span: u.arbitrary()?, name, index: u.arbitrary()? })
