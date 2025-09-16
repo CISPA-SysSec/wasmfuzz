@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/rust-lang/regex.git "$PROJECT/repo" 1a069b9232c607b34c4937122361aa075ef573fa
+git clone-rev.sh https://github.com/rust-lang/regex.git "$PROJECT/repo" a76e0a0ef050f987d686268f1783a95b6bb25ea9

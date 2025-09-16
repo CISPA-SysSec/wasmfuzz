@@ -1,0 +1,52 @@
+diff --git a/crates/ty/Cargo.toml b/crates/ty/Cargo.toml
+index 4189758..5f75910 100644
+--- a/crates/ty/Cargo.toml
++++ b/crates/ty/Cargo.toml
+@@ -18,7 +18,7 @@ ruff_db = { workspace = true, features = ["os", "cache"] }
+ ruff_python_ast = { workspace = true }
+ ty_combine = { workspace = true }
+ ty_python_semantic = { workspace = true }
+-ty_project = { workspace = true, features = ["zstd"] }
++ty_project = { workspace = true, features = [] }# "zstd"] }
+ ty_server = { workspace = true }
+ ty_static = { workspace = true }
+ 
+diff --git a/crates/ty_project/Cargo.toml b/crates/ty_project/Cargo.toml
+index 6ccc1e4..7134ec4 100644
+--- a/crates/ty_project/Cargo.toml
++++ b/crates/ty_project/Cargo.toml
+@@ -49,7 +49,7 @@ ruff_db = { workspace = true, features = ["testing"] }
+ insta = { workspace = true, features = ["redactions", "ron"] }
+ 
+ [features]
+-default = ["zstd"]
++default = []#"zstd"]
+ deflate = ["ty_vendored/deflate"]
+ schemars = [
+     "dep:schemars",
+diff --git a/crates/ty_vendored/Cargo.toml b/crates/ty_vendored/Cargo.toml
+index 0461b83..a23ab1e 100644
+--- a/crates/ty_vendored/Cargo.toml
++++ b/crates/ty_vendored/Cargo.toml
+@@ -18,7 +18,7 @@ zip = { workspace = true }
+ [build-dependencies]
+ path-slash = { workspace = true }
+ walkdir = { workspace = true }
+-zip = { workspace = true, features = ["zstd", "deflate"] }
++zip = { workspace = true, features = ["deflate"] }
+ 
+ [dev-dependencies]
+ walkdir = { workspace = true }
+diff --git a/crates/ty_vendored/build.rs b/crates/ty_vendored/build.rs
+index 5c65c09..81acaf4 100644
+--- a/crates/ty_vendored/build.rs
++++ b/crates/ty_vendored/build.rs
+@@ -34,7 +34,7 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {
+     // architecture of the system running the build script and not the architecture of the build-target.
+     // That's why we use the `TARGET` environment variable here.
+     let method = if cfg!(feature = "zstd") {
+-        CompressionMethod::Zstd
++        CompressionMethod::Stored
+     } else if cfg!(feature = "deflate") {
+         CompressionMethod::Deflated
+     } else {

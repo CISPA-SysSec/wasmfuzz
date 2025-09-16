@@ -74,6 +74,14 @@ with open(tags_path) as f:
         if tagged_crash != (harness in verified):
             mismatches.add(harness)
 
+for crash_path in crashes_dir.glob("*.bin"):
+    if args.only_target is not None and args.only_target not in crash_path.stem:
+        continue
+    harness = crash_path.stem
+    harness_path = harness_dir / f"{harness}.wasm"
+    if not harness_path.exists():
+        print(f"[!] {harness}: Missing harness!")
+
 print()
 print("-"*80)
 print(f"{len(mismatches)} mismatches found" + ".:"[bool(mismatches)])

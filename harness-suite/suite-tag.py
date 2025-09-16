@@ -96,7 +96,7 @@ def tag_manually(harness, rev, *manual_tags):
     git_metadata = io.StringIO(git_metadata.decode())
     reader = csv.DictReader(git_metadata)
     revisions = [row["pinrev"] for row in reader]
-    if rev not in revisions:
+    if rev not in revisions and rev != "*":
         print(f"[WARN] tag_manually {harness=} {rev=} unexpected revision, outdated?")
         pprint(revisions)
 
@@ -342,7 +342,7 @@ for harness in harnesses:
 
 # This is the only harness with `LLVMFuzzerCustomMutator`. Our fuzzers don't
 # support custom mutators currently.
-tag_manually("x509-parser-x509_with_mutator.wasm", "a92bbab5cdc630f7d2c0410736bee55f0e3710e8", Tag.SKIP)
+tag_manually("x509-parser-x509_with_mutator.wasm", "*", Tag.SKIP)
 
 tag_from_corpus()
 
