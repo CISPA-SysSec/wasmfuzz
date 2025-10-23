@@ -14,6 +14,7 @@ parser.add_argument('--workdir', default='/projects/')
 parser.add_argument('--debug-assertions', action='store_true')
 parser.add_argument('--debug', action='store_true')
 parser.add_argument('--small-stack', action='store_true')
+parser.add_argument('--large-stack', action='store_true')
 parser.add_argument('--init-toolchain', action='store_true')
 args = parser.parse_args()
 
@@ -137,6 +138,9 @@ def build_folder(folder, verb="build"):
         # default: 16 pages, 1MB
         #    smol: 1 page, 64kb
         env["RUSTFLAGS"] += f" -C link-arg=-zstack-size={1<<16}"
+    elif args.large_stack:
+        #   large: 256 pages, 16MB
+        env["RUSTFLAGS"] += f" -C link-arg=-zstack-size={16<<20}"
 
     if BUILD_TYPE != "x86_64-libfuzzer":
         # embed build-id into WASM module (requires LLVM 17)

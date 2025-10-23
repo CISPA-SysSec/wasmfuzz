@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/unicode-rs/unicode-segmentation.git "$PROJECT/repo" 9e3f88c06ca275294ef4cb1daf0789f06a28611d
+git clone-rev.sh https://github.com/unicode-rs/unicode-segmentation.git "$PROJECT/repo" af87c8d331b81d2398997d89d2164c252ae6e9f5

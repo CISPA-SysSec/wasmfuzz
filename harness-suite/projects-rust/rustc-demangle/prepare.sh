@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/rust-lang/rustc-demangle.git "$PROJECT/repo" 83f1bbd6793a2dbd5fa94b185a0cd9bb98d8332f
+git clone-rev.sh https://github.com/rust-lang/rustc-demangle.git "$PROJECT/repo" c5688cfec32d2bd00701836f12beb3560ee015b8
 git -C "$PROJECT/repo" apply "$PROJECT/remove-harness-from-workspace.patch"

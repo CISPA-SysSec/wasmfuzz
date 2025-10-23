@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/rust-lang/rust-analyzer.git "$PROJECT/repo" fe5a925a74efde7ec6a7d3e388b946f96d36e760
+git clone-rev.sh https://github.com/rust-lang/rust-analyzer.git "$PROJECT/repo" bd06def3d3acd5f54fac953a015c0ac9b1e71b2f
 git -C "$PROJECT/repo" apply "$PROJECT/fix.patch"

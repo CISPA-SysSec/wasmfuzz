@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/tafia/quick-xml.git "$PROJECT/repo" 2b9198715ad20b0ce833adb1b47c6f1a5eb4905c
+git clone-rev.sh https://github.com/tafia/quick-xml.git "$PROJECT/repo" 655691c7c394ba6c9dcc3c47725d9ec7ce80f094

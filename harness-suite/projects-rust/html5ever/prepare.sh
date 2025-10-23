@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/servo/html5ever.git "$PROJECT/repo" 0b37b54198b4e590dae240dfd046d8857b677f37
+git clone-rev.sh https://github.com/servo/html5ever.git "$PROJECT/repo" 7750b8f2874478eac490c6e3fa956bf88ede2e29
