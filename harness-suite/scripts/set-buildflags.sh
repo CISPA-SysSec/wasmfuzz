@@ -9,7 +9,7 @@ case $BUILD_TYPE in
     wasi-mvp)
         TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi -mcpu=mvp"
         ;;
-    x86_64-libfuzzer)
+    x86_64-libfuzzer|x86_64-libafl)
         TARGET_FLAGS=""
         export CC="clang"
         export CXX="clang++"
@@ -24,7 +24,7 @@ esac
 export CCFLAGS="-g -gdwarf-5 -gembed-source -O2 -flto=thin -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION"
 
 case $BUILD_TYPE in
-    x86_64-libfuzzer)
+    x86_64-libfuzzer|x86_64-libafl)
         export CFLAGS="$CFLAGS $TARGET_FLAGS $CCFLAGS"
         export CXXFLAGS="$CXXFLAGS $TARGET_FLAGS $CCFLAGS"
         export CONFIGUREFLAGS=""

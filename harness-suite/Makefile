@@ -21,3 +21,7 @@ dummy/.build: scripts/* Dockerfile
 .PHONY: rust-libfuzzer
 rust-libfuzzer:
 	for x in projects-rust/*/; do python3 ./make-one.py $$x x86_64-libfuzzer; done
+
+.PHONY: rust-libafl
+rust-libafl:
+	for x in projects-rust/*/; do python3 ./make-one.py $$x x86_64-libafl; done

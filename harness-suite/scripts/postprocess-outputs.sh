@@ -5,7 +5,7 @@ if [ "$(ls -A '/out/')" ]; then
     file-rename 's/-fuzzer//' /out/*
 fi
 
-if [ "$BUILD_TYPE" = "x86_64-libfuzzer" ]; then
+if [ "$BUILD_TYPE" = "x86_64-libfuzzer" ] || [ "$BUILD_TYPE" = "x86_64-libafl" ]; then
     exit 0
 fi
 

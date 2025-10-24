@@ -276,11 +276,11 @@ class FuzzJob:
 
     async def run(self, fuzzer, env=None):
         await asyncio.sleep(1)
-        interval_secs = 60*3 #120 if args.native_cov else 60
+        interval_secs = 60*3 if self.timeout > 60*10 else 60
 
         self.monitor_native = None
         if args.native_cov: # TRACK LIBFUZZER COV
-            native_bin = self.target_wasm.with_suffix(".exe")
+            native_bin = self.target_wasm.with_name(f"{self.target_wasm.stem}-x86_64-libfuzzer.exe")
             if not native_bin.exists():
                 print(f"[-] missing native_bin for {self.target_wasm.stem}: {native_bin}")
                 return
@@ -318,9 +318,13 @@ class FuzzJob:
         fuzzer_cmd += ["--name", self.job_uuid]
         if fuzzer.endswith("-native"):
             assert fuzzer in ["libfuzzer-native", "libafl-libfuzzer-native"]
+            suffix = {
+                "libfuzzer-native": "x86_64-libfuzzer",
+                "libafl-libfuzzer-native": "x86_64-libafl",
+            }[fuzzer]
             # image = "docker.io/i386/ubuntu:focal" if fuzzer == "libfuzzer-native" else "docker.io/ubuntu:24.04"
             image = "docker.io/ubuntu:24.04"
-            source = self.target_wasm.with_suffix(".exe")
+            source = self.target_wasm.with_name(f"{self.target_wasm.stem}-{suffix}.exe")
             fuzzer_cmd += ["--mount", f"type=bind,source={source.absolute()},destination=/{self.target_wasm.stem}-{fuzzer},ro=true,relabel=shared"]
             fuzzer_cmd += [image]
             num_cores = int(env["FUZZER_CORES"])

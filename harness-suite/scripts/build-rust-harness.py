@@ -19,13 +19,13 @@ parser.add_argument('--init-toolchain', action='store_true')
 args = parser.parse_args()
 
 BUILD_TYPE = os.environ.get("BUILD_TYPE", "wasi-lime1")
-assert BUILD_TYPE in ["wasi-lime1", "wasi-mvp", "x86_64-libfuzzer"]
+assert BUILD_TYPE in ["wasi-lime1", "wasi-mvp", "x86_64-libfuzzer", "x86_64-libafl"]
 BUILD_FLAGS = os.environ.get("BUILD_FLAGS", "").split(";")
 RUSTUP_TOOLCHAIN = "nightly-2025-07-26"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
 os.environ["RUSTUP_TOOLCHAIN"] = RUSTUP_TOOLCHAIN
-if BUILD_TYPE == "x86_64-libfuzzer":
+if BUILD_TYPE.startswith("x86_64-"):
     TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
 else:
     TARGET_TRIPLE = "wasm32-wasip1"
@@ -33,15 +33,22 @@ else:
 
 def patch_cargo_toml(path):
     "switch project over to a custom `libfuzzer-sys` crate that supports building to WebAssembly modules"
-    print(f"patching {path} for custom libfuzzer-sys")
     with open(path) as f:
         cargo_toml = tomlkit.load(f)
+    # TODO: detect if patched already, skip?
+    print(f"patching {path} for custom libfuzzer-sys")
 
     libfuzzer_sys_dep = {
         "git": "https://github.com/Mrmaxmeier/libfuzzer",
         "rev": "b608dcf44c2071a54393cb92a2bc305a5e2a6799", # "target-wasm" branch
         "features": ["arbitrary-derive"],
     }
+    if BUILD_TYPE == "x86_64-libafl":
+        libfuzzer_sys_dep = {
+            "version": "0.15.3",
+            "package": "libafl_libfuzzer",
+        }
+
     # This contains PR #181 (282cc87277d9aab93bcbe154b136625d66ddd1a6)
     arbitrary_dep = {
         "version": "1.4.1",
@@ -93,8 +100,9 @@ def patch_cargo_toml(path):
         cargo_toml.update({"patch": tomlkit.table()})
         cargo_toml["patch"].update({"crates-io": tomlkit.table()})
     # Note: patch mechanism doesn't support injecting feautres. This should be fine for us though.
-    cargo_toml["patch"]["crates-io"]["libfuzzer-sys"] = make_inline(libfuzzer_sys_dep)
-    del cargo_toml["patch"]["crates-io"]["libfuzzer-sys"]["features"]
+    if "git" in libfuzzer_sys_dep:
+        cargo_toml["patch"]["crates-io"]["libfuzzer-sys"] = make_inline(libfuzzer_sys_dep)
+        del cargo_toml["patch"]["crates-io"]["libfuzzer-sys"]["features"]
     if "git" in arbitrary_dep:
         cargo_toml["patch"]["crates-io"]["arbitrary"] = make_inline(arbitrary_dep)
         del cargo_toml["patch"]["crates-io"]["arbitrary"]["features"]
@@ -105,7 +113,7 @@ def patch_cargo_toml(path):
 def build_folder(folder, verb="build"):
     env = os.environ.copy()
     env["RUSTFLAGS"] = "--cfg=fuzzing"
-    if BUILD_TYPE == "x86_64-libfuzzer":
+    if BUILD_TYPE in ["x86_64-libfuzzer", "x86_64-libafl"]:
         # https://github.com/rust-fuzz/cargo-fuzz/blob/65e3279c9602375037cb3aaabd3209c5b746375c/src/project.rs#L175-L191
         env["RUSTFLAGS"] += " -Cpasses=sancov-module" \
                             " -Cllvm-args=-sanitizer-coverage-level=4" \
@@ -125,6 +133,10 @@ def build_folder(folder, verb="build"):
         env["RUSTFLAGS"] += f" -C target-cpu={target_cpu}"
         env["RUSTFLAGS"] += " -Zwasi-exec-model=reactor"
 
+    # Note: libafl_libfuzzer_runtime doesn't build with -flto=thin in CFLAGS
+    if BUILD_TYPE == "x86_64-libafl":
+        for key in ["CFLAGS", "CXXFLAGS", "CCFLAGS"]:
+            env[key] = env[key].replace("-flto=thin", "")
 
     env["CARGO_PROFILE_RELEASE_OPT_LEVEL"] = "s"
     env["CARGO_PROFILE_RELEASE_PANIC"] = "abort"
@@ -142,7 +154,7 @@ def build_folder(folder, verb="build"):
         #   large: 256 pages, 16MB
         env["RUSTFLAGS"] += f" -C link-arg=-zstack-size={16<<20}"
 
-    if BUILD_TYPE != "x86_64-libfuzzer":
+    if BUILD_TYPE.startswith("wasi"):
         # embed build-id into WASM module (requires LLVM 17)
         env["RUSTFLAGS"] += " -C link-arg=--build-id"
     subprocess.run([
@@ -156,7 +168,7 @@ def init_toolchain():
     # Install Rust nightly toolchain with WASM support
     subprocess.run(f"curl --proto '=https' -sSf https://sh.rustup.rs/ | sh -s -- " \
                    f"-y --default-toolchain={RUSTUP_TOOLCHAIN} --target={TARGET_TRIPLE} " \
-                   f"--profile minimal --component=rust-src", shell=True, check=True)
+                   f"--profile minimal --component=rust-src,llvm-tools", shell=True, check=True)
 
     # Prime crates.io registry with a sample build
     dir = Path("/tmp/sample")
@@ -210,7 +222,8 @@ def build_harnesses():
         bins_path = None
         for _ in range(5):
             bins_path = folder_ / "target" / TARGET_TRIPLE
-            if bins_path.exists(): break
+            if bins_path.exists():
+                break
             folder_ = folder_.parent
         assert bins_path is not None
         bins_path /= "debug" if args.debug else "release"
@@ -226,9 +239,10 @@ def build_harnesses():
             if args.debug:
                 slug += "-dbg"
 
-            if BUILD_TYPE == "x86_64-libfuzzer":
-                shutil.copyfile(module, OUT / f"{slug}.exe")
-                os.chmod(OUT / f"{slug}.exe", 0o755)
+            if BUILD_TYPE.startswith("x86_64"):
+                name = f"{slug}-{BUILD_TYPE}.exe"
+                shutil.copyfile(module, OUT / name)
+                os.chmod(OUT / name, 0o755)
             else:
                 shutil.copyfile(module, OUT / f"{slug}.wasm")
         # subprocess.run([CARGO, "clean"], cwd=folder, env=env)
