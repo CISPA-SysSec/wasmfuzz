@@ -132,19 +132,30 @@ impl Worker {
                 worker.sess.reset_pass_coverage();
                 worker.sess.initialize(&mut worker.stats);
                 eprintln!("running orc's inputs ...");
+                let mut discarded_input_size = 0;
+                let mut interesting_inputs = 0;
+                let orc_input_count = corpus.len();
                 for input in corpus {
                     if input.len() > worker.sess.swarm.input_alloc_size() {
+                        discarded_input_size += 1;
                         continue;
                     }
                     // NOTE: we don't need to trace here if we're going to throw them away anyways!
-                    let res = worker.on_corpus(&input, false);
+                    let res = worker.on_corpus(&input, true);
                     if matches!(res, Err(_) | Ok(InputVerdict::Crashed)) {
+                        eprintln!("Worker::new crashed on corpus entry: {:?}", res);
                         break;
                     }
+                    interesting_inputs += matches!(res, Ok(InputVerdict::Interesting)) as usize;
                 }
+                if discarded_input_size > 0 {
+                    eprintln!("discarded {discarded_input_size} inputs due to size limit");
+                }
+                eprintln!("interesting inputs: {interesting_inputs}/{orc_input_count}");
                 eprintln!(
-                    "after fetch_corpus: {} edges",
-                    worker.sess.get_edge_cov().unwrap_or(0)
+                    "after fetch_corpus: {} edges, {} inputs",
+                    worker.sess.get_edge_cov().unwrap_or(0),
+                    worker.corpus.count()
                 );
                 for _ in 0..10 {
                     if !worker.inmemory_cmin(false) {
@@ -152,8 +163,9 @@ impl Worker {
                     }
                 }
                 eprintln!(
-                    "after inmem_cmin: {} edges",
-                    worker.sess.get_edge_cov().unwrap_or(0)
+                    "after inmem_cmin: {} edges, {} inputs",
+                    worker.sess.get_edge_cov().unwrap_or(0),
+                    worker.corpus.count()
                 );
             }
         }
@@ -165,6 +177,8 @@ impl Worker {
     fn on_corpus(&mut self, input: &[u8], is_seed: bool) -> Result<InputVerdict, libafl::Error> {
         tracy_full::zone!("Worker::on_corpus");
         let ignore_crashes = *self.opts.x.fuzz_through_crashes;
+
+        let mut was_interesting = false;
         if !*self.opts.x.run_from_snapshot {
             let res = self.sess.run_reusable(input, false, &mut self.stats);
             if res.is_crash() && !ignore_crashes {
@@ -174,6 +188,7 @@ impl Worker {
             if is_seed && !res.novel_coverage {
                 return Ok(InputVerdict::NotInteresting);
             }
+            was_interesting = res.novel_coverage;
         }
 
         // make sure we catch inputs that crash on fresh instances but not on used ones (TODO?)
@@ -183,7 +198,7 @@ impl Worker {
             return Ok(InputVerdict::Crashed);
         }
 
-        if !res.novel_coverage {
+        if !res.novel_coverage && !was_interesting {
             return Ok(InputVerdict::NotInteresting);
         }
 

@@ -711,6 +711,8 @@ pub(crate) fn main() {
                 #[cfg(feature = "reports")]
                 crate::cli::cov_html::write_html_cov_report(mod_spec, &sess, &out_path);
                 #[cfg(not(feature = "reports"))]
+                let _ = out_path;
+                #[cfg(not(feature = "reports"))]
                 panic!("trying to write html report without 'reports' feature")
             }
         }
@@ -809,9 +811,7 @@ pub(crate) fn main() {
                 for (file_idx, file) in report_info.files.iter().enumerate() {
                     for line_idx in file.line_coverage.covered.iter_ones() {
                         let key = (file_idx, line_idx);
-                        if !blame.map.contains_key(&key) {
-                            blame.map.insert(key, inp_idx);
-                        }
+                        blame.map.entry(key).or_insert(inp_idx);
                     }
                 }
             }

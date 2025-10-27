@@ -84,6 +84,7 @@ impl<K: Ord + Clone> CoverageBitset<K> {
         self.saved.iter_ones().map(|i| self.keys[i].clone())
     }
 
+    #[allow(unused)]
     pub(crate) fn saved_val(&self, key: &K) -> bool {
         let index = self.keys.binary_search(key).unwrap();
         self.saved[index]
