@@ -8,7 +8,6 @@ use std::{
 };
 
 use crate::{
-    HashMap,
     fuzzer::opts::{FlagBool, InstrumentationOpts},
     ir::ModuleSpec,
     jit::{FeedbackOptions, JitFuzzingSession, Stats, TracingOptions},
@@ -166,6 +165,7 @@ pub(crate) enum Subcommand {
         no_prefix: bool,
     },
     #[clap(hide = true)]
+    #[cfg(feature = "reports")]
     CorpusBlame {
         program: PathBuf,
         corpus: PathBuf,
@@ -769,11 +769,13 @@ pub(crate) fn main() {
                 );
             }
         }
+        #[cfg(feature = "reports")]
         Subcommand::CorpusBlame {
             program,
             corpus,
             file: file_filter,
         } => {
+            use crate::HashMap;
             let mod_spec = parse_program(&program);
             let mut corpus_entries = Vec::new();
             for entry in std::fs::read_dir(corpus).unwrap() {
