@@ -258,7 +258,7 @@ pub(crate) fn main() {
                 println!("Testcase: {input:?}");
                 let testcase = std::fs::read(input).expect("couldn't read input");
                 assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
-                let res = sess.run_tracing_fresh(&testcase, &mut stats).err().clone();
+                let res = sess.run_tracing(&testcase, &mut stats).err().clone();
 
                 if *print_stdout {
                     let stdout = &sess.tracing_context().stdout;
@@ -392,6 +392,9 @@ pub(crate) fn main() {
                 let exec_us = start.elapsed().as_micros();
                 let is_crash = res.is_crash();
                 let edge_cov = sess.get_edge_cov().unwrap();
+                if is_crash {
+                    eprintln!("crash: {res:?} ({input_path:?})");
+                }
                 writeln!(
                     csv_out,
                     "{},{},{},{},{},{},",

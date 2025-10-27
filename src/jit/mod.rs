@@ -694,11 +694,13 @@ impl JitStage {
             self.inp_ptr = None;
         }
 
-        if !self.run_from_snapshot {
-            let instance = self.instance.as_mut().unwrap();
-            if instance.vmctx.tainted {
-                instance.vmctx.reset(spec);
-            }
+        // Forget our input allocation if the instance is tainted.
+        // We'll reset and re-allocate in this case below.
+        if let Some(instance) = &mut self.instance
+            && instance.vmctx.tainted
+        {
+            // eprintln!("resetting vmctx because it's tainted");
+            self.inp_ptr = None;
         }
 
         if self.inp_ptr.is_none() {
@@ -1097,8 +1099,16 @@ impl JitFuzzingSession {
         stats: &mut Stats,
     ) -> Result<&FeedbackContext, TrapKind> {
         if !self.run_from_snapshot {
-            self.tracing_stage.reset(&self.spec);
+            self.tracing_stage.reset();
         }
+        self.run_tracing(input, stats)
+    }
+
+    pub(crate) fn run_tracing(
+        &mut self,
+        input: &[u8],
+        stats: &mut Stats,
+    ) -> Result<&FeedbackContext, TrapKind> {
         self.tracing_stage.ensure_init(
             &self.spec,
             &CompilationOptions::new(
