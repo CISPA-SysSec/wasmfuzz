@@ -129,23 +129,18 @@ impl VMContext {
         self.random_get_seed = 0xdeadbeefdeadbeef;
     }
 
-    pub(crate) fn reset(&mut self, from: &ModuleSpec) {
+    /// Resets the instance
+    pub(crate) fn reset(&mut self) {
         tracy_full::zone!("VMContext::reset");
-        self.input_ptr = 0;
-        self.input_size = 0;
-        self.heap_pages = from.initial_mem_pages as u32;
         assert!(self.heap_snapshot_is_initial);
-        self.heap_alloc.restore();
-        // reset globals
-        for (val, initial) in self.globals.iter_mut().zip(&from.globals) {
-            *val = initial.as_bits();
-        }
-        self.concolic.reset();
-        self.tainted = false;
-        self.random_get_seed = 0xdeadbeefdeadbeef;
+
+        self.input_ptr = 0;
+        self.restore();
     }
 
-    pub(crate) fn reset_to_initial(&mut self, from: &ModuleSpec) {
+    /// Resets this instance to the "initial" state
+    pub(crate) fn reset_to_initial_and_snapshot(&mut self, from: &ModuleSpec) {
+        // Initialize globals and snapshot
         let globals = from
             .globals
             .iter()
@@ -153,6 +148,7 @@ impl VMContext {
             .collect::<Box<[_]>>();
         self.globals_snapshot.copy_from_slice(&globals);
 
+        // Initialize memory and snapshot
         self.heap_alloc.resize(from.initial_mem_pages << 16);
         self.heap_alloc.as_mut_slice().fill(0);
         self.heap_alloc.snapshot_as_mut_slice().fill(0);
@@ -160,10 +156,11 @@ impl VMContext {
             self.heap_alloc.as_mut_slice()[*offset..][..data.len()].copy_from_slice(data);
             self.heap_alloc.snapshot_as_mut_slice()[*offset..][..data.len()].copy_from_slice(data);
         }
+        #[cfg(false)] // NB: redundant
         self.heap_alloc.restore();
 
         self.heap_snapshot_is_initial = true;
-        self.reset(from);
+        self.reset();
     }
 
     pub(crate) fn builtin_consume_fuel(&mut self, delta: u64) {

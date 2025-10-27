@@ -706,7 +706,7 @@ impl JitStage {
         if self.inp_ptr.is_none() {
             let instance = self.instance.as_mut().unwrap();
             // println!("reset vmctx because inp_ptr is_none {:?}", self.kind);
-            instance.vmctx.reset(spec);
+            instance.vmctx.reset();
 
             // for initializer and malloc call: set reasonable limits
             instance.vmctx.fuel_init = 100_000_000;
@@ -774,7 +774,7 @@ impl JitStage {
         }
     }
 
-    fn reset(&mut self, spec: &ModuleSpec) {
+    fn reset(&mut self) {
         if self.run_from_snapshot {
             return;
         }
@@ -782,7 +782,7 @@ impl JitStage {
         // make sure we're always preinitialized?
         if let Some(instance) = self.instance.as_mut() {
             instance.vmctx.feedback.reset();
-            instance.vmctx.reset(spec);
+            instance.vmctx.reset();
         }
         self.inp_ptr = None;
     }
@@ -966,7 +966,7 @@ impl JitFuzzingSession {
         // assert!(self.reusable_stage.inp_ptr.is_none());
         self.reusable_stage.inp_ptr.take();
         if let Some(inst) = self.reusable_stage.instance.as_mut() {
-            inst.vmctx.reset_to_initial(&self.spec);
+            inst.vmctx.reset_to_initial_and_snapshot(&self.spec);
         }
 
         let start = Instant::now();
@@ -1087,7 +1087,7 @@ impl JitFuzzingSession {
         stats: &mut Stats,
     ) -> RunResult {
         if !self.run_from_snapshot {
-            self.reusable_stage.reset(&self.spec);
+            self.reusable_stage.reset();
             self.reusable_exec_history.clear();
         }
         self.run_reusable(input, fuzzing, stats)
