@@ -1,0 +1,25 @@
+diff --git a/crates/zune-ppm/src/decoder.rs b/crates/zune-ppm/src/decoder.rs
+index a169a882..8e808e94 100644
+--- a/crates/zune-ppm/src/decoder.rs
++++ b/crates/zune-ppm/src/decoder.rs
+@@ -538,8 +538,18 @@ where
+             ));
+         }
+         // okay check if the stream is large enough for the bit depth
+-        let size =
+-            self.width * self.height * self.colorspace.num_components() * self.bit_depth.size_of();
++        let pixels = self.width * self.height;
++        let bytes_per_pixel = self.colorspace.num_components() * self.bit_depth.size_of();
++        let size = pixels.saturating_mul(bytes_per_pixel);
++
++        // size is up to ((1<<14)**2 * 4 * 4) bytes (4GB) with default options.
++        // This results in a "Capacity overflow" panic on 32-bit platforms with
++        // the allocations below.
++        if size >= usize::MAX / 4 {
++            return Err(PPMDecodeErrors::GenericStatic(
++                "Image is too large to decode"
++            ));
++        }
+ 
+         return match self.bit_depth.bit_type() {
+             BitType::U8 => {

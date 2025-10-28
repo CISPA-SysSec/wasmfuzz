@@ -1,23 +1,17 @@
-commit 25ded295b22cbff30abc04cc466ba8fccbd704ff
-Author: Your Name <you@example.com>
-Date:   Mon Jul 28 14:28:21 2025 +0200
-
-    foo
-
 diff --git a/src/elf/mod.rs b/src/elf/mod.rs
-index 70c4914..a30ebb5 100644
+index 8fe49d9..5ee1a97 100644
 --- a/src/elf/mod.rs
 +++ b/src/elf/mod.rs
-@@ -363,7 +363,7 @@ if_sylvan! {
+@@ -399,7 +399,7 @@ if_sylvan! {
                      .chain(pltrelocs.iter())
                      .fold(0, |num, reloc| cmp::max(num, reloc.r_sym));
                  if max_reloc_sym != 0 {
 -                    num_syms = cmp::max(num_syms, max_reloc_sym + 1);
 +                    num_syms = cmp::max(num_syms, max_reloc_sym.saturating_add(1));
                  }
-                 dynsyms = Symtab::parse(bytes, dyn_info.symtab, num_syms, ctx)?;
+                 dynsyms = Symtab::parse_with_opts(bytes, dyn_info.symtab, num_syms, ctx, opts)?;
              }
-@@ -433,10 +433,10 @@ if_sylvan! {
+@@ -483,10 +483,10 @@ if_sylvan! {
                                                         buckets_num, min_chain, bloom_size)));
          }
          // Find the last bucket.
@@ -30,7 +24,7 @@ index 70c4914..a30ebb5 100644
              if max_chain < chain {
                  max_chain = chain;
              }
-@@ -445,7 +445,7 @@ if_sylvan! {
+@@ -495,7 +495,7 @@ if_sylvan! {
              return Ok(0);
          }
          // Find the last chain within the bucket.
@@ -40,15 +34,15 @@ index 70c4914..a30ebb5 100644
              let hash = bytes.pread_with::<u32>(chain_offset, ctx.le)?;
              max_chain += 1;
 diff --git a/src/pe/debug.rs b/src/pe/debug.rs
-index ecaade0..bce3cb8 100644
+index c7e673f..2bf3c87 100644
 --- a/src/pe/debug.rs
 +++ b/src/pe/debug.rs
-@@ -184,7 +184,7 @@ impl<'a> DebugData<'a> {
-                 })?;
+@@ -187,7 +187,7 @@ impl<'a> DebugData<'a> {
+             };
  
          // Ensure that the offset and size do not exceed the length of the bytes slice
--        if offset + dd.size as usize > bytes.len() {
-+        if offset.saturating_add(dd.size as usize) > bytes.len() {
-             return Err(error::Error::Malformed(format!(
-                 "ImageDebugDirectory offset {:#x} and size {:#x} exceeds the bounds of the bytes size {:#x}",
-                 offset,
+-        let available_size = if offset + dd.size as usize > bytes.len() {
++        let available_size = if offset.saturating_add(dd.size as usize) > bytes.len() {
+             let remaining_bytes = bytes.len().saturating_sub(offset);
+             Err(error::Error::Malformed(format!(
+                 "ImageDebugDirectory offset {:#x} and size {:#x} exceeds the bounds of the bytes size {:#x}. \

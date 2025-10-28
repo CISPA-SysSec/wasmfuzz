@@ -308,36 +308,39 @@ tag_manually(
 # TODO: investigate, are we running into stack overflows?
 tag_manually(
     "ruff-ruff_parse_simple.wasm",
-    "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9",
+    "01695513ce33f1f1615309323ba145c42f4720c1",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 tag_manually(
     "ruff-ruff_parse_idempotency.wasm",
-    "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9",
+    "01695513ce33f1f1615309323ba145c42f4720c1",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 tag_manually(
     "ruff-ruff_formatter_idempotency.wasm",
-    "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9",
+    "01695513ce33f1f1615309323ba145c42f4720c1",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 tag_manually(
     "ruff-ruff_fix_validity.wasm",
-    "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9",
+    "01695513ce33f1f1615309323ba145c42f4720c1",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 
-# TODO: gh issue link
-tag_manually(
-    "image-script_tga.wasm", "ceb71e59496a32dbe2a56599ff60d09cb0b8cb20", Tag.CRASHING
-)
-# TODO
+# mcu_prog panic was fixed upstream in zune-image
 tag_manually(
     "image-script_jpeg.wasm", "ceb71e59496a32dbe2a56599ff60d09cb0b8cb20", Tag.CRASHING
+)
+# https://github.com/image-rs/image-tiff/pull/305
+tag_manually(
+    "image-script_tiff.wasm",
+    "ceb71e59496a32dbe2a56599ff60d09cb0b8cb20",
+    Tag.CRASHING,
+    Tag.BUGGY_PROJECT,
 )
 
 # Note: wasmfuzz doesn't find after 48+ CPU hours
@@ -345,17 +348,23 @@ tag_manually(
 # TODO: triage
 tag_manually(
     "ruff-ruff_formatter_validity.wasm",
-    "5c537b6dbbb8c3cd9ff13869fb2817f81b615da9",
+    "01695513ce33f1f1615309323ba145c42f4720c1",
     Tag.CRASHING,
 )
 
-# wasmfuzz doesn't find after 48+ CPU hours
-# [STDOUT] thread '<unnamed>' panicked at /root/.rustup/toolchains/nightly-2024-12-11-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/num/f32.rs:1402:9:
-# [STDOUT] min > max, or either was NaN. min = inf, max = -inf
-# https://github.com/tirr-c/jxl-oxide/blob/45f76988a9ae70e66753fd1114a2ee6cfe963efd/crates/jxl-render/src/features/upsampling.rs#L107-L119
+
+# The native port of rustc-demangle is missing updates
+tag_manually(
+    "rustc-demangle-native_c.wasm",
+    "c5688cfec32d2bd00701836f12beb3560ee015b8",
+    Tag.CRASHING,
+    Tag.BUGGY_PROJECT,
+)
+
+# Bug benchmark: Re-introduce NaN issue https://github.com/tirr-c/jxl-oxide/pull/485
 tag_manually(
     "jxl-oxide-libfuzzer-decode.wasm",
-    "bfe5699ecffe68183fc9df733c7bf3246efb047c",
+    "e653b3cd48529509fbd6bd85bdb5379e5848b779",
     Tag.CRASHING,
 )
 
@@ -423,14 +432,13 @@ tag_manually(
 )
 # [STDOUT] thread '<unnamed>' panicked at /projects/comrak/repo/src/parser/mod.rs:3348:21:
 # [STDOUT] assertion failed: (sp.end.column - sp.start.column + 1 == x) || rem == 0
-tag_manually(
-    "comrak-fuzz_options.wasm", "36b06b8a9466e6109c9e162e18cabcd3ef8aead2", Tag.CRASHING
-)
-tag_manually(
-    "comrak-gfm_footnotes.wasm",
-    "36b06b8a9466e6109c9e162e18cabcd3ef8aead2",
-    Tag.CRASHING,
-)
+# => >https://github.com/kivikakk/comrak/issues/595
+for target in ["fuzz_options", "gfm_footnotes", "commonmark"]:
+    tag_manually(
+        f"comrak-{target}.wasm",
+        "36b06b8a9466e6109c9e162e18cabcd3ef8aead2",
+        Tag.CRASHING,
+    )
 # tag_manually("comrak-quadratic.wasm", "36b06b8a9466e6109c9e162e18cabcd3ef8aead2", Tag.CRASHING)
 # [STDOUT] thread '<unnamed>' panicked at /projects/toml-edit/repo/crates/toml_edit/src/parser/inline_table.rs:160:18:
 # [STDOUT] setting a value should set a prefix

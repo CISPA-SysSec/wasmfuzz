@@ -1,0 +1,56 @@
+diff --git a/crates/jxl-image/src/lib.rs b/crates/jxl-image/src/lib.rs
+index 2c4b978..c1880b4 100644
+--- a/crates/jxl-image/src/lib.rs
++++ b/crates/jxl-image/src/lib.rs
+@@ -453,7 +453,6 @@ impl BitDepth {
+     }
+ 
+     /// Parses the given Modular image sample to an `f32`.
+-    // Note: This function can return non-finite values.
+     #[inline]
+     pub fn parse_integer_sample(self, sample: i32) -> f32 {
+         match self {
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/mod.rs b/crates/jxl-oxide-tests/tests/fuzz_findings/mod.rs
+index bd18afc..a3267c8 100644
+--- a/crates/jxl-oxide-tests/tests/fuzz_findings/mod.rs
++++ b/crates/jxl-oxide-tests/tests/fuzz_findings/mod.rs
+@@ -86,5 +86,4 @@ test_by_include!(
+     ma_lookup_overflow,
+     hf_preset_out_of_range,
+     hf_varblock_across_group,
+-    upsampling_sum_not_finite,
+ );
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/upsampling_sum_not_finite.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/upsampling_sum_not_finite.fuzz
+deleted file mode 100644
+index c78e61d143b042be3d581a9e6c1c6b10b2bbeef5..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 51
+zcmey*WuZ_sK`w<!wD-rf|6B}wsr8I03|ybv85kHD7!(*fMVvW%LEzJ;Phd#~1^~4Y
+B5Rd=>
+
+diff --git a/crates/jxl-render/src/features/upsampling.rs b/crates/jxl-render/src/features/upsampling.rs
+index 519d837..823445b 100644
+--- a/crates/jxl-render/src/features/upsampling.rs
++++ b/crates/jxl-render/src/features/upsampling.rs
+@@ -117,14 +117,7 @@ fn upsample_inner<const K: usize, const NW: usize>(
+                     max = max.max(sample);
+                 }
+             }
+-
+-            grid_buf[y * frame_width + x] = if !min.is_finite() {
+-                // This happens if all samples are NaN. f32::clamp would panic
+-                // in this case.
+-                f32::NAN
+-            } else {
+-                sum.clamp(min, max)
+-            };
++            grid_buf[y * frame_width + x] = sum.clamp(min, max);
+         }
+     }
+ 
+-- 
+2.51.0
+
