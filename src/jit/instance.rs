@@ -50,15 +50,15 @@ impl ModuleInstance {
         // Safety: closure shouldn't and doesn't capture any Drops
         //         vmctx_ptr needs to be valid and ABI should match
         let res = unsafe { catch_traps(|| f(vmctx_ptr)) };
+        if res.is_err() {
+            self.vmctx.tainted = true;
+        }
         res.map_err(|info| match info.reason {
             Some(TrapReason::MemoryOutOfBounds) => {
-                self.vmctx.tainted = true;
                 TrapKind::Abort(crate::AbortCode::HeapOutOfBounds)
             }
-            Some(TrapReason::OutOfFuel) => {
-                self.vmctx.tainted = true;
-                TrapKind::OutOfFuel(None)
-            }
+            Some(TrapReason::OutOfFuel) => TrapKind::OutOfFuel(None),
+            Some(TrapReason::OutOfMemory) => TrapKind::OutOfMemory(None),
             None => {
                 let pc = info.pc;
                 let faulting_addr = info.faulting_addr;
@@ -69,7 +69,6 @@ impl ModuleInstance {
                     std::fs::write("/tmp/input.bin", buf).unwrap();
                     panic!("trapped at unknown pc {pc:#x} faulting_addr={faulting_addr:?}")
                 };
-                self.vmctx.tainted = true;
                 trap.clone()
             }
         })

@@ -10,7 +10,7 @@ use std::{
 use crate::{
     fuzzer::opts::{FlagBool, InstrumentationOpts},
     ir::ModuleSpec,
-    jit::{FeedbackOptions, JitFuzzingSession, Stats, TracingOptions},
+    jit::{FeedbackOptions, JitFuzzingSession, Stats, TracingOptions, module::TrapKind},
 };
 
 mod cmin;
@@ -55,6 +55,8 @@ pub(crate) enum Subcommand {
         print_stdout: FlagBool,
         #[clap(long, default_value = "false")]
         run_from_snapshot: FlagBool,
+        #[clap(long)]
+        input_size_limit: Option<usize>,
     },
     /// Check the system configuration and WebAssembly module for potential issues.
     Doctor {
@@ -235,6 +237,7 @@ pub(crate) fn main() {
             verbose_jit,
             print_stdout,
             run_from_snapshot,
+            input_size_limit,
         } => {
             let inputs = gather_inputs_paths(&None, &inputs, true);
             let mod_spec = parse_program(&program);
@@ -256,8 +259,17 @@ pub(crate) fn main() {
             }
             for input in inputs {
                 println!("Testcase: {input:?}");
-                let testcase = std::fs::read(input).expect("couldn't read input");
-                assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
+                let testcase = std::fs::read(&input).expect("couldn't read input");
+                let size = testcase.len();
+                assert!(size <= crate::TEST_CASE_SIZE_LIMIT);
+                if let Some(size_limit) = input_size_limit
+                    && size > size_limit
+                {
+                    println!(
+                        "Testcase: {input:?}: skipped due to size limit ({size} > {size_limit}"
+                    );
+                    continue;
+                }
                 let res = sess.run_tracing(&testcase, &mut stats).err().clone();
 
                 if *print_stdout {
@@ -381,7 +393,7 @@ pub(crate) fn main() {
             let mut csv_out = std::fs::File::create(csv_out).unwrap();
             writeln!(
                 csv_out,
-                "module,input,size,crashed,exec_us,edge_cov,total_edge_cov"
+                "module,input,size,crashed,timeout,oom,exec_us,edge_cov,total_edge_cov"
             )
             .unwrap();
             for input_path in &input_paths {
@@ -391,17 +403,21 @@ pub(crate) fn main() {
                 let res = sess.run(&input, &mut stats);
                 let exec_us = start.elapsed().as_micros();
                 let is_crash = res.is_crash();
+                let is_timeout = matches!(res.trap_kind, Some(TrapKind::OutOfFuel(_)));
+                let is_oom = matches!(res.trap_kind, Some(TrapKind::OutOfMemory(_)));
                 let edge_cov = sess.get_edge_cov().unwrap();
                 if is_crash {
                     eprintln!("crash: {res:?} ({input_path:?})");
                 }
                 writeln!(
                     csv_out,
-                    "{},{},{},{},{},{},",
+                    "{},{},{},{},{},{},{},{},",
                     mod_spec.filename,
                     input_path.file_stem().unwrap().to_string_lossy(),
                     input.len(),
                     is_crash as u8,
+                    is_timeout as u8,
+                    is_oom as u8,
                     exec_us,
                     edge_cov
                 )
@@ -418,7 +434,7 @@ pub(crate) fn main() {
             let total_edge_cov = sess.get_edge_cov().unwrap();
             writeln!(
                 csv_out,
-                "{},,,,{},,{}",
+                "{},,,,,,{},,{}",
                 mod_spec.filename, exec_us, total_edge_cov
             )
             .unwrap();

@@ -126,6 +126,7 @@ fn setup_handler(signal: libc::c_int, trap_handler: HandlerFn) {
 pub(crate) enum TrapReason {
     MemoryOutOfBounds,
     OutOfFuel,
+    OutOfMemory,
 }
 
 thread_local! {

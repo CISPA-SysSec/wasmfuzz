@@ -21,7 +21,7 @@ pub(crate) unsafe extern "C" fn builtin_memory_grow(delta: u32, vmctx: *mut VMCo
             return u32::MAX;
         }
         if vmctx.heap_pages.saturating_add(delta) > vmctx.heap_pages_limit_soft {
-            raise_trap(TrapReason::OutOfFuel);
+            raise_trap(TrapReason::OutOfMemory);
         }
         vmctx.builtin_consume_fuel(delta as u64);
         let old = vmctx.heap_pages;

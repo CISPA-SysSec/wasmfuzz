@@ -21,6 +21,7 @@ pub(crate) enum TrapKind {
     Abort(AbortCode),
     SwarmShortCircuit(Option<Location>),
     OutOfFuel(Option<Location>),
+    OutOfMemory(Option<Location>),
     ExitTestcase(Option<Location>),
 }
 
@@ -33,7 +34,10 @@ impl TrapKind {
         let mut x = self.clone();
         match &mut x {
             Self::Abort(_) => {}
-            Self::SwarmShortCircuit(loc) | Self::ExitTestcase(loc) | Self::OutOfFuel(loc) => {
+            Self::SwarmShortCircuit(loc)
+            | Self::ExitTestcase(loc)
+            | Self::OutOfFuel(loc)
+            | Self::OutOfMemory(loc) => {
                 *loc = None;
             }
         }
@@ -43,7 +47,10 @@ impl TrapKind {
     pub(crate) fn loc(&self) -> Option<Location> {
         match self {
             Self::Abort(_) => None,
-            Self::SwarmShortCircuit(loc) | Self::ExitTestcase(loc) | Self::OutOfFuel(loc) => *loc,
+            Self::SwarmShortCircuit(loc)
+            | Self::ExitTestcase(loc)
+            | Self::OutOfFuel(loc)
+            | Self::OutOfMemory(loc) => *loc,
         }
     }
 
@@ -57,6 +64,7 @@ impl TrapKind {
             Self::Abort(_) => "abort/unk".red(),
             Self::SwarmShortCircuit(_) => "swarm-short-circuit".green(),
             Self::OutOfFuel(_) => "out-of-fuel".cyan(),
+            Self::OutOfMemory(_) => "out-of-memory".cyan(),
             Self::ExitTestcase(_) => "exit-testcase".cyan(),
         };
         self.loc().map_or_else(
@@ -73,7 +81,10 @@ impl TrapKind {
     pub(crate) fn is_short_circuit(&self) -> bool {
         matches!(
             self,
-            Self::OutOfFuel(_) | Self::ExitTestcase(_) | Self::SwarmShortCircuit(_)
+            Self::OutOfFuel(_)
+                | Self::OutOfMemory(_)
+                | Self::ExitTestcase(_)
+                | Self::SwarmShortCircuit(_)
         )
     }
 
