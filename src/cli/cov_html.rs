@@ -13,8 +13,7 @@ use symbolic::debuginfo::{Object, ObjectError};
 use syntect::highlighting::ThemeSet;
 use syntect::html::{ClassStyle, css_for_theme_with_class_style};
 use syntect::parsing::{
-    BasicScopeStackOp, ParseState, SCOPE_REPO, Scope, ScopeRepository, ScopeStack, SyntaxReference,
-    SyntaxSet,
+    BasicScopeStackOp, ParseState, Scope, ScopeRepository, ScopeStack, SyntaxReference, SyntaxSet,
 };
 use syntect::util::LinesWithEndings;
 
@@ -440,7 +439,8 @@ impl<'a> ClassedHTMLLineGenerator<'a> {
         let ops = self.parse_state.parse_line(line, self.syntax_set)?;
 
         // adapted from `line_tokens_to_classed_spans`
-        let repo = SCOPE_REPO.lock().unwrap();
+        #[expect(deprecated)]
+        let repo = syntect::parsing::SCOPE_REPO.lock().unwrap();
         let mut s = String::with_capacity(line.len() + ops.len() * 8); // a guess
         let mut cur_index = 0;
 

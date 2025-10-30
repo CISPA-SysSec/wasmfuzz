@@ -156,8 +156,8 @@ impl VMContext {
             self.heap_alloc.as_mut_slice()[*offset..][..data.len()].copy_from_slice(data);
             self.heap_alloc.snapshot_as_mut_slice()[*offset..][..data.len()].copy_from_slice(data);
         }
-        #[cfg(false)] // NB: redundant
-        self.heap_alloc.restore();
+        // NB: redundant
+        // self.heap_alloc.restore();
 
         self.heap_snapshot_is_initial = true;
         self.reset();
