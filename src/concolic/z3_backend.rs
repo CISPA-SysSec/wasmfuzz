@@ -4,55 +4,53 @@ use std::sync::Arc;
 use bitvec::slice::BitSlice;
 use z3::{
     SatResult, Solver, Symbol,
-    ast::{Ast, BV, Bool, Dynamic, Float},
+    ast::{BV, Bool, Dynamic, Float, RoundingMode},
 };
 
 use crate::{concolic::MemoryAccessKind, ir::ModuleSpec};
 
 use super::{BinaryOp, ConcolicEvent, SolverBackendError, SymVal, SymValRef, Symvals, UnaryOp};
 
-trait DynamicHelper<'ctx> {
-    fn bv(&self) -> BV<'ctx>;
-    fn fp(&self) -> Float<'ctx>;
+trait DynamicHelper {
+    fn bv(&self) -> BV;
+    fn fp(&self) -> Float;
 }
 
-impl<'ctx> DynamicHelper<'ctx> for Dynamic<'ctx> {
-    fn bv(&self) -> BV<'ctx> {
+impl DynamicHelper for Dynamic {
+    fn bv(&self) -> BV {
         self.as_bv().unwrap()
     }
 
-    fn fp(&self) -> Float<'ctx> {
+    fn fp(&self) -> Float {
         self.as_float().unwrap()
     }
 }
 
-trait BoolHelper<'ctx> {
-    fn zero_ext(&self, w: u32) -> BV<'ctx>;
+trait BoolHelper {
+    fn zero_ext(&self, w: u32) -> BV;
 }
-impl<'ctx> BoolHelper<'ctx> for Bool<'ctx> {
-    fn zero_ext(&self, w: u32) -> BV<'ctx> {
+impl BoolHelper for Bool {
+    fn zero_ext(&self, w: u32) -> BV {
         let sz = w + 1;
-        let zero = BV::from_u64(self.get_ctx(), 0, sz);
-        let one = BV::from_u64(self.get_ctx(), 1, sz);
+        let zero = BV::from_u64(0, sz);
+        let one = BV::from_u64(1, sz);
         self.ite(&one, &zero)
     }
 }
 
-pub(crate) struct SolverInstance<'ctx> {
-    ctx: &'ctx z3::Context,
-    solver: z3::Solver<'ctx>,
-    vals: HashMap<SymValRef, Dynamic<'ctx>>,
+pub(crate) struct SolverInstance {
+    solver: z3::Solver,
+    vals: HashMap<SymValRef, Dynamic>,
     vals_err: HashMap<SymValRef, SolverBackendError>,
     seen: HashSet<SymValRef>,
-    pub(crate) inp_vals: HashMap<u16, BV<'ctx>>,
+    pub(crate) inp_vals: HashMap<u16, BV>,
     spec: Option<Arc<ModuleSpec>>,
 }
 
-impl<'ctx> SolverInstance<'ctx> {
-    pub(crate) fn new(spec: Option<Arc<ModuleSpec>>, ctx: &'ctx z3::Context) -> Self {
-        let solver = Solver::new(ctx);
+impl SolverInstance {
+    pub(crate) fn new(spec: Option<Arc<ModuleSpec>>) -> Self {
+        let solver = Solver::new();
         SolverInstance {
-            ctx,
             solver,
             vals: HashMap::default(),
             vals_err: HashMap::default(),
@@ -62,21 +60,21 @@ impl<'ctx> SolverInstance<'ctx> {
         }
     }
 
-    fn get_inp_bv(&mut self, i: u16) -> BV<'ctx> {
+    fn get_inp_bv(&mut self, i: u16) -> BV {
         self.inp_vals
             .entry(i)
             .or_insert_with(|| {
                 let symbol = format!("inp-{}", i);
-                BV::new_const(&self.ctx, Symbol::String(symbol), 8)
+                BV::new_const(Symbol::String(symbol), 8)
             })
             .clone()
     }
 
-    fn get_symval<'a>(
-        &'a mut self,
+    fn get_symval(
+        &mut self,
         symref: SymValRef,
         context: &Symvals,
-    ) -> Result<Dynamic<'ctx>, SolverBackendError> {
+    ) -> Result<Dynamic, SolverBackendError> {
         if let Some(el) = self.vals.get(&symref) {
             return Ok(el.clone());
         }
@@ -106,16 +104,16 @@ impl<'ctx> SolverInstance<'ctx> {
         &mut self,
         symref: SymValRef,
         context: &Symvals,
-    ) -> Result<Dynamic<'ctx>, SolverBackendError> {
+    ) -> Result<Dynamic, SolverBackendError> {
         let sym = context.fetch(symref);
         Ok(match sym {
             SymVal::Concrete => unreachable!(),
             SymVal::InputByte(index) => self.get_inp_bv(index).into(),
-            SymVal::ConstI8(v) => BV::from_u64(&self.ctx, v as _, 8).into(),
-            SymVal::ConstI32(v) => BV::from_u64(&self.ctx, v as _, 32).into(),
-            SymVal::ConstI64(v) => BV::from_u64(&self.ctx, v, 64).into(),
-            SymVal::ConstF32(v) => Float::from_f32(&self.ctx, *v).into(),
-            SymVal::ConstF64(v) => Float::from_f64(&self.ctx, *v).into(),
+            SymVal::ConstI8(v) => BV::from_u64(v as _, 8).into(),
+            SymVal::ConstI32(v) => BV::from_u64(v as _, 32).into(),
+            SymVal::ConstI64(v) => BV::from_u64(v, 64).into(),
+            SymVal::ConstF32(v) => Float::from_f32(*v).into(),
+            SymVal::ConstF64(v) => Float::from_f64(*v).into(),
             SymVal::Unary(op, bv) => {
                 let bv = self.get_symval(bv, context)?;
                 self.build_unary(op, bv)?
@@ -129,8 +127,8 @@ impl<'ctx> SolverInstance<'ctx> {
                 let cond = self.get_symval(condition, context)?.bv();
                 let a = self.get_symval(a, context)?;
                 let b = self.get_symval(b, context)?;
-                let zero = BV::from_u64(&self.ctx, 0, 32);
-                let cond = cond._eq(&zero).not();
+                let zero = BV::from_u64(0, 32);
+                let cond = cond.eq(&zero).not();
                 cond.ite(&a, &b)
             }
             SymVal::ExtractByte {
@@ -173,6 +171,7 @@ impl<'ctx> SolverInstance<'ctx> {
                     res.into()
                 }
             }
+            #[expect(unused)]
             SymVal::Load {
                 addr32,
                 addr32_concrete,
@@ -183,11 +182,7 @@ impl<'ctx> SolverInstance<'ctx> {
         })
     }
 
-    fn build_unary(
-        &self,
-        op: UnaryOp,
-        val: Dynamic<'ctx>,
-    ) -> Result<Dynamic<'ctx>, SolverBackendError> {
+    fn build_unary(&self, op: UnaryOp, val: Dynamic) -> Result<Dynamic, SolverBackendError> {
         match op {
             UnaryOp::Clz
             | UnaryOp::Ctz
@@ -241,35 +236,35 @@ impl<'ctx> SolverInstance<'ctx> {
         }
     }
 
-    fn build_unary_bv(&self, op: UnaryOp, val: BV<'ctx>) -> Result<BV<'ctx>, SolverBackendError> {
+    fn build_unary_bv(&self, op: UnaryOp, val: BV) -> Result<BV, SolverBackendError> {
         let width = val.get_size();
         Ok(match op {
             UnaryOp::Clz | UnaryOp::Ctz => {
-                let zero = BV::from_u64(&self.ctx, 0, width);
-                let one = BV::from_u64(&self.ctx, 1, width);
-                let one_1 = BV::from_u64(&self.ctx, 1, 1);
+                let zero = BV::from_u64(0, width);
+                let one = BV::from_u64(1, width);
+                let one_1 = BV::from_u64(1, 1);
                 let mut cnt = zero.clone();
-                let mut seen = Bool::from_bool(&self.ctx, false);
+                let mut seen = Bool::from_bool(false);
                 for i in 0..width {
                     let i = if matches!(op, UnaryOp::Clz) {
                         width - i - 1
                     } else {
                         i
                     };
-                    seen = seen | &val.extract(i, i)._eq(&one_1);
+                    seen |= &val.extract(i, i).eq(&one_1);
                     cnt += &seen.ite(&zero, &one);
                 }
                 cnt
             }
             UnaryOp::Popcnt => {
-                let mut cnt = BV::from_u64(&self.ctx, 0, width);
+                let mut cnt = BV::from_u64(0, width);
                 for i in 0..width {
                     let bit = val.extract(i, i);
                     cnt += &bit.zero_ext(width - 1);
                 }
                 cnt
             }
-            UnaryOp::Eqz => val._eq(&BV::from_u64(&self.ctx, 0, width)).zero_ext(31),
+            UnaryOp::Eqz => val.eq(BV::from_u64(0, width)).zero_ext(31),
             UnaryOp::I32Extend8S => val.extract(7, 0).sign_ext(24),
             UnaryOp::I32Extend16S => val.extract(15, 0).sign_ext(16),
             UnaryOp::I32WrapI64 => val.extract(31, 0),
@@ -282,13 +277,8 @@ impl<'ctx> SolverInstance<'ctx> {
         })
     }
 
-    fn build_unary_fp(
-        &self,
-        op: UnaryOp,
-        val: Dynamic<'ctx>,
-    ) -> Result<Dynamic<'ctx>, SolverBackendError> {
-        let fp_todo = Err(SolverBackendError::UnsupportedFloatingpointOperation);
-        return fp_todo;
+    fn build_unary_fp(&self, _op: UnaryOp, _val: Dynamic) -> Result<Dynamic, SolverBackendError> {
+        Err(SolverBackendError::UnsupportedFloatingpointOperation)
         /*
         Ok(match op {
             // TODO: is this the proper encoding?
@@ -341,9 +331,9 @@ impl<'ctx> SolverInstance<'ctx> {
     fn build_binary(
         &self,
         op: BinaryOp,
-        a: Dynamic<'ctx>,
-        b: Dynamic<'ctx>,
-    ) -> Result<Dynamic<'ctx>, SolverBackendError> {
+        a: Dynamic,
+        b: Dynamic,
+    ) -> Result<Dynamic, SolverBackendError> {
         match op {
             BinaryOp::Add
             | BinaryOp::Sub
@@ -386,20 +376,9 @@ impl<'ctx> SolverInstance<'ctx> {
         }
     }
 
-    fn build_binary_bv(
-        &self,
-        op: BinaryOp,
-        a: BV<'ctx>,
-        b: BV<'ctx>,
-    ) -> Result<BV<'ctx>, SolverBackendError> {
+    fn build_binary_bv(&self, op: BinaryOp, a: BV, b: BV) -> Result<BV, SolverBackendError> {
         assert_eq!(a.get_size(), b.get_size());
-        let shift_amount = || {
-            b.bvand(&BV::from_u64(
-                &self.ctx,
-                a.get_size() as u64 - 1,
-                b.get_size(),
-            ))
-        };
+        let shift_amount = || b.bvand(BV::from_u64(a.get_size() as u64 - 1, b.get_size()));
         Ok(match op {
             BinaryOp::Add => a.bvadd(&b),
             BinaryOp::Sub => a.bvsub(&b),
@@ -411,13 +390,13 @@ impl<'ctx> SolverInstance<'ctx> {
             BinaryOp::And => a.bvand(&b),
             BinaryOp::Or => a.bvor(&b),
             BinaryOp::Xor => a.bvxor(&b),
-            BinaryOp::Shl => a.bvshl(&shift_amount()),
-            BinaryOp::ShrS => a.bvashr(&shift_amount()),
-            BinaryOp::ShrU => a.bvlshr(&shift_amount()),
-            BinaryOp::Rotl => a.bvrotl(&shift_amount()),
-            BinaryOp::Rotr => a.bvrotr(&shift_amount()),
-            BinaryOp::Eq => a._eq(&b).zero_ext(31),
-            BinaryOp::Ne => a._eq(&b).not().zero_ext(31),
+            BinaryOp::Shl => a.bvshl(shift_amount()),
+            BinaryOp::ShrS => a.bvashr(shift_amount()),
+            BinaryOp::ShrU => a.bvlshr(shift_amount()),
+            BinaryOp::Rotl => a.bvrotl(shift_amount()),
+            BinaryOp::Rotr => a.bvrotr(shift_amount()),
+            BinaryOp::Eq => a.eq(&b).zero_ext(31),
+            BinaryOp::Ne => a.eq(&b).not().zero_ext(31),
             BinaryOp::LtU => a.bvult(&b).zero_ext(31),
             BinaryOp::LtS => a.bvslt(&b).zero_ext(31),
             BinaryOp::GtU => a.bvugt(&b).zero_ext(31),
@@ -433,24 +412,24 @@ impl<'ctx> SolverInstance<'ctx> {
     fn build_binary_fp(
         &self,
         op: BinaryOp,
-        a: Float<'ctx>,
-        b: Float<'ctx>,
-    ) -> Result<Dynamic<'ctx>, SolverBackendError> {
+        a: Float,
+        b: Float,
+    ) -> Result<Dynamic, SolverBackendError> {
         let fp_todo = Err(SolverBackendError::UnsupportedFloatingpointOperation);
         // TODO: i think this would be correct:
         // Z3_mk_fpa_round_nearest_ties_to_even
-        let rm = Float::round_towards_zero(&self.ctx);
+        let rm = RoundingMode::round_towards_zero();
         Ok(match op {
-            BinaryOp::FEq => a._eq(&b).zero_ext(31).into(),
-            BinaryOp::FNe => a._eq(&b).not().zero_ext(31).into(),
+            BinaryOp::FEq => a.eq(&b).zero_ext(31).into(),
+            BinaryOp::FNe => a.eq(&b).not().zero_ext(31).into(),
             BinaryOp::FLt => a.lt(&b).zero_ext(31).into(),
             BinaryOp::FGt => a.gt(&b).zero_ext(31).into(),
             BinaryOp::FLe => a.le(&b).zero_ext(31).into(),
             BinaryOp::FGe => a.ge(&b).zero_ext(31).into(),
-            BinaryOp::FAdd => a.add(&b, &rm).into(),
-            BinaryOp::FSub => a.sub(&b, &rm).into(),
-            BinaryOp::FMul => a.mul(&b, &rm).into(),
-            BinaryOp::FDiv => a.div(&b, &rm).into(),
+            BinaryOp::FAdd => a.add_with_rounding_mode(&b, &rm).into(),
+            BinaryOp::FSub => a.sub_with_rounding_mode(&b, &rm).into(),
+            BinaryOp::FMul => a.mul_with_rounding_mode(&b, &rm).into(),
+            BinaryOp::FDiv => a.div_with_rounding_mode(&b, &rm).into(),
             // TODO: min/max for z3.rs
             BinaryOp::FMin | // => a.min(&b).into(),
             BinaryOp::FMax | // => a.max(&b).into(),
@@ -466,31 +445,31 @@ impl<'ctx> SolverInstance<'ctx> {
         &mut self,
         event: &ConcolicEvent,
         context: &Symvals,
-    ) -> Result<Bool<'ctx>, SolverBackendError> {
+    ) -> Result<Bool, SolverBackendError> {
         Ok(match event {
             ConcolicEvent::PathConstraint {
                 condition, taken, ..
             } => {
                 let cond = self.get_symval(*condition, context)?.bv();
                 if *taken {
-                    cond._eq(&BV::from_u64(&self.ctx, 0, 32)).not()
+                    cond.eq(BV::from_u64(0, 32)).not()
                 } else {
-                    cond._eq(&BV::from_u64(&self.ctx, 0, 32))
+                    cond.eq(BV::from_u64(0, 32))
                 }
             }
             ConcolicEvent::MemoryConstraint { address, sym, .. } => {
-                let addr = BV::from_u64(&self.ctx, *address as _, 32);
-                self.get_symval(*sym, context)?.bv()._eq(&addr)
+                let addr = BV::from_u64(*address as _, 32);
+                self.get_symval(*sym, context)?.bv().eq(&addr)
             }
             ConcolicEvent::TryAlternative { .. } => todo!(),
             ConcolicEvent::TrySolveMemcmp { pairs, .. } => {
-                let _true = Bool::from_bool(&self.ctx, true);
+                let _true = Bool::from_bool(true);
                 pairs
                     .iter()
                     .map(|(a, b)| {
                         let a = self.get_symval(*a, context)?.bv();
                         let b = self.get_symval(*b, context)?.bv();
-                        Ok(a._eq(&b))
+                        Ok(a.eq(&b))
                     })
                     .try_fold(_true, |a, b| Ok(a & (&b?)))?
             }
@@ -500,26 +479,26 @@ impl<'ctx> SolverInstance<'ctx> {
                 ignorecase,
                 ..
             } => {
-                let _true = Bool::from_bool(&self.ctx, true);
+                let _true = Bool::from_bool(true);
                 let symvals = symvals
                     .iter()
                     .map(|v| self.get_symval(*v, context).map(|x| x.bv()))
                     .collect::<Result<Vec<_>, _>>()?;
-                let upper_a = BV::from_u64(&self.ctx, b'A' as _, 8);
-                let upper_z = BV::from_u64(&self.ctx, b'Z' as _, 8);
-                let case_bit = BV::from_u64(&self.ctx, 0x20, 8);
+                let upper_a = BV::from_u64(b'A' as _, 8);
+                let upper_z = BV::from_u64(b'Z' as _, 8);
+                let case_bit = BV::from_u64(0x20, 8);
                 symvals
                     .iter()
                     .zip(reference)
                     .try_fold(_true, |acc, (sym, &ref_)| {
-                        let ref_ = BV::from_u64(&self.ctx, ref_ as _, 8);
-                        let lower = |x: &BV<'ctx>| {
+                        let ref_ = BV::from_u64(ref_ as _, 8);
+                        let lower = |x: &BV| {
                             (x.bvuge(&upper_a) & x.bvule(&upper_z)).ite(&(x | case_bit.clone()), x)
                         };
                         let res = if *ignorecase {
-                            lower(sym)._eq(&lower(&ref_))
+                            lower(sym).eq(lower(&ref_))
                         } else {
-                            sym._eq(&ref_)
+                            sym.eq(&ref_)
                         };
                         Ok(acc & res)
                     })?
@@ -532,6 +511,7 @@ impl<'ctx> SolverInstance<'ctx> {
         event: &ConcolicEvent,
         context: &Symvals,
     ) -> Result<bool, SolverBackendError> {
+        self.z3_set_timeout();
         let start = std::time::Instant::now();
         let constraint = self.event_as_constraint(event, context)?;
         // TODO(refactor): move to event_as_constraint?
@@ -558,6 +538,7 @@ impl<'ctx> SolverInstance<'ctx> {
     }
 
     pub(crate) fn apply_model(&self, input: &mut [u8]) {
+        self.z3_set_timeout();
         // TODO: apply only used inp_vals?
         let model = self.solver.get_model().unwrap();
         for (i, bv) in &self.inp_vals {
@@ -572,9 +553,9 @@ impl<'ctx> SolverInstance<'ctx> {
         let mut hints = Vec::new();
         for i in mask.iter_ones() {
             let hint = input[i];
-            let hint = BV::from_u64(&self.ctx, hint as _, 8);
+            let hint = BV::from_u64(hint as _, 8);
             let bv = self.get_inp_bv(i as u16);
-            hints.push(hint._eq(&bv));
+            hints.push(hint.eq(&bv));
         }
         self.solver.check_assumptions(&hints);
     }
@@ -586,6 +567,7 @@ impl<'ctx> SolverInstance<'ctx> {
         context: &Symvals,
         try_solve: bool,
     ) -> Result<(), SolverBackendError> {
+        self.z3_set_timeout();
         match event {
             ConcolicEvent::TryAlternative { .. }
             | ConcolicEvent::TrySolveMemcmp { .. }
@@ -610,10 +592,8 @@ impl<'ctx> SolverInstance<'ctx> {
             if start.elapsed().as_secs_f32() > 0.5 {
                 println!("\n^ slow!");
             }
-        } else {
-            if cfg!(not(feature = "concolic_debug_verify")) {
-                return Ok(());
-            }
+        } else if cfg!(not(feature = "concolic_debug_verify")) {
+            return Ok(());
         }
 
         if res == SatResult::Unknown {
@@ -621,8 +601,8 @@ impl<'ctx> SolverInstance<'ctx> {
             let mut hints = Vec::new();
             for (i, bv) in &self.inp_vals {
                 let hint = input[*i as usize];
-                let hint = BV::from_u64(&self.ctx, hint as u64, 8);
-                hints.push(hint._eq(bv));
+                let hint = BV::from_u64(hint as u64, 8);
+                hints.push(hint.eq(bv));
             }
             if try_solve {
                 println!("solving with assert and hints   ...");
@@ -657,8 +637,8 @@ impl<'ctx> SolverInstance<'ctx> {
         let mut assumptions = Vec::new();
         for (i, bv) in &self.inp_vals {
             let hint = input[*i as usize];
-            let hint = BV::from_u64(&self.ctx, hint as _, 8);
-            assumptions.push(hint._eq(bv));
+            let hint = BV::from_u64(hint as _, 8);
+            assumptions.push(hint.eq(bv));
         }
         let res = self.solver.check();
         assert_eq!(res, SatResult::Sat);
@@ -674,5 +654,9 @@ impl<'ctx> SolverInstance<'ctx> {
         } else {
             Err(SolverBackendError::UnspecifiedError)
         }
+    }
+
+    fn z3_set_timeout(&self) {
+        z3::Context::thread_local().update_param_value("timeout", "1000");
     }
 }

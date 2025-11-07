@@ -28,7 +28,7 @@ impl<'ctx> Value<'ctx> {
         }
     }
 
-    fn into_dynamic(&self) -> Dynamic<'ctx> {
+    fn as_dynamic(&self) -> Dynamic<'ctx> {
         match self {
             Value::Bool(b) => b.into_dynamic(),
             Value::BV8(bv) => bv.into_dynamic(),
@@ -40,7 +40,7 @@ impl<'ctx> Value<'ctx> {
 
 impl<'ctx> From<Value<'ctx>> for Dynamic<'ctx> {
     fn from(val: Value<'ctx>) -> Self {
-        val.into_dynamic()
+        val.as_dynamic()
     }
 }
 
@@ -212,7 +212,7 @@ impl<'ctx> SolverInstance<'ctx> {
                     Value::BV32(v) => v._neq(0),
                     Value::BV64(v) => v._neq(0),
                 };
-                cond.ite(a.into_dynamic(), b.into_dynamic()).into()
+                cond.ite(a.as_dynamic(), b.as_dynamic()).into()
             }
             SymVal::ExtractByte {
                 kind: _,

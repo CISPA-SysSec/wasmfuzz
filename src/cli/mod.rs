@@ -853,11 +853,10 @@ pub(crate) fn main() {
             }
 
             for (file_idx, file) in res.files.iter().enumerate() {
-                if let Some(file_filter) = &file_filter {
-                    if !file.contains(file_filter) {
+                if let Some(file_filter) = &file_filter
+                    && !file.contains(file_filter) {
                         continue;
                     }
-                }
                 let mut blame_lines = res
                     .map
                     .iter()

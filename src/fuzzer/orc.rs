@@ -363,12 +363,11 @@ impl Orchestrator {
             }
             // saves all inputs
             let res = self.add_corpus(input);
-            if let Some(res) = res {
-                if res.is_crash() {
+            if let Some(res) = res
+                && res.is_crash() {
                     eprintln!("load_corpus with crashing input! {res:?}");
                     return Err(());
                 }
-            }
         }
         if !inputs.is_empty() {
             let edges = self.codecov_sess.get_edge_cov().unwrap_or(0);
@@ -504,11 +503,10 @@ impl Orchestrator {
         if extra_musts_and_avoids {
             // TODO: evaluate this
             if matches!(self.opts.experiment, Some(Experiment::SwarmFocusEdge)) {
-                if let Some(target_edge) = target_edge {
-                    if !self.init_edges.contains(&target_edge) && self.rng.random_ratio(5, 10) {
+                if let Some(target_edge) = target_edge
+                    && !self.init_edges.contains(&target_edge) && self.rng.random_ratio(5, 10) {
                         swarm.must_include_edges.insert(target_edge);
                     }
-                }
                 if let Some(target_bb) = target_bb {
                     swarm.must_include_bbs.insert(target_bb);
                 }

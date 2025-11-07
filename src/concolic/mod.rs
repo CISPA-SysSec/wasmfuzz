@@ -29,6 +29,7 @@ pub(crate) mod z3_backend;
 #[cfg(feature = "concolic_z3")]
 pub(crate) use z3_backend::SolverInstance as Z3Solver;
 
+#[allow(unused)]
 pub(crate) enum SolverKind {
     Z3,
     Bitwuzla,
@@ -39,9 +40,10 @@ pub(crate) enum SolverKind {
 // Note: There doesn't seem to be a better way to avoid "unused 'ctx parameter"
 //       warnings for builds without concolic support..
 #[non_exhaustive]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ConcolicSolver<'ctx> {
     #[cfg(feature = "concolic_z3")]
-    Z3(Z3Solver<'ctx>),
+    Z3(Z3Solver),
     #[cfg(feature = "concolic_bitwuzla")]
     Bitwuzla(BitwuzlaSolver),
     #[cfg(feature = "concolic")]
@@ -112,9 +114,6 @@ impl ConcolicSolver<'_> {
 }
 
 pub(crate) struct ConcolicProvider {
-    #[cfg(feature = "concolic_z3")]
-    z3_ctx: z3::Context,
-
     #[cfg(feature = "concolic")]
     smtlib_storage: smtlib::Storage,
 
@@ -127,15 +126,7 @@ impl ConcolicProvider {
     }
 
     pub(crate) fn new(spec: Option<Arc<ModuleSpec>>) -> Self {
-        #[cfg(feature = "concolic_z3")]
-        let z3_ctx = {
-            let mut cfg = z3::Config::new();
-            cfg.set_timeout_msec(1_000);
-            z3::Context::new(&cfg)
-        };
         Self {
-            #[cfg(feature = "concolic_z3")]
-            z3_ctx,
             #[cfg(feature = "concolic")]
             smtlib_storage: smtlib::Storage::new(),
             spec,
@@ -162,10 +153,7 @@ impl ConcolicProvider {
                 self.spec.clone(),
             ))),
             #[cfg(feature = "concolic_z3")]
-            Some(SolverKind::Z3) => Some(ConcolicSolver::Z3(Z3Solver::new(
-                self.spec.clone(),
-                &self.z3_ctx,
-            ))),
+            Some(SolverKind::Z3) => Some(ConcolicSolver::Z3(Z3Solver::new(self.spec.clone()))),
             #[cfg(feature = "concolic")]
             Some(SolverKind::SmtlibCVC5) => Some(ConcolicSolver::Smtlib(SmtlibSolver::new(
                 self.spec.clone(),
@@ -609,6 +597,7 @@ impl MemoryLog {
 
 #[derive(Clone, Debug)]
 enum MemoryLogEntry {
+    #[expect(unused)]
     Write {
         addr32: SymValRef,
         addr32_concrete: u32,
@@ -685,11 +674,10 @@ impl ConcolicContext {
                     kind: combine_kind,
                     vals,
                 } = self.fetch(val)
+                    && extract_kind == combine_kind
                 {
-                    if extract_kind == combine_kind {
-                        dbg!();
-                        sym_val = self.fetch(vals[byte_index]);
-                    }
+                    dbg!();
+                    sym_val = self.fetch(vals[byte_index]);
                 }
             }
             SymVal::Binary(BinaryOp::And, a, b) => match (self.fetch(a), self.fetch(b)) {
@@ -840,22 +828,20 @@ impl ConcolicContext {
             val: range_val,
             byte_index: 0,
         } = self.fetch(vals[0])
+            && range_kind == kind
+            && range_kind.access_width_bytes() == range_kind.value_width_bytes()
+            && vals.iter().enumerate().all(|(i, x)| {
+                matches!(
+                    self.fetch(*x),
+                    SymVal::ExtractByte {
+                        kind: byte_kind,
+                        val: byte_val,
+                        byte_index: byte_i
+                    } if range_kind == byte_kind && range_val == byte_val && i == byte_i
+                )
+            })
         {
-            if range_kind == kind
-                && range_kind.access_width_bytes() == range_kind.value_width_bytes()
-                && vals.iter().enumerate().all(|(i, x)| {
-                    matches!(
-                        self.fetch(*x),
-                        SymVal::ExtractByte {
-                            kind: byte_kind,
-                            val: byte_val,
-                            byte_index: byte_i
-                        } if range_kind == byte_kind && range_val == byte_val && i == byte_i
-                    )
-                })
-            {
-                return range_val;
-            }
+            return range_val;
         }
 
         assert_eq!(vals.len(), kind.access_width_bytes());
@@ -899,11 +885,10 @@ impl ConcolicContext {
                     kind: comb_kind,
                     vals,
                 } = self.fetch(value)
+                    && comb_kind == kind
                 {
-                    if comb_kind == kind {
-                        self.heap[addr as usize + i] = vals[i];
-                        continue;
-                    }
+                    self.heap[addr as usize + i] = vals[i];
+                    continue;
                 }
                 self.heap[addr as usize + i] = self.store(val, module_byte_offset);
             }

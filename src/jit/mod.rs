@@ -1038,15 +1038,14 @@ impl JitFuzzingSession {
         let novel_coverage_passes = self.scan_passes_for_coverage();
 
         // optionally discard coverage if short circuit trap
-        if let Some(trap_kind) = &trap_kind {
-            if trap_kind.is_short_circuit() && self.swarm.discard_short_circuit_coverage {
+        if let Some(trap_kind) = &trap_kind
+            && trap_kind.is_short_circuit() && self.swarm.discard_short_circuit_coverage {
                 return RunResult {
                     trap_kind: Some(trap_kind.clone()),
                     novel_coverage: false,
                     novel_coverage_passes: Vec::new(),
                 };
             }
-        }
 
         let res = RunResult {
             novel_coverage: !novel_coverage_passes.is_empty(),

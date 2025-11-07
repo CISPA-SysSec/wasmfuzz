@@ -301,16 +301,14 @@ impl Worker {
                 }
                 let looplike = |el: u64| {
                     for i in 1..2 {
-                        if let Some(x) = el.checked_add(i) {
-                            if !vals.contains(&x) {
+                        if let Some(x) = el.checked_add(i)
+                            && !vals.contains(&x) {
                                 return false;
                             }
-                        }
-                        if let Some(x) = el.checked_sub(i) {
-                            if !vals.contains(&x) {
+                        if let Some(x) = el.checked_sub(i)
+                            && !vals.contains(&x) {
                                 return false;
                             }
-                        }
                     }
                     true
                 };
@@ -454,7 +452,14 @@ impl Worker {
                     if _interesting {
                         self.stats.exhaustive_finds += 1;
                         if let Some(credit) = det.credit() {
-                            println!("interesting deterministic/{credit}");
+                            if self.exhaustive_queue.len() > 1 {
+                                println!(
+                                    "interesting deterministic/{credit} (queue gen size: {})",
+                                    self.exhaustive_queue.len()
+                                );
+                            } else {
+                                println!("interesting deterministic/{credit}");
+                            }
                         }
                         interesting = true;
                         corpus_additions_since_cmin += 1;
