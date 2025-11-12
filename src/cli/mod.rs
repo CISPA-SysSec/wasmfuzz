@@ -257,16 +257,17 @@ pub(crate) fn main() {
             if inputs.is_empty() {
                 println!("No input specified. Exiting.")
             }
+
+            let size_limit = input_size_limit.unwrap_or(crate::TEST_CASE_SIZE_LIMIT);
+            assert!(size_limit <= crate::TEST_CASE_SIZE_LIMIT);
+
             for input in inputs {
                 println!("Testcase: {input:?}");
                 let testcase = std::fs::read(&input).expect("couldn't read input");
                 let size = testcase.len();
-                assert!(size <= crate::TEST_CASE_SIZE_LIMIT);
-                if let Some(size_limit) = input_size_limit
-                    && size > size_limit
-                {
+                if size > size_limit {
                     println!(
-                        "Testcase: {input:?}: skipped due to size limit ({size} > {size_limit}"
+                        "Testcase: {input:?}: skipped due to size limit ({size} > {size_limit})"
                     );
                     continue;
                 }
@@ -843,12 +844,13 @@ pub(crate) fn main() {
             };
             blame(&report_info, "<init>", &mut res);
 
-            for (path, input) in corpus_entries {
-                print!("blaming {:?}: run                           \r", path);
+            let total = corpus_entries.len();
+            for (i, (path, input)) in corpus_entries.into_iter().enumerate() {
+                print!("[{i}/{total}] blaming {path:?}: run                           \r");
                 sess.run(&input, &mut stats).expect_ok();
-                print!("blaming {:?}: process                       \r", path);
-                report_info.process_line_coverage(&sess);
-                print!("blaming {:?}: blame                         \r", path);
+                print!("[{i}/{total}] blaming {path:?}: process                       \r");
+                report_info.process_line_coverage_online(&sess);
+                print!("[{i}/{total}] blaming {path:?}: blame                         \r");
                 blame(&report_info, &path.to_string_lossy(), &mut res);
             }
 

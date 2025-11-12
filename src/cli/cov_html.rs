@@ -1,7 +1,7 @@
 use crate::HashMap;
 use crate::instrumentation::BBCoveragePass;
 use crate::ir::debuginfo_helper::resolve_source_location;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -149,6 +149,12 @@ pub(crate) struct ReportInfo {
     mod_spec: Arc<ModuleSpec>,
     pub(crate) files: Vec<FileInfo>,
     path_to_fileid: HashMap<String, FileId>,
+    online_cache: Option<OnlineCache>,
+}
+
+struct OnlineCache {
+    covered_keys: crate::HashSet<Location>,
+    offset_lookup: BTreeMap<u64, Box<[(FileId, u32)]>>,
 }
 
 impl ReportInfo {
@@ -185,7 +191,81 @@ impl ReportInfo {
             mod_spec,
             files,
             path_to_fileid,
+            online_cache: None,
         })
+    }
+
+    pub(crate) fn process_line_coverage_online(&mut self, sess: &JitFuzzingSession) {
+        tracy_full::zone!("process_line_coverage_online");
+        let first = self.online_cache.is_none();
+        let cache = self.online_cache.get_or_insert_with(|| {
+            tracy_full::zone!("process_line_coverage_online: compute cache");
+            let offset_lookup = self
+                .mod_spec
+                .functions
+                .iter()
+                .flat_map(|func| {
+                    func.operator_offset_rel.iter().map(|rel| {
+                        let addr = func.operators_wasm_bin_offset_base as u64 + *rel as u64;
+                        let mut locs = Vec::new();
+                        resolve_source_location(&self.mod_spec, addr, |x| {
+                            for x in x {
+                                if x.line() == 0 {
+                                    continue;
+                                }
+                                if let Some(file) = x.file() {
+                                    let file_id = self.path_to_fileid[&file.full_path()];
+                                    locs.push((file_id, x.line() - 1))
+                                }
+                            }
+                        });
+
+                        (addr, locs.into_boxed_slice())
+                    })
+                })
+                .collect();
+            OnlineCache {
+                covered_keys: crate::HashSet::default(),
+                offset_lookup,
+            }
+        });
+        if first {
+            tracy_full::zone!("process_line_coverage_online: mark instrumented");
+            for locs in cache.offset_lookup.values() {
+                for (file_id, line) in locs {
+                    self.files[file_id.0 as usize]
+                        .line_coverage
+                        .set_instrumented(*line as usize);
+                }
+            }
+        }
+        let mut new_coverage = Vec::new();
+        {
+            tracy_full::zone!("process_line_coverage_online: scan coverage");
+            for loc in sess
+                .get_pass::<BBCoveragePass>()
+                .coverage
+                .iter_covered_keys()
+            {
+                if cache.covered_keys.insert(loc) {
+                    new_coverage.push(loc);
+                }
+            }
+        }
+
+        {
+            tracy_full::zone!("process_line_coverage_online: mark covered");
+            for loc in new_coverage {
+                let func = &self.mod_spec.functions[loc.function as usize];
+                let base = func.operators_wasm_bin_offset_base as u64;
+                let offset = func.operator_offset_rel[loc.index as usize] as u64;
+                for (file_id, line) in &cache.offset_lookup[&(base + offset)] {
+                    self.files[file_id.0 as usize]
+                        .line_coverage
+                        .set_covered(*line as usize);
+                }
+            }
+        }
     }
 
     pub(crate) fn process_line_coverage(&mut self, sess: &JitFuzzingSession) {

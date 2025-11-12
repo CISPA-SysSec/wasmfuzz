@@ -29,6 +29,9 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
         .unwrap_or_else(|| std::thread::available_parallelism().unwrap().get());
 
     let start = std::time::Instant::now();
+    if let Some(corpus_dir) = opts.g.corpus_dir() {
+        let _ = std::fs::create_dir(corpus_dir);
+    }
 
     let orc_handle = OrchestratorHandle::new(mod_spec.clone(), opts.clone());
 
