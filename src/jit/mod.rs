@@ -173,6 +173,8 @@ pub(crate) struct SwarmConfig {
     pub input_size_limit: Option<u32>,
     pub instruction_limit: Option<u64>,
     pub memory_limit_pages: Option<u32>,
+
+    pub only_grammar_inputs: bool,
 }
 impl SwarmConfig {
     pub(crate) fn from_instruction_limit(instruction_limit: Option<u64>) -> Self {
@@ -201,6 +203,7 @@ impl std::fmt::Debug for SwarmConfig {
             input_size_limit,
             instruction_limit,
             memory_limit_pages,
+            only_grammar_inputs,
         } = self;
         let mut f = f.debug_struct("SwarmConfig");
         let mut skipped = false;
@@ -229,6 +232,7 @@ impl std::fmt::Debug for SwarmConfig {
         skipped |= field(&mut f, "input_size_limit", input_size_limit);
         skipped |= field(&mut f, "instruction_limit", instruction_limit);
         skipped |= field(&mut f, "memory_limit_pages", memory_limit_pages);
+        skipped |= field(&mut f, "only_grammar_inputs", only_grammar_inputs);
         if skipped {
             f.finish_non_exhaustive()
         } else {

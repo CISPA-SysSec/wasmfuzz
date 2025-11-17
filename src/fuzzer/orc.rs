@@ -498,6 +498,7 @@ impl Orchestrator {
             Some(fuel_limit.unwrap_or(self.codecov_sess.swarm.instruction_limit.unwrap()));
         swarm.memory_limit_pages = Some(memory_limit_pages);
         swarm.input_size_limit = Some(input_size_limit);
+        swarm.only_grammar_inputs = self.rng.random_ratio(1, 2);
 
         let extra_musts_and_avoids = self.rng.random_ratio(5, 10);
         if extra_musts_and_avoids {

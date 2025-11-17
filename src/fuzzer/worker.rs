@@ -63,6 +63,7 @@ pub(crate) struct Worker {
     stage_depth: usize,
     stop_requested: bool,
     grammar_mutator: Option<patlang::engine::Mutator<'static>>,
+    only_grammar_inputs: bool,
 }
 
 impl Worker {
@@ -79,11 +80,14 @@ impl Worker {
 
         let mut schedule = WorkerSchedule::new(&opts);
 
+        let mut only_grammar_inputs = false;
+
         let sess = match orc {
             Some(ref handle) => {
                 let config = handle.suggest();
                 eprintln!("got config: {config:#?}");
                 schedule.timeout = Some(config.timeout);
+                only_grammar_inputs = config.swarm.only_grammar_inputs;
                 JitFuzzingSession::builder(mod_spec.clone())
                     .passes_generator(Arc::new(config.passes))
                     .tracing(TracingOptions {
@@ -116,6 +120,7 @@ impl Worker {
         });
         let grammar_mutator =
             grammar.map(|x| patlang::engine::Mutator::new(Box::leak(Box::new(x))));
+        only_grammar_inputs &= grammar_mutator.is_some();
 
         let mut worker = Self {
             schedule,
@@ -136,6 +141,7 @@ impl Worker {
             opts,
             stop_requested: false,
             grammar_mutator,
+            only_grammar_inputs,
         };
         // TODO: move this somewhere else?
         if let Some(ref orc) = orc {
@@ -151,6 +157,15 @@ impl Worker {
                     if input.len() > worker.sess.swarm.input_alloc_size() {
                         discarded_input_size += 1;
                         continue;
+                    }
+
+                    // if only_grammar_inputs: start with valid-ish inputs
+                    // TODO: possibly roundtrip in different ways? use coverage feedback to determine this?
+                    let mut input = input.as_ref().to_vec();
+                    if let Some(grammar) = &mut worker.grammar_mutator
+                        && only_grammar_inputs
+                    {
+                        input = grammar.roundtrip(&input);
                     }
                     // NOTE: we don't need to trace here if we're going to throw them away anyways!
                     let res = worker.on_corpus(&input, true);
@@ -262,7 +277,7 @@ impl Worker {
 
         self.save_input(input);
 
-        if *self.opts.x.exhaustive_stage && !is_seed {
+        if *self.opts.x.exhaustive_stage && !is_seed && !self.only_grammar_inputs {
             if input.len() <= 1024 {
                 self.exhaustive_queue.push_back(Box::new(
                     super::exhaustive::ReplaceEveryInputByte::new(input, &mut self.rand),
@@ -317,13 +332,15 @@ impl Worker {
                 let looplike = |el: u64| {
                     for i in 1..2 {
                         if let Some(x) = el.checked_add(i)
-                            && !vals.contains(&x) {
-                                return false;
-                            }
+                            && !vals.contains(&x)
+                        {
+                            return false;
+                        }
                         if let Some(x) = el.checked_sub(i)
-                            && !vals.contains(&x) {
-                                return false;
-                            }
+                            && !vals.contains(&x)
+                        {
+                            return false;
+                        }
                     }
                     true
                 };
@@ -606,11 +623,12 @@ impl Worker {
                 }
                 exhaustive_queue.push_back(det);
             }
-            let new_entries = std::mem::replace(&mut self.exhaustive_queue, exhaustive_queue);
+            let new_entries: VecDeque<Box<dyn QueuedInputMutation>> =
+                std::mem::replace(&mut self.exhaustive_queue, exhaustive_queue);
             self.exhaustive_queue.extend(new_entries);
 
             'fast: for _ in 0..A_FEW_EXECS {
-                if true && false {
+                if self.only_grammar_inputs {
                     continue;
                 }
                 if interesting && self.exhaustive_queue.len() <= 1 {

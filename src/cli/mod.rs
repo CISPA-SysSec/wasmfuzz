@@ -173,6 +173,13 @@ pub(crate) enum Subcommand {
         corpus: PathBuf,
         file: Option<String>,
     },
+    #[clap(hide = true)]
+    Repair {
+        program: PathBuf,
+        corpus: PathBuf,
+        #[clap(long)]
+        pattern: PathBuf,
+    },
 }
 
 fn parse_program(path: &Path) -> Arc<ModuleSpec> {
@@ -870,6 +877,140 @@ pub(crate) fn main() {
                     println!("[{}:{}] {}", file, line, res.inputs[*inp]);
                 }
             }
+        }
+        Subcommand::Repair {
+            program,
+            corpus,
+            pattern,
+        } => {
+            tracy_full::zone!("Subcommand::Repair");
+            use crate::instrumentation::{CodeCovInstrumentationPass, EdgeCoveragePass};
+
+            let mod_spec = parse_program(&program);
+
+            let mut inputs: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+            if let Ok(input) = std::fs::read(&corpus) {
+                inputs.push((corpus.clone(), input));
+            } else {
+                let corpus = std::fs::read_dir(&corpus).unwrap();
+                for entry in corpus {
+                    let entry = entry.unwrap();
+                    let input = std::fs::read(entry.path()).unwrap();
+                    inputs.push((entry.path(), input));
+                }
+            }
+
+            let grammar = patlang::engine::Grammar::lower(&patlang::ir::load_ir(&pattern).unwrap());
+            let mut grammar_mutator = patlang::engine::Mutator::new(Box::leak(Box::new(grammar)));
+
+            let mut stats = Stats::default();
+            let mut sess = JitFuzzingSession::builder(mod_spec.clone())
+                .run_from_snapshot(true)
+                .feedback(FeedbackOptions {
+                    live_edges: true,
+                    ..FeedbackOptions::nothing()
+                })
+                .build();
+            sess.initialize(&mut stats);
+
+            // First pass: Collect coverage with original inputs
+            sess.reset_pass_coverage();
+            for (_, input) in &inputs {
+                sess.run(input, &mut stats).expect_ok();
+            }
+            let original_edge_cov = sess.get_pass::<EdgeCoveragePass>().count_saved();
+
+            // Second pass: Collect coverage with re-encoded inputs
+            sess.reset_pass_coverage();
+            for (_, input) in &inputs {
+                let input = grammar_mutator.roundtrip(input);
+                sess.run(&input, &mut stats).expect_ok();
+            }
+
+            let reencoded_edge_cov = sess.get_pass::<EdgeCoveragePass>().count_saved();
+            dbg!(original_edge_cov, reencoded_edge_cov);
+
+            use bitvec::prelude::*;
+            use patlang::engine::FeatureOracle;
+            struct TestOracle<'a> {
+                stored: BitBox,
+                session: &'a mut JitFuzzingSession,
+                stats: &'a mut Stats,
+            }
+
+            impl<'a> TestOracle<'a> {
+                fn new(session: &'a mut JitFuzzingSession, stats: &'a mut Stats) -> Self {
+                    Self {
+                        stored: BitBox::default(),
+                        session,
+                        stats,
+                    }
+                }
+            }
+
+            impl<'a> FeatureOracle for TestOracle<'a> {
+                fn set_reference(&mut self, reference: &[u8]) {
+                    tracy_full::zone!("TestOracle::set_reference");
+                    self.session.reset_pass_coverage();
+                    let _ = self.session.run(reference, &mut self.stats);
+                    let pass = self.session.get_pass::<EdgeCoveragePass>();
+                    self.stored = pass.coverage.entries.clone();
+                }
+
+                fn get_distance(&mut self, input: &[u8]) -> usize {
+                    tracy_full::zone!("TestOracle::get_distance");
+                    self.session.reset_pass_coverage();
+                    let _ = self.session.run(input, &mut self.stats);
+                    let pass = self.session.get_pass::<EdgeCoveragePass>();
+                    self.stored
+                        .iter()
+                        .zip(pass.coverage.entries.iter())
+                        .filter(|(a, b)| **a && !**b)
+                        .count()
+                }
+            }
+
+            let mut test_oracle = TestOracle::new(&mut sess, &mut stats);
+
+            // Third pass: Try repairing inputs to mitigate coverage difference
+            let mut repaired_inputs = Vec::new();
+            for (path, input) in &inputs {
+                tracy_full::zone!("repair loop one input");
+                test_oracle.set_reference(input);
+                let orig_cov = test_oracle.stored.count_ones();
+                let initial = grammar_mutator.roundtrip(input);
+                let initial_distance = test_oracle.get_distance(&initial);
+                let orig_size = input.len();
+
+                if initial_distance == 0 {
+                    eprintln!(
+                        "no repair needed for input: distance={initial_distance} path={path:?}"
+                    );
+                    repaired_inputs.push(initial.clone());
+                } else {
+                    let repaired = grammar_mutator.repair(input, &mut test_oracle);
+                    if let Some(repaired) = repaired {
+                        let repaired_distance = test_oracle.get_distance(&repaired);
+                        eprintln!(
+                            "repaired input: target: {orig_cov}, initial dist: {initial_distance}, repaired dist: {repaired_distance} path={path:?}"
+                        );
+                        repaired_inputs.push(repaired);
+                    } else {
+                        eprintln!(
+                            "no repair found for input: target={orig_cov} (size={orig_size}) path={path:?}"
+                        );
+                        repaired_inputs.push(initial.clone());
+                    }
+                }
+            }
+
+            // Final pass: Measure improvement
+            sess.reset_pass_coverage();
+            for input in &repaired_inputs {
+                sess.run(input, &mut stats).expect_ok();
+            }
+            let repaired_edge_cov = sess.get_pass::<EdgeCoveragePass>().count_saved();
+            dbg!(original_edge_cov, reencoded_edge_cov, repaired_edge_cov);
         }
     }
 }
