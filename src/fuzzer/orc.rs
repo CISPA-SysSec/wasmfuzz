@@ -53,6 +53,7 @@ pub(crate) enum Experiment {
     SwarmFocusEdge,
     Snapshot,
     OnlyEdgeCoverage,
+    PassAblation,
 }
 impl std::str::FromStr for Experiment {
     type Err = String;
@@ -62,6 +63,7 @@ impl std::str::FromStr for Experiment {
             "snapshot" => Self::Snapshot,
             "swarm-focus-edge" => Self::SwarmFocusEdge,
             "only-edge-coverage" => Self::OnlyEdgeCoverage,
+            "pass-ablation" => Self::PassAblation,
             _ => return Err("unknown Experiment".to_owned()),
         })
     }
@@ -364,10 +366,11 @@ impl Orchestrator {
             // saves all inputs
             let res = self.add_corpus(input);
             if let Some(res) = res
-                && res.is_crash() {
-                    eprintln!("load_corpus with crashing input! {res:?}");
-                    return Err(());
-                }
+                && res.is_crash()
+            {
+                eprintln!("load_corpus with crashing input! {res:?}");
+                return Err(());
+            }
         }
         if !inputs.is_empty() {
             let edges = self.codecov_sess.get_edge_cov().unwrap_or(0);
@@ -504,9 +507,11 @@ impl Orchestrator {
             // TODO: evaluate this
             if matches!(self.opts.experiment, Some(Experiment::SwarmFocusEdge)) {
                 if let Some(target_edge) = target_edge
-                    && !self.init_edges.contains(&target_edge) && self.rng.random_ratio(5, 10) {
-                        swarm.must_include_edges.insert(target_edge);
-                    }
+                    && !self.init_edges.contains(&target_edge)
+                    && self.rng.random_ratio(5, 10)
+                {
+                    swarm.must_include_edges.insert(target_edge);
+                }
                 if let Some(target_bb) = target_bb {
                     swarm.must_include_bbs.insert(target_bb);
                 }
@@ -552,7 +557,11 @@ impl Orchestrator {
         *live_bbs = false;
         *live_edges = true;
 
-        if !is_saturated && self.rng.random_ratio(8, 10) {
+        if self.opts.experiment == Some(Experiment::PassAblation) {
+            let pass =
+                std::env::var("FUZZER_PASS_ABLATION").expect("FUZZER_PASS_ABLATION must be set");
+            opts.activate_from_str(&pass);
+        } else if !is_saturated && self.rng.random_ratio(8, 10) {
             let mut light_knobs = [
                 &mut *cmpcov_absdist,
                 &mut *cmpcov_hamming,

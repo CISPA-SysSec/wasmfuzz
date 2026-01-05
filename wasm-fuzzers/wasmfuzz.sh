@@ -6,8 +6,8 @@ target="$1"
 if [[ "$FUZZER_CONFIG" =~ ^orc- ]]; then
     cores=${FUZZER_CONFIG#"orc-"}
     wasmfuzz fuzz --seed-dir=/seeds/ --out-dir=/corpus/ "$target" --cores="$cores" $FUZZER_ARGS
-elif [[ "$FUZZER_CONFIG" =~ ^pass- ]]; then
-    pass=${FUZZER_CONFIG#"pass-"}
+elif [[ "$FUZZER_CONFIG" =~ ^pass-old- ]]; then
+    pass=${FUZZER_CONFIG#"pass-old-"}
     wasmfuzz fuzz --seed-dir=/seeds/ --out-dir=/corpus/ "$target" \
         --trap-cmpcov-hamming=false \
         --trap-cmpcov-absdist=false \
@@ -15,7 +15,7 @@ elif [[ "$FUZZER_CONFIG" =~ ^pass- ]]; then
         --trap-func-input-size=false \
         "--trap-$pass=true" \
         --cores 1
-elif [[ "$FUZZER_CONFIG" =~ ^pass- ]]; then
+elif [[ "$FUZZER_CONFIG" =~ ^pass-old- ]]; then
     exp=${FUZZER_CONFIG#"exp-"}
     wasmfuzz fuzz "$1" \
         --seed-dir=/seeds/ --out-dir=/corpus/ \

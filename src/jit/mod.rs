@@ -511,7 +511,7 @@ pub(crate) enum CompilationKind {
     Tracing,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FeedbackOptions {
     pub live_funcs: bool,
     pub live_bbs: bool,
@@ -604,6 +604,14 @@ impl FeedbackOptions {
             path_hash_func: true,
             path_hash_edge: true,
         }
+    }
+
+    pub fn activate_from_str(&mut self, pass: &str) {
+        let mut v = serde_json::to_value(&self).unwrap();
+        let v_ = v.as_object_mut().unwrap();
+        assert!(v_.contains_key(pass));
+        v_[pass] = serde_json::Value::Bool(true);
+        *self = serde_json::from_value(v).unwrap();
     }
 }
 
@@ -1039,13 +1047,15 @@ impl JitFuzzingSession {
 
         // optionally discard coverage if short circuit trap
         if let Some(trap_kind) = &trap_kind
-            && trap_kind.is_short_circuit() && self.swarm.discard_short_circuit_coverage {
-                return RunResult {
-                    trap_kind: Some(trap_kind.clone()),
-                    novel_coverage: false,
-                    novel_coverage_passes: Vec::new(),
-                };
-            }
+            && trap_kind.is_short_circuit()
+            && self.swarm.discard_short_circuit_coverage
+        {
+            return RunResult {
+                trap_kind: Some(trap_kind.clone()),
+                novel_coverage: false,
+                novel_coverage_passes: Vec::new(),
+            };
+        }
 
         let res = RunResult {
             novel_coverage: !novel_coverage_passes.is_empty(),

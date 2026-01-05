@@ -53,11 +53,11 @@ pub(crate) fn eval_pass_speed(program: &PathBuf, corpus: &PathBuf, jsonl_out_pat
 
     let passes = {
         let feedback = FeedbackOptions::all_instrumentation();
-        let r#gen = crate::jit::FullFeedbackPasses {
+        let generator = crate::jit::FullFeedbackPasses {
             opts: feedback,
             spec: mod_spec.clone(),
         };
-        r#gen.generate_passes()
+        generator.generate_passes()
     };
 
     let mut configs = passes

@@ -3,7 +3,7 @@ RUN apt-get install -y build-essential curl git pkg-config libssl-dev rsync patc
 RUN git clone https://github.com/Mrmaxmeier/fuzzm-project
 RUN git -C fuzzm-project checkout 30d75154f035a4aa18daf80d6ff3fd2a1767ad22
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain stable -y
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain 1.82 -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y llvm llvm-dev clang

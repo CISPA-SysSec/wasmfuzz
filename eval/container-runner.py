@@ -22,7 +22,8 @@ from pathlib import Path
 
 
 available_parallelism = math.ceil((os.cpu_count() or 1) * 0.98)
-if available_parallelism > 1: available_parallelism -= 1
+if available_parallelism > 1:
+    available_parallelism -= 1
 cores_available = list(range(available_parallelism))
 cores_cond = None  # created inside of loop
 @contextlib.asynccontextmanager
@@ -367,6 +368,9 @@ async def run_target(target, fuzzer, config=None, num_cores=1):
         config_str = None
         config_env = {"FUZZER_CONFIG": None, "FUZZER_CORES": str(num_cores)}
         if config is not None:
+            if isinstance(config, str) and config.startswith("pass-ablation-"):
+                config_env["FUZZER_PASS_ABLATION"] = config.removeprefix("pass-ablation-")
+                config = "pass-ablation"
             if isinstance(config, str) and fuzzer == "wasmfuzz":
                 config = dict(name=config, config=config, args=f"--experiment={config}")
             if isinstance(config, str):

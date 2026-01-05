@@ -14,7 +14,7 @@ import pandas as pd
 parser = argparse.ArgumentParser()
 parser.add_argument('--no-parallel', action='store_true')
 parser.add_argument('--quiet', action='store_true')
-parser.add_argument('--target', default=None)
+parser.add_argument('--target', default=[], action='append')
 parser.add_argument('--wasmfuzz', default="wasmfuzz")
 DEFAULT_TIMEOUTS = ["8m", "22m", "1h30m", "2h"]
 parser.add_argument('--timeout', default=DEFAULT_TIMEOUTS[:], action='append')
@@ -126,7 +126,8 @@ async def run_target(target):
 async def main():
     jobs = []
     for target in Path(args.harness_dir).glob("*.wasm"):
-        if args.target and args.target not in target.stem: continue
+        if args.target and all(tgt not in target.stem for tgt in args.target):
+            continue
         if args.no_parallel:
             await run_target(target)
         else:
