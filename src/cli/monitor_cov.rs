@@ -5,6 +5,7 @@ use crate::{
     },
 };
 use std::{
+    hash::Hasher,
     io::Write,
     path::PathBuf,
     time::{Instant, SystemTime},
@@ -111,11 +112,15 @@ pub(crate) fn run(opts: MonitorCovOpts) {
                     if data.len() > input_size_limit {
                         continue;
                     }
-                    if !corpus.insert(data.clone()) {
+                    let data_hash = {
+                        let mut hasher = rustc_hash::FxHasher::with_seed(1234);
+                        hasher.write(&data);
+                        hasher.finish()
+                    };
+                    if !corpus.insert(data_hash) {
                         continue;
                     }
-
-                    let res = sess.run(&data, &mut Stats::default());
+                    let res = sess.run_reusable_fresh(&data, false, &mut Stats::default());
                     crashes |= res.is_crash();
                     timeout |= matches!(
                         res.trap_kind,

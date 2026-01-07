@@ -311,7 +311,7 @@ class FuzzJob:
         #    tuna has ~32gb per 8 cores ( 32GB,   8 cores)
         #  alfred has 128gb per 8 cores (  2TB, 128 cores)
         # srv-23- has ~32gb per 8 cores (768GB, 192 cores)
-        fuzzer_cmd += ["--memory", "16g"]
+        fuzzer_cmd += ["--memory", "8g"]
         fuzzer_cmd += ["--network", "none"]
         fuzzer_cmd += ["--log-driver", "none"] # afl++ people say that docker's log infra causes performance issues?
         if self.core_ids:
@@ -369,8 +369,10 @@ async def run_target(target, fuzzer, config=None, num_cores=1):
         config_env = {"FUZZER_CONFIG": None, "FUZZER_CORES": str(num_cores)}
         if config is not None:
             if isinstance(config, str) and config.startswith("pass-ablation-"):
-                config_env["FUZZER_PASS_ABLATION"] = config.removeprefix("pass-ablation-")
+                pass_ = config.removeprefix("pass-ablation-")
+                config_env["FUZZER_PASS_ABLATION"] = pass_
                 config = "pass-ablation"
+                config = dict(name=f"pass-ablation-{pass_}", config=config, args=f"--experiment={config}")
             if isinstance(config, str) and fuzzer == "wasmfuzz":
                 config = dict(name=config, config=config, args=f"--experiment={config}")
             if isinstance(config, str):

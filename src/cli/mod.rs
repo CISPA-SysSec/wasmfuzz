@@ -401,7 +401,7 @@ pub(crate) fn main() {
                 let input = std::fs::read(input_path).unwrap();
                 sess.reset_pass_coverage();
                 let start = std::time::Instant::now();
-                let res = sess.run(&input, &mut stats);
+                let res = sess.run_reusable_fresh(&input, false, &mut stats);
                 let exec_us = start.elapsed().as_micros();
                 let is_crash = res.is_crash();
                 let is_timeout = matches!(res.trap_kind, Some(TrapKind::OutOfFuel(_)));
@@ -856,9 +856,10 @@ pub(crate) fn main() {
 
             for (file_idx, file) in res.files.iter().enumerate() {
                 if let Some(file_filter) = &file_filter
-                    && !file.contains(file_filter) {
-                        continue;
-                    }
+                    && !file.contains(file_filter)
+                {
+                    continue;
+                }
                 let mut blame_lines = res
                     .map
                     .iter()

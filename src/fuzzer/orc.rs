@@ -654,7 +654,9 @@ impl Orchestrator {
             return None;
         }
         drop(corp);
-        let res = self.codecov_sess.run(input, &mut Stats::new());
+        let res = self
+            .codecov_sess
+            .run_reusable_fresh(input, false, &mut Stats::new());
         if res.novel_coverage_passes.contains(&"funcs") {
             self.last_func_find = Instant::now();
         }
