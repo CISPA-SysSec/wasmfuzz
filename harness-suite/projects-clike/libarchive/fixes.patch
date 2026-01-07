@@ -1,0 +1,65 @@
+diff --git a/libarchive/archive_read_support_format_7zip.c b/libarchive/archive_read_support_format_7zip.c
+index 59546273..a385ab08 100644
+--- a/libarchive/archive_read_support_format_7zip.c
++++ b/libarchive/archive_read_support_format_7zip.c
+@@ -669,25 +669,28 @@ static ssize_t
+ find_pe_overlay(struct archive_read *a)
+ {
+ 	const char *h;
+-	ssize_t bytes, max_offset, offset, sec_end;
+-	ssize_t opt_hdr_sz, sec_cnt;
++	size_t bytes, max_offset, offset, sec_end;
++	size_t opt_hdr_sz, sec_cnt;
+ 
+ 	for (;;) {
+ 		/*
+ 		 * Read Dos header to find e_lfanew
++	     * We can cast to ssize_t here since we're discarding the result if h == NULL.
+ 		 */
+-		h = __archive_read_ahead(a, PE_DOS_HDR_LEN, &bytes);
++		h = __archive_read_ahead(a, PE_DOS_HDR_LEN, (ssize_t*) &bytes);
+ 		if (h == NULL || h[0] != 'M' || h[1] != 'Z') {
+ 			break;
+ 		}
+ 		offset = archive_le32dec(h + PE_DOS_HDR_ELFANEW_OFFSET);
++		if (offset >= SIZE_MAX - PE_COFF_HDR_LEN)
++			break;
+ 
+ 		/*
+ 		 * Read COFF header to find opt header size and sec cnt
+ 		 */
+ 		if (bytes < offset + PE_COFF_HDR_LEN) {
+ 			h = __archive_read_ahead(a, offset + PE_COFF_HDR_LEN,
+-			    &bytes);
++			    (ssize_t*)&bytes);
+ 			if (h == NULL || h[offset] != 'P' ||
+ 			    h[offset + 1] != 'E') {
+ 				break;
+diff --git a/libarchive/archive_read_support_format_rar5.c b/libarchive/archive_read_support_format_rar5.c
+index 17e501e0..265df8a2 100644
+--- a/libarchive/archive_read_support_format_rar5.c
++++ b/libarchive/archive_read_support_format_rar5.c
+@@ -1554,6 +1554,11 @@ static int parse_file_extra_owner(struct archive_read* a,
+ 	if ((flags & OWNER_USER_NAME) != 0) {
+ 		if(!read_var_sized(a, &name_size, NULL))
+ 			return ARCHIVE_EOF;
++		if(name_size > MAX_NAME_IN_BYTES) {
++			archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
++			    "Owner user name too long");
++			return ARCHIVE_FATAL;
++		}
+ 		*extra_data_size -= name_size + 1;
+ 
+ 		if(!read_ahead(a, name_size, &p))
+@@ -1575,6 +1580,11 @@ static int parse_file_extra_owner(struct archive_read* a,
+ 	if ((flags & OWNER_GROUP_NAME) != 0) {
+ 		if(!read_var_sized(a, &name_size, NULL))
+ 			return ARCHIVE_EOF;
++		if(name_size > MAX_NAME_IN_BYTES) {
++			archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
++			    "Owner group name too long");
++			return ARCHIVE_FATAL;
++		}
+ 		*extra_data_size -= name_size + 1;
+ 
+ 		if(!read_ahead(a, name_size, &p))

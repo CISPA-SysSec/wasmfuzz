@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
-import subprocess
 import argparse
 import csv
-import json
 import io
-
-from pathlib import Path
-from pprint import pprint
+import json
+import subprocess
 from collections import Counter, defaultdict
 from enum import Enum
+from pathlib import Path
+from pprint import pprint
 from typing import Dict, Union
 
 parser = argparse.ArgumentParser()
@@ -330,15 +329,21 @@ tag_manually(
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
+tag_manually(
+    "ruff-ty_check_invalid_syntax.wasm",
+    "01695513ce33f1f1615309323ba145c42f4720c1",
+    Tag.CRASHING,
+    Tag.BUGGY_PORT,
+)
 
 # mcu_prog panic was fixed upstream in zune-image
 tag_manually(
-    "image-script_jpeg.wasm", "ceb71e59496a32dbe2a56599ff60d09cb0b8cb20", Tag.CRASHING
+    "image-script_jpeg.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING
 )
 # https://github.com/image-rs/image-tiff/pull/305
 tag_manually(
     "image-script_tiff.wasm",
-    "ceb71e59496a32dbe2a56599ff60d09cb0b8cb20",
+    "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
@@ -390,19 +395,19 @@ tag_manually(
 # [STDOUT] called `Option::unwrap()` on a `None` value
 tag_manually(
     "zune-image-zune-bmp-decode_buffer.wasm",
-    "ca5b0ef0cd3fe9535f875c904c8428e9f3706f41",
+    "b6b1db81f10df4dbe22b427fb65aaa6b2b8b6b22",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 tag_manually(
     "zune-image-zune-png-decode_buffer.wasm",
-    "ca5b0ef0cd3fe9535f875c904c8428e9f3706f41",
+    "b6b1db81f10df4dbe22b427fb65aaa6b2b8b6b22",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 tag_manually(
     "zune-image-zune-png-roundtrip.wasm",
-    "ca5b0ef0cd3fe9535f875c904c8428e9f3706f41",
+    "b6b1db81f10df4dbe22b427fb65aaa6b2b8b6b22",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
@@ -433,11 +438,11 @@ tag_manually(
 # [STDOUT] thread '<unnamed>' panicked at /projects/comrak/repo/src/parser/mod.rs:3348:21:
 # [STDOUT] assertion failed: (sp.end.column - sp.start.column + 1 == x) || rem == 0
 # => >https://github.com/kivikakk/comrak/issues/595
-for target in ["fuzz_options", "gfm_footnotes", "commonmark"]:
+for target in ["parse", "fuzz_options", "gfm_footnotes", "commonmark"]:
     tag_manually(
         f"comrak-{target}.wasm",
-        "36b06b8a9466e6109c9e162e18cabcd3ef8aead2",
-        Tag.CRASHING,
+        "32b4f7d55f4f8da27da19de9e458471815fda2c4",
+        *([Tag.CRASHING] + ([Tag.SKIP] if target != "parse" else [])),
     )
 # tag_manually("comrak-quadratic.wasm", "36b06b8a9466e6109c9e162e18cabcd3ef8aead2", Tag.CRASHING)
 # [STDOUT] thread '<unnamed>' panicked at /projects/toml-edit/repo/crates/toml_edit/src/parser/inline_table.rs:160:18:
@@ -463,6 +468,16 @@ tag_manually(
     "39838838ec2d49021548f90cec60cc3d8f56b188",
     Tag.CRASHING,
 )
+
+
+# JIT-TRACE: _257_find_pe_overlay/0067: Memory(I32Load16U(MemArg { align: 0, max_align: 1, offset: 20, memory: 0 }))
+# execution trapped with Abort(HeapOutOfBounds) which indicates that the target crashed
+for target in ["upstream", "ossfuzz", "ossfuzz2"]:
+    tag_manually(
+        f"libarchive-{target}.wasm",
+        "de73860cda5a49f97289a9924a3c5590edafef66",
+        Tag.CRASHING,
+    )
 
 
 PROJS = {"libpng", "freetype2", "jsoncpp"}

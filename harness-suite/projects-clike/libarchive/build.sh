@@ -43,3 +43,8 @@ $CXX $CXXFLAGS -Ilibarchive \
     "$PROJECT/libarchive_fuzzer.cc" -o /out/libarchive-ossfuzz.wasm \
     $LIB_FUZZING_ENGINE \
     ./libarchive/libarchive.a /tmp/libxml2.a
+
+$CXX $CXXFLAGS -Ilibarchive \
+    "$PROJECT/libarchive_fuzzer2.cc" -o /out/libarchive-ossfuzz2.wasm \
+    $LIB_FUZZING_ENGINE \
+    ./libarchive/libarchive.a /tmp/libxml2.a

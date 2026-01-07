@@ -1,0 +1,20 @@
+diff --git a/fuzz/fuzz_targets/all_options.rs b/fuzz/fuzz_targets/all_options.rs
+index ac5657f..f094d05 100644
+--- a/fuzz/fuzz_targets/all_options.rs
++++ b/fuzz/fuzz_targets/all_options.rs
+@@ -58,6 +58,7 @@ struct FuzzExtensionOptions {
+     front_matter_delimiter: bool,
+     image_url_rewriter: bool,
+     link_url_rewriter: bool,
++    highlight: bool,
+ }
+ 
+ impl FuzzExtensionOptions {
+@@ -88,6 +89,7 @@ impl FuzzExtensionOptions {
+             subscript: self.subscript,
+             subtext: self.subtext,
+             cjk_friendly_emphasis: self.cjk_friendly_emphasis,
++            highlight: self.highlight,
+             header_ids: if self.header_ids {
+                 Some("user-content-".into())
+             } else {

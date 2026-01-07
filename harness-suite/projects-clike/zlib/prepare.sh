@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/repo" 5a82f71ed1dfc0bec044d9702463dbdf84ea3b71 
+git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/repo" fee7c52428e9255b78e9cb0f7b7af91a54fe9cf6 

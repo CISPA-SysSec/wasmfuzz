@@ -1,11 +1,11 @@
 diff --git a/libarchive/archive_read_disk_posix.c b/libarchive/archive_read_disk_posix.c
-index 76a4fa44..ec6d2c79 100644
+index 54a8e661..3c21ce3d 100644
 --- a/libarchive/archive_read_disk_posix.c
 +++ b/libarchive/archive_read_disk_posix.c
 @@ -97,8 +97,11 @@
  #include "archive_private.h"
  #include "archive_read_disk_private.h"
- 
+
 +static int dup(int oldfd) { abort(); }
 +static int fchdir(int fd) { abort(); }
 +
@@ -35,7 +35,7 @@ index 3512d343..6ff685f9 100644
 +	return (NULL);
  }
  #endif
- 
+
 @@ -297,15 +289,7 @@ lookup_gname_helper(struct name_cache *cache, id_t id)
  static const char *
  lookup_gname_helper(struct name_cache *cache, id_t id)
@@ -52,9 +52,9 @@ index 3512d343..6ff685f9 100644
 +	return (NULL);
  }
  #endif
- 
+
 diff --git a/libarchive/archive_read_support_filter_program.c b/libarchive/archive_read_support_filter_program.c
-index 0482c57c..5efd17d2 100644
+index 2c8e4530..de8a8680 100644
 --- a/libarchive/archive_read_support_filter_program.c
 +++ b/libarchive/archive_read_support_filter_program.c
 @@ -226,6 +226,7 @@ program_bidder_bid(struct archive_read_filter_bidder *self,
@@ -65,7 +65,7 @@ index 0482c57c..5efd17d2 100644
  	/* Close our side of the I/O with the child. */
  	if (state->child_stdin != -1) {
  		close(state->child_stdin);
-@@ -284,7 +285,7 @@ child_stop(struct archive_read_filter *self, struct program_filter *state)
+@@ -281,7 +282,7 @@ child_stop(struct archive_read_filter *self, struct program_filter *state)
  		    WEXITSTATUS(state->exit_status));
  		return (ARCHIVE_WARN);
  	}
@@ -73,8 +73,8 @@ index 0482c57c..5efd17d2 100644
 +#endif
  	return (ARCHIVE_WARN);
  }
- 
-@@ -390,6 +391,10 @@ program_reader_vtable = {
+
+@@ -387,6 +388,10 @@ program_reader_vtable = {
  int
  __archive_read_program(struct archive_read_filter *self, const char *cmd)
  {
@@ -86,7 +86,7 @@ index 0482c57c..5efd17d2 100644
  	static const size_t out_buf_len = 65536;
  	char *out_buf;
 diff --git a/libarchive/archive_write_add_filter_program.c b/libarchive/archive_write_add_filter_program.c
-index c661cc7f..bca03921 100644
+index f12db337..be44cda1 100644
 --- a/libarchive/archive_write_add_filter_program.c
 +++ b/libarchive/archive_write_add_filter_program.c
 @@ -329,6 +329,7 @@ int
@@ -95,30 +95,30 @@ index c661cc7f..bca03921 100644
  {
 +#if !defined(__wasi__)
  	int ret, status;
+ 	pid_t pid;
  	ssize_t bytes_read;
- 
-@@ -386,5 +387,7 @@ cleanup:
+@@ -385,5 +386,7 @@ cleanup:
  		ret = ARCHIVE_FATAL;
  	}
  	return ret;
 +#endif
 +	return ARCHIVE_WARN;
  }
- 
+
 diff --git a/libarchive/archive_write_disk_posix.c b/libarchive/archive_write_disk_posix.c
-index bac906d2..9d6a1029 100644
+index 6fcf3929..c5821a4a 100644
 --- a/libarchive/archive_write_disk_posix.c
 +++ b/libarchive/archive_write_disk_posix.c
-@@ -637,7 +637,7 @@ _archive_write_disk_header(struct archive *_a, struct archive_entry *entry)
+@@ -639,7 +639,7 @@ _archive_write_disk_header(struct archive *_a, struct archive_entry *entry)
  	 * user edits their umask during the extraction for some
  	 * reason.
  	 */
 -	umask(a->user_umask = umask(0));
 +	a->user_umask = 0; // umask(a->user_umask = umask(0));
- 
+
  	/* Figure out what we need to do for this entry. */
  	a->todo = TODO_MODE_BASE;
-@@ -2000,7 +2000,8 @@ archive_write_disk_new(void)
+@@ -2002,7 +2002,8 @@ archive_write_disk_new(void)
  	a->archive.vtable = &archive_write_disk_vtable;
  	a->start_time = time(NULL);
  	/* Query and restore the umask. */
@@ -140,7 +140,7 @@ index 96416989..fc2c1eb4 100644
 +	// #error No way to perform gid lookups on this platform
  #endif
  	b->id = (gid_t)gid;
- 
+
 @@ -226,7 +226,7 @@ lookup_uid(void *private_data, const char *uname, int64_t uid)
  #elif defined(_WIN32) && !defined(__CYGWIN__)
  	/* TODO: do a uname->uid lookup for Windows. */
@@ -149,12 +149,12 @@ index 96416989..fc2c1eb4 100644
 +	// #error No way to look up uids on this platform
  #endif
  	b->id = (uid_t)uid;
- 
+
 diff --git a/libarchive/archive_write_set_format_iso9660.c b/libarchive/archive_write_set_format_iso9660.c
-index 2a3ae07f..d4c427fe 100644
+index c275c1ec..22d0ce0b 100644
 --- a/libarchive/archive_write_set_format_iso9660.c
 +++ b/libarchive/archive_write_set_format_iso9660.c
-@@ -2524,7 +2524,7 @@ get_tmfromtime(struct tm *tm, time_t *t)
+@@ -2529,7 +2529,7 @@ get_tmfromtime(struct tm *tm, time_t *t)
  #if HAVE_LOCALTIME_S
  	localtime_s(tm, t);
  #elif HAVE_LOCALTIME_R
@@ -163,7 +163,7 @@ index 2a3ae07f..d4c427fe 100644
  	localtime_r(t, tm);
  #else
  	memcpy(tm, localtime(t), sizeof(*tm));
-@@ -5193,8 +5193,8 @@ isoent_create_virtual_dir(struct archive_write *a, struct iso9660 *iso9660, cons
+@@ -5198,8 +5198,8 @@ isoent_create_virtual_dir(struct archive_write *a, struct iso9660 *iso9660, cons
  	archive_entry_unset_mtime(file->entry);
  	archive_entry_unset_atime(file->entry);
  	archive_entry_unset_ctime(file->entry);
@@ -174,7 +174,7 @@ index 2a3ae07f..d4c427fe 100644
  	archive_entry_set_mode(file->entry, 0555 | AE_IFDIR);
  	archive_entry_set_nlink(file->entry, 2);
  	if (isofile_gen_utility_names(a, file) < ARCHIVE_WARN) {
-@@ -7123,8 +7123,8 @@ isoent_create_boot_catalog(struct archive_write *a, struct isoent *rootent)
+@@ -7134,8 +7134,8 @@ isoent_create_boot_catalog(struct archive_write *a, struct isoent *rootent)
  	archive_entry_set_mtime(file->entry, iso9660->birth_time, 0);
  	archive_entry_set_atime(file->entry, iso9660->birth_time, 0);
  	archive_entry_set_ctime(file->entry, iso9660->birth_time, 0);
@@ -184,15 +184,15 @@ index 2a3ae07f..d4c427fe 100644
 +	// archive_entry_set_gid(file->entry, getgid());
  	archive_entry_set_mode(file->entry, AE_IFREG | 0444);
  	archive_entry_set_nlink(file->entry, 1);
- 
+
 diff --git a/libarchive/filter_fork_posix.c b/libarchive/filter_fork_posix.c
-index c895c08e..8bf73365 100644
+index 7c485193..fa9b5334 100644
 --- a/libarchive/filter_fork_posix.c
 +++ b/libarchive/filter_fork_posix.c
 @@ -26,6 +26,20 @@
- 
+
  #include "archive_platform.h"
- 
+
 +#if defined(__wasi__)
 +int
 +__archive_create_child(const char *cmd, int *child_stdin, int *child_stdout,

@@ -1,2 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/kivikakk/comrak.git "$PROJECT/repo" 36b06b8a9466e6109c9e162e18cabcd3ef8aead2
+git clone-rev.sh https://github.com/kivikakk/comrak.git "$PROJECT/repo" 32b4f7d55f4f8da27da19de9e458471815fda2c4
+git -C "$PROJECT/repo" apply ../fix-harness-all_options.patch
