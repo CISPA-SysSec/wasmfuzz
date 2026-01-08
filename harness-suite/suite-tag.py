@@ -176,7 +176,7 @@ def tag_from_corpus():
         else:
             if Tag.CRASHING in tags[harness]:
                 print(
-                    f"[WARN] harness {harness!r} was tagged as crashing but wasmfuzz doesn't have a crashing input"
+                    f"[WARN] harness {harness!r} was tagged as crashing but wasmfuzz corpus doesn't have a crashing input"
                 )
         if summaries[0]["crashes"]:
             tags[harness].add(Tag.SHALLOW)
@@ -347,6 +347,8 @@ tag_manually(
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
+tag_manually("image-script_guess.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
+tag_manually("image-script_tga.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
 
 # Note: wasmfuzz doesn't find after 48+ CPU hours
 #       aflpp finds this reliably
@@ -373,6 +375,9 @@ tag_manually(
     Tag.CRASHING,
 )
 
+tag_manually("jxl-rs-decode.wasm", "e01b3bd235bdad4a453df963a160d0387002315c", Tag.CRASHING)
+tag_manually("jxl-rs-decode_header.wasm", "e01b3bd235bdad4a453df963a160d0387002315c", Tag.CRASHING)
+
 # [STDOUT] thread '<unnamed>' panicked at /projects/sequoia/repo/buffered-reader/src/lib.rs:826:9:
 # [STDOUT] assertion failed: data.len() >= amount
 tag_manually(
@@ -395,22 +400,26 @@ tag_manually(
 # [STDOUT] called `Option::unwrap()` on a `None` value
 tag_manually(
     "zune-image-zune-bmp-decode_buffer.wasm",
-    "b6b1db81f10df4dbe22b427fb65aaa6b2b8b6b22",
+    "031f8b7032476458cba37ebe1ae09447a9e3746b",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 tag_manually(
     "zune-image-zune-png-decode_buffer.wasm",
-    "b6b1db81f10df4dbe22b427fb65aaa6b2b8b6b22",
+    "031f8b7032476458cba37ebe1ae09447a9e3746b",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 tag_manually(
     "zune-image-zune-png-roundtrip.wasm",
-    "b6b1db81f10df4dbe22b427fb65aaa6b2b8b6b22",
+    "031f8b7032476458cba37ebe1ae09447a9e3746b",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
+# TODO: triage
+tag_manually("zune-image-zune-hdr-decode_buffer.wasm", "031f8b7032476458cba37ebe1ae09447a9e3746b", Tag.CRASHING)
+tag_manually("zune-image-zune-jpeg-decode_buffer.wasm", "031f8b7032476458cba37ebe1ae09447a9e3746b", Tag.CRASHING)
+tag_manually("zune-image-zune-psd-decode_buffer.wasm", "031f8b7032476458cba37ebe1ae09447a9e3746b", Tag.CRASHING)
 
 # [STDOUT] thread '<unnamed>' panicked at /projects/lewton/repo/src/header.rs:505:29:
 # [STDOUT] capacity overflow
@@ -468,7 +477,12 @@ tag_manually(
     "39838838ec2d49021548f90cec60cc3d8f56b188",
     Tag.CRASHING,
 )
+tag_manually(
+    "zlib-rs-end_to_end.wasm", "39838838ec2d49021548f90cec60cc3d8f56b188", Tag.CRASHING
+)
 
+tag_manually("libzstd-rs-sys-decompress.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
+tag_manually("libzstd-rs-sys-decompress_overlapping.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
 
 # JIT-TRACE: _257_find_pe_overlay/0067: Memory(I32Load16U(MemArg { align: 0, max_align: 1, offset: 20, memory: 0 }))
 # execution trapped with Abort(HeapOutOfBounds) which indicates that the target crashed
