@@ -25,7 +25,7 @@ use crate::{
 pub(crate) struct CliOpts {
     #[clap(flatten)]
     pub g: super::opts::GeneralOpts,
-    #[clap(long, default_value = "2m")]
+    #[clap(long, default_value = "3m")]
     pub config_interval: Duration,
     #[clap(long)]
     pub timeout: Option<Duration>,
@@ -404,7 +404,6 @@ impl Orchestrator {
         let mut timeout = *self.opts.config_interval;
         if let Some(tm) = self.opts.timeout.as_deref() {
             let tm_remaining = (*tm).saturating_sub(self.start.elapsed());
-            let tm_remaining = tm_remaining.max(std::time::Duration::from_secs(1));
             timeout = timeout.min(tm_remaining);
         }
 

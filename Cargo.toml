@@ -12,6 +12,7 @@ wasmparser = "0.243"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive", "env"] }
 md5 = "0.8"
+memchr = "2.7.6"
 rand = "0.9"
 bitvec = "1.0.1"
 roaring = "0.11"
@@ -45,7 +46,11 @@ ouroboros = "0.18.3"
 libafl = { version = "=0.15.4", default-features = false, features = [
     "rand_trait",
 ] }
-libafl_bolts = { version = "0.15", default-features = false, features = ["std", "derive", "serdeany_autoreg"] }
+libafl_bolts = { version = "0.15", default-features = false, features = [
+    "std",
+    "derive",
+    "serdeany_autoreg",
+] }
 cranelift = { version = "0.127", features = [
     # cranelift = { path = "../wasmtime/cranelift/umbrella", package = "cranelift", features = [
     "jit",
@@ -57,7 +62,7 @@ libc = "0.2.158"
 
 # feat:concolic
 # Note: waiting for 0.3.1 upstream
-smtlib = { git = "https://github.com/oeb25/smtlib-rs.git", rev = "4f0fad92289ba02931276cbe2bbe45f87f7a6f3e", optional = true}
+smtlib = { git = "https://github.com/oeb25/smtlib-rs.git", rev = "4f0fad92289ba02931276cbe2bbe45f87f7a6f3e", optional = true }
 z3 = { version = "0.19", optional = true }
 bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = true }
 

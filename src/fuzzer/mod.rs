@@ -3,7 +3,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 pub(crate) mod exhaustive;
-mod i2s_patches;
+pub(crate) mod i2s_patches;
 pub mod opts;
 pub(crate) mod orc;
 mod worker;

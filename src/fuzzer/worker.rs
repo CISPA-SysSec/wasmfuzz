@@ -1,6 +1,6 @@
 use crate::HashSet;
+use crate::fuzzer::i2s_patches::{CmpLog, CmplogStore};
 use crate::instrumentation::InstrumentationSnapshot;
-use crate::jit::tracing::CmpLog;
 use std::collections::VecDeque;
 use std::{sync::Arc, time::Instant};
 
@@ -8,7 +8,6 @@ use crate::simple_bus::MessageBus;
 use libafl::corpus::CorpusId;
 use libafl::inputs::ResizableMutator;
 use libafl::mutators::{HavocScheduledMutator, StdMOptMutator, havoc_mutations};
-use libafl::observers::CmplogBytes;
 use libafl::stages::StageId;
 use libafl::state::HasCurrentStageId;
 use libafl::state::{HasSolutions, Stoppable};
@@ -17,7 +16,6 @@ use libafl::{
     corpus::{Corpus, HasCurrentCorpusId, InMemoryCorpus, Testcase},
     inputs::BytesInput,
     mutators::Mutator,
-    observers::{CmpValues, CmpValuesMetadata},
     state::{HasCorpus, HasMaxSize, HasRand},
 };
 use libafl_bolts::{
@@ -302,13 +300,15 @@ impl Worker {
                 let looplike = |el: u64| {
                     for i in 1..2 {
                         if let Some(x) = el.checked_add(i)
-                            && !vals.contains(&x) {
-                                return false;
-                            }
+                            && !vals.contains(&x)
+                        {
+                            return false;
+                        }
                         if let Some(x) = el.checked_sub(i)
-                            && !vals.contains(&x) {
-                                return false;
-                            }
+                            && !vals.contains(&x)
+                        {
+                            return false;
+                        }
                     }
                     true
                 };
@@ -328,32 +328,30 @@ impl Worker {
                 }
             }
 
-            // for el in &combined {
-            //     eprintln!("{:x?}", el);
-            // }
-
-            fn cmplog_to_cmpvalues(el: &CmpLog) -> CmpValues {
-                fn make_cmplog_bytes(data: &[u8]) -> CmplogBytes {
-                    let mut buf = [0; 32];
-                    let len = std::cmp::min(data.len(), 32);
-                    buf[..len].copy_from_slice(&data[..len]);
-                    CmplogBytes::from_buf_and_len(buf, len as u8)
+            // filter for entries that appear in the input: more efficient mutation and less memory
+            combined.retain(|el| el.test_input(input));
+            // NB: our compressed metadata is 10-20% the size of libafl's CmpValues list
+            if false {
+                let mut size_estimate_data = 0;
+                let mut size_estimate_libafl = 0;
+                for el in &combined {
+                    size_estimate_data += match el {
+                        CmpLog::U16(_, _) => 4,
+                        CmpLog::U32(_, _) => 8,
+                        CmpLog::U64(_, _) => 16,
+                        CmpLog::Memcmp(a, b) => a.len() + b.len() + 16,
+                    } + 4;
+                    size_estimate_libafl += std::mem::size_of::<libafl::observers::CmpValues>();
                 }
-                match el {
-                    // TODO: track if values are const
-                    &CmpLog::U16(a, b) => CmpValues::U16((a, b, false)),
-                    &CmpLog::U32(a, b) => CmpValues::U32((a, b, false)),
-                    &CmpLog::U64(a, b) => CmpValues::U64((a, b, false)),
-                    CmpLog::Memcmp(a, b) => {
-                        CmpValues::Bytes((make_cmplog_bytes(a), make_cmplog_bytes(b)))
-                    }
-                }
+                eprintln!(
+                    "trace metadata size: {} (libafl: {})",
+                    humansize::format_size(size_estimate_data, humansize::DECIMAL),
+                    humansize::format_size(size_estimate_libafl, humansize::DECIMAL)
+                );
             }
-
-            // TODO: filter for entries that appear in the input?
-            testcase.metadata_map_mut().insert(CmpValuesMetadata {
-                list: combined.iter().map(cmplog_to_cmpvalues).collect(),
-            });
+            testcase
+                .metadata_map_mut()
+                .insert(CmplogStore::new(combined.into_iter()));
         }
     }
 

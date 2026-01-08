@@ -1,8 +1,7 @@
+use crate::fuzzer::i2s_patches::CmpLog;
 use crate::{HashMap, HashSet};
 
 use crate::ir::Location;
-
-use super::tracing::CmpLog;
 
 // TODO: move this to instrumentation passes?
 

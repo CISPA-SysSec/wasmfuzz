@@ -296,7 +296,6 @@ pub(crate) trait FLInteger: Copy + Clone + Eq + Ord + std::ops::Add + std::ops::
     fn zero() -> Self;
     fn max() -> Self;
     fn cranelift_ty() -> ir::Type;
-    #[expect(unused)]
     fn as_u64(&self) -> u64;
 }
 

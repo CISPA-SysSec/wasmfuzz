@@ -2823,6 +2823,7 @@ dependencies = [
  "libafl_bolts",
  "libc",
  "md5",
+ "memchr",
  "mimalloc",
  "object 0.38.0",
  "ordered-float",
