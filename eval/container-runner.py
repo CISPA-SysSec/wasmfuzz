@@ -66,11 +66,11 @@ PODMAN = os.environ.get("PODMAN", "podman" if shutil.which("podman") else "docke
 if PODMAN == "podman":
     with open("/proc/sys/kernel/keys/maxkeys") as f:
         maxkeys = int(f.read().strip())
-    if maxkeys < os.cpu_count():
+    if maxkeys < os.cpu_count() * 2:
         print(f"[WARN] spawning {os.cpu_count()} containers with podman would run into a kernel limit:")
         print(f"       kernel.keys.maxkeys={maxkeys}")
         print(f"Increase the limit accordingly to continue:")
-        print(f"sudo sysctl -w kernel.keys.maxkeys={os.cpu_count()*2}")
+        print(f"sudo sysctl -w kernel.keys.maxkeys={os.cpu_count()*4}")
         os.exit(1)
 
 
@@ -311,7 +311,7 @@ class FuzzJob:
         #    tuna has ~32gb per 8 cores ( 32GB,   8 cores)
         #  alfred has 128gb per 8 cores (  2TB, 128 cores)
         # srv-23- has ~32gb per 8 cores (768GB, 192 cores)
-        fuzzer_cmd += ["--memory", "8g"]
+        fuzzer_cmd += ["--memory", "16g"]
         fuzzer_cmd += ["--network", "none"]
         fuzzer_cmd += ["--log-driver", "none"] # afl++ people say that docker's log infra causes performance issues?
         if self.core_ids:

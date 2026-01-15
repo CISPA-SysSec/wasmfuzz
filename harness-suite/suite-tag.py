@@ -447,7 +447,7 @@ tag_manually(
 # [STDOUT] thread '<unnamed>' panicked at /projects/comrak/repo/src/parser/mod.rs:3348:21:
 # [STDOUT] assertion failed: (sp.end.column - sp.start.column + 1 == x) || rem == 0
 # => >https://github.com/kivikakk/comrak/issues/595
-for target in ["parse", "fuzz_options", "gfm_footnotes", "commonmark"]:
+for target in ["parse", "fuzz_options", "gfm_footnotes", "commonmark", "all_options"]:
     tag_manually(
         f"comrak-{target}.wasm",
         "32b4f7d55f4f8da27da19de9e458471815fda2c4",
