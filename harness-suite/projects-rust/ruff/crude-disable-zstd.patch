@@ -1,22 +1,22 @@
 diff --git a/crates/ty/Cargo.toml b/crates/ty/Cargo.toml
-index 4189758..5f75910 100644
+index 4b962179fe..0e9ffd474b 100644
 --- a/crates/ty/Cargo.toml
 +++ b/crates/ty/Cargo.toml
-@@ -18,7 +18,7 @@ ruff_db = { workspace = true, features = ["os", "cache"] }
+@@ -17,7 +17,7 @@ license.workspace = true
+ ruff_db = { workspace = true, features = ["os", "cache"] }
  ruff_python_ast = { workspace = true }
  ty_combine = { workspace = true }
- ty_python_semantic = { workspace = true }
 -ty_project = { workspace = true, features = ["zstd"] }
-+ty_project = { workspace = true, features = [] }# "zstd"] }
++ty_project = { workspace = true }
+ ty_python_semantic = { workspace = true }
  ty_server = { workspace = true }
  ty_static = { workspace = true }
- 
 diff --git a/crates/ty_project/Cargo.toml b/crates/ty_project/Cargo.toml
-index 6ccc1e4..7134ec4 100644
+index 33c1762b38..8e3387e1a8 100644
 --- a/crates/ty_project/Cargo.toml
 +++ b/crates/ty_project/Cargo.toml
-@@ -49,7 +49,7 @@ ruff_db = { workspace = true, features = ["testing"] }
- insta = { workspace = true, features = ["redactions", "ron"] }
+@@ -52,7 +52,7 @@ insta = { workspace = true, features = ["redactions", "ron"] }
+ ruff_db = { workspace = true, features = ["testing"] }
  
  [features]
 -default = ["zstd"]
@@ -25,7 +25,7 @@ index 6ccc1e4..7134ec4 100644
  schemars = [
      "dep:schemars",
 diff --git a/crates/ty_vendored/Cargo.toml b/crates/ty_vendored/Cargo.toml
-index 0461b83..a23ab1e 100644
+index 0461b834c3..a23ab1e06e 100644
 --- a/crates/ty_vendored/Cargo.toml
 +++ b/crates/ty_vendored/Cargo.toml
 @@ -18,7 +18,7 @@ zip = { workspace = true }
@@ -38,7 +38,7 @@ index 0461b83..a23ab1e 100644
  [dev-dependencies]
  walkdir = { workspace = true }
 diff --git a/crates/ty_vendored/build.rs b/crates/ty_vendored/build.rs
-index 5c65c09..81acaf4 100644
+index 5c65c09848..81acaf453a 100644
 --- a/crates/ty_vendored/build.rs
 +++ b/crates/ty_vendored/build.rs
 @@ -34,7 +34,7 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {

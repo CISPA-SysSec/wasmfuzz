@@ -1,68 +1,23 @@
-diff --git a/Cargo.toml b/Cargo.toml
-index 32461ed..677d560 100644
---- a/Cargo.toml
-+++ b/Cargo.toml
-@@ -11,7 +11,6 @@ members = [
-     "lock-analyzer",
-     "naga-cli",
-     "naga",
--    "naga/fuzz",
-     "naga/hlsl-snapshots",
-     "player",
-     "tests",
-@@ -22,7 +21,7 @@ members = [
-     "wgpu-types",
-     "wgpu",
- ]
--exclude = []
-+exclude = ["naga/fuzz"]
- default-members = [
-     "benches",
-     "examples/features",
-@@ -30,7 +29,6 @@ default-members = [
-     "lock-analyzer",
-     "naga-cli",
-     "naga",
--    "naga/fuzz",
-     "naga/hlsl-snapshots",
-     "player",
-     "tests",
 diff --git a/naga/fuzz/Cargo.toml b/naga/fuzz/Cargo.toml
-index 5d8647f..e44f3e4 100644
+index 0e63bc4a2..ecf5ae2b4 100644
 --- a/naga/fuzz/Cargo.toml
 +++ b/naga/fuzz/Cargo.toml
-@@ -10,18 +10,18 @@ build = "build.rs"
+@@ -10,11 +10,11 @@ build = "build.rs"
  [package.metadata]
  cargo-fuzz = true
  
 -[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios")))'.dependencies]
 +[dependencies]
- arbitrary = { version = "1.4.1", features = ["derive"] }
- # See https://github.com/rust-fuzz/libfuzzer/issues/126
- libfuzzer-sys = ">0.4.0,<=0.4.7"
+ arbitrary = { workspace = true, features = ["derive"] }
+ libfuzzer-sys.workspace = true
  
 -[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "visionos")))'.dependencies.naga]
 +[dependencies.naga]
- path = ".."
- version = "24.0.0"
+ workspace = true
  features = ["arbitrary", "spv-in", "wgsl-in", "glsl-in"]
  
- [build-dependencies]
--cfg_aliases.workspace = true
-+cfg_aliases = "*"
- 
- [[bin]]
- name = "spv_parser"
-@@ -53,3 +53,7 @@ doc = false
- 
- [lints.clippy]
- disallowed_types = "allow"
-+
-+# Prevent this from interfering with workspaces
-+[workspace]
-+members = ["."]
 diff --git a/naga/fuzz/build.rs b/naga/fuzz/build.rs
-index 9ad00f5..b7a9ae4 100644
+index 9ad00f53a..a69970d63 100644
 --- a/naga/fuzz/build.rs
 +++ b/naga/fuzz/build.rs
 @@ -1,6 +1,6 @@
@@ -73,3 +28,13 @@ index 9ad00f5..b7a9ae4 100644
      }
      // This cfg provided by cargo-fuzz
      println!("cargo::rustc-check-cfg=cfg(fuzzing)");
+diff --git a/rust-toolchain.toml b/rust-toolchain.toml
+deleted file mode 100644
+index 04d37a72c..000000000
+--- a/rust-toolchain.toml
++++ /dev/null
+@@ -1,4 +0,0 @@
+-[toolchain]
+-channel = "1.92"
+-components = ["rustfmt", "clippy"]
+-targets = ["wasm32-unknown-unknown"]

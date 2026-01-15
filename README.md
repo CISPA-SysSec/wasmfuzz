@@ -68,7 +68,7 @@ Other options are available via `wasmfuzz --help` and `wasmfuzz fuzz --help`.
 - Arithmetic comparison distance coverage: `src/instrumentation/cmpcov.rs`
 - Function all parameters and return values: `src/instrumentation/call_params.rs`
 - Path coverage: `src/instrumentation/path_hash.rs`
-- Function / loop hitcounts: `src/instrumentation/perffuzz.rs`
+- Function / loop hit-counts: `src/instrumentation/perffuzz.rs`
 - Execution trace instruction limits: `src/instrumentation/instruction_limit.rs`
 - Memory access values, pointer ranges: `src/instrumentation/mem.rs`
 - Shortest input that reaches each function / basic block: `src/instrumentation/input_size.rs`
@@ -112,7 +112,7 @@ Currently, we include the following WebAssembly fuzzers in our evaluation script
 
 ### Limitations
 
-Symbols get renamed during the wasm2c process for native fuzzers. Due to this, hardcoded support for input-to-state mutations might be impacted due to symbol names and/or non-standard unrolled translated implementations.
+Symbols get renamed during the `wasm2c` process for native fuzzers. Due to this, hardcoded support for input-to-state mutations might be impacted due to symbol names and/or non-standard unrolled translated implementations.
 We have not confirmed the impact of this specific issue though.
 
 
@@ -133,4 +133,3 @@ We have not confirmed the impact of this specific issue though.
     * Wasabi: Support the Lime1 extensions by @doehyunbaek [[Upstream PR]](https://github.com/danleh/wasabi/pull/41)
     * Wasabi: Fix parser error with overlong `call_indirect` encoding [[Upstream PR]](https://github.com/doehyunbaek/wasabi/pull/1)
     * FuzzM: Adjust for Wasabi changes [[Upstream PR]](https://github.com/fuzzm/fuzzm-project/pull/6)
-

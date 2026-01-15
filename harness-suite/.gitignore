@@ -2,3 +2,5 @@ out/*
 out-dbg/*
 corpus/*
 dummy/.build
+projects-clike-wip
+projects-rust-wip

@@ -1,0 +1,13 @@
+diff --git a/crates/zune-qoi/src/decoder.rs b/crates/zune-qoi/src/decoder.rs
+index 40890f9b..13c44719 100644
+--- a/crates/zune-qoi/src/decoder.rs
++++ b/crates/zune-qoi/src/decoder.rs
+@@ -272,7 +272,7 @@ where
+                 run -= 1;
+                 pix_chunk.copy_from_slice(&px[0..SIZE]);
+             } else {
+-                let chunk = self.stream.read_u8();
++                let chunk = self.stream.read_u8_err()?;
+ 
+                 if chunk == QOI_OP_RGB {
+                     let packed_bytes = self.stream.read_fixed_bytes_or_zero::<3>();

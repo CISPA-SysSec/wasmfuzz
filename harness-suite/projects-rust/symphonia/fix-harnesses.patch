@@ -1,0 +1,179 @@
+From 93e36c6cd8e9fb635303f09d75541682b7e6d431 Mon Sep 17 00:00:00 2001
+From: Mrmaxmeier <Mrmaxmeier@gmail.com>
+Date: Tue, 6 Jan 2026 23:26:31 +0100
+Subject: [PATCH 1/3] update fuzzers to new APIs
+
+---
+ symphonia/fuzz/fuzz_targets/decode_any.rs | 57 +++++++++++++----------
+ symphonia/fuzz/fuzz_targets/decode_mp3.rs |  5 +-
+ 2 files changed, 36 insertions(+), 26 deletions(-)
+
+diff --git a/symphonia/fuzz/fuzz_targets/decode_any.rs b/symphonia/fuzz/fuzz_targets/decode_any.rs
+index 5ab24e8cf..a1edfd981 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_any.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_any.rs
+@@ -1,39 +1,48 @@
+ #![no_main]
+ use libfuzzer_sys::fuzz_target;
+-use symphonia::core::codecs::DecoderOptions;
+-use symphonia::core::formats::FormatOptions;
++use symphonia::core::codecs::audio::AudioDecoderOptions;
++use symphonia::core::formats::probe::Hint;
++use symphonia::core::formats::{FormatOptions, TrackType};
+ use symphonia::core::meta::MetadataOptions;
+-use symphonia::core::probe::Hint;
+ 
+ fuzz_target!(|data: Vec<u8>| {
+     let data = std::io::Cursor::new(data);
+ 
+     let source = symphonia::core::io::MediaSourceStream::new(Box::new(data), Default::default());
+ 
+-    match symphonia::default::get_probe().format(
++    let Ok(mut format) = symphonia::default::get_probe().probe(
+         &Hint::new(),
+         source,
+-        &FormatOptions::default(),
+-        &MetadataOptions::default(),
+-    ) {
+-        Ok(mut probed) => {
+-            let track = probed.format.default_track().unwrap();
++        FormatOptions::default(),
++        MetadataOptions::default(),
++    )
++    else {
++        return;
++    };
+ 
+-            let mut decoder = match symphonia::default::get_codecs()
+-                .make(&track.codec_params, &DecoderOptions::default())
+-            {
+-                Ok(d) => d,
+-                Err(_) => return,
+-            };
++    // Find the first audio track with a known (decodeable) codec.
++    let Some(track) = format.default_track(TrackType::Audio)
++    else {
++        return;
++    };
+ 
+-            loop {
+-                let packet = match probed.format.next_packet() {
+-                    Ok(p) => p,
+-                    Err(_) => return,
+-                };
+-                let _ = decoder.decode(&packet);
+-            }
+-        }
+-        Err(_) => {}
++    // Use the default options for the decoder.
++    let dec_opts: AudioDecoderOptions = Default::default();
++
++    // Create a decoder for the track.
++    let audio_params =
++        track.codec_params.as_ref().expect("codec parameters missing").audio().unwrap();
++    let Ok(mut decoder) =
++        symphonia::default::get_codecs().make_audio_decoder(audio_params, &dec_opts)
++    else {
++        return;
++    };
++
++    loop {
++        let Ok(Some(packet)) = format.next_packet()
++        else {
++            return;
++        };
++        let _ = decoder.decode(&packet);
+     }
+ });
+diff --git a/symphonia/fuzz/fuzz_targets/decode_mp3.rs b/symphonia/fuzz/fuzz_targets/decode_mp3.rs
+index 6da0cea32..09349de22 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_mp3.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_mp3.rs
+@@ -1,11 +1,12 @@
+ #![no_main]
+ use libfuzzer_sys::fuzz_target;
+-use symphonia::core::codecs::{CODEC_ID_MP3, CodecParameters, Decoder};
++use symphonia::core::codecs::audio::well_known::CODEC_ID_MP3;
++use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoder};
+ use symphonia::core::formats::Packet;
+ use symphonia::default::codecs::MpaDecoder;
+ 
+ fuzz_target!(|data: Vec<u8>| {
+-    let mut codec_params = CodecParameters::new();
++    let mut codec_params = AudioCodecParameters::new();
+     codec_params.for_codec(CODEC_ID_MP3);
+ 
+     let mut decoder = MpaDecoder::try_new(&codec_params, &Default::default()).unwrap();
+
+From 7bff85b0423072d34305300b5c070e1f142c1b8e Mon Sep 17 00:00:00 2001
+From: Mrmaxmeier <Mrmaxmeier@gmail.com>
+Date: Tue, 6 Jan 2026 23:27:01 +0100
+Subject: [PATCH 2/3] fuzz: fix non-workspace cargo.toml
+
+---
+ symphonia/fuzz/Cargo.toml | 11 +++--------
+ 1 file changed, 3 insertions(+), 8 deletions(-)
+
+diff --git a/symphonia/fuzz/Cargo.toml b/symphonia/fuzz/Cargo.toml
+index 1781c548e..8c8fb30b4 100644
+--- a/symphonia/fuzz/Cargo.toml
++++ b/symphonia/fuzz/Cargo.toml
+@@ -1,14 +1,9 @@
+-
+ [package]
+ name = "symphonia-fuzz"
++version = "0.0.0"
++authors = ["Automatically generated"]
+ publish = false
+-# Common package metadata located in workspace Cargo.toml.
+-edition.workspace = true
+-homepage.workspace = true
+-license.workspace = true
+-repository.workspace = true
+-rust-version.workspace = true
+-version.workspace = true
++edition = "2021"
+ 
+ [package.metadata]
+ cargo-fuzz = true
+
+From b13bba6e5a276757ccc3b8e252fe81e06f8df0fa Mon Sep 17 00:00:00 2001
+From: Mrmaxmeier <Mrmaxmeier@gmail.com>
+Date: Tue, 6 Jan 2026 23:36:25 +0100
+Subject: [PATCH 3/3] clippy: apply manual_rotate lint in Xoshiro128pp
+
+---
+ symphonia-core/src/audio/conv.rs | 9 ++-------
+ 1 file changed, 2 insertions(+), 7 deletions(-)
+
+diff --git a/symphonia-core/src/audio/conv.rs b/symphonia-core/src/audio/conv.rs
+index 9d825d63a..d6615ade6 100644
+--- a/symphonia-core/src/audio/conv.rs
++++ b/symphonia-core/src/audio/conv.rs
+@@ -67,16 +67,11 @@ pub mod dither {
+                 }
+             }
+ 
+-            #[inline(always)]
+-            fn rotl(x: u32, k: u32) -> u32 {
+-                (x << k) | (x >> (32 - k))
+-            }
+-
+             #[inline]
+             pub fn next(&mut self) -> u32 {
+                 let x = self.s[0].wrapping_add(self.s[3]);
+ 
+-                let result = Xoshiro128pp::rotl(x, 7).wrapping_add(self.s[0]);
++                let result = x.rotate_left(7).wrapping_add(self.s[0]);
+ 
+                 let t = self.s[1] << 9;
+ 
+@@ -87,7 +82,7 @@ pub mod dither {
+ 
+                 self.s[2] ^= t;
+ 
+-                self.s[3] = Xoshiro128pp::rotl(self.s[3], 11);
++                self.s[3] = self.s[3].rotate_left(11);
+ 
+                 result
+             }

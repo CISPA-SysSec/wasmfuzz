@@ -21,7 +21,7 @@ args = parser.parse_args()
 BUILD_TYPE = os.environ.get("BUILD_TYPE", "wasi-lime1")
 assert BUILD_TYPE in ["wasi-lime1", "wasi-mvp", "x86_64-libfuzzer", "x86_64-libafl"]
 BUILD_FLAGS = os.environ.get("BUILD_FLAGS", "").split(";")
-RUSTUP_TOOLCHAIN = "nightly-2025-07-26"
+RUSTUP_TOOLCHAIN = "nightly-2026-01-03"
 WASI_SYSROOT = "/wasi-sdk/share/wasi-sysroot/"
 CARGO = Path.home() / ".cargo" / "bin" / "cargo"
 os.environ["RUSTUP_TOOLCHAIN"] = RUSTUP_TOOLCHAIN
