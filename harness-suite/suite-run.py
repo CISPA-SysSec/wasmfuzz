@@ -117,7 +117,7 @@ async def run_target(target):
                     f"--dir={snapshot_dir}",
                     f"--csv-out={corpus_info_csv}",
                 ],
-                pipe_stdout=f"/tmp/wasmfuzz-logs/{target.stem}-{snapshot}.log",
+                pipe_stdout=f"/tmp/wasmfuzz-logs/{target.stem}-{snapshot}-corpus-info.log",
                 stdout_prefix=target.stem,
                 mix_stderr=True
             )
@@ -126,7 +126,7 @@ async def run_target(target):
 async def main():
     jobs = []
     for target in Path(args.harness_dir).glob("*.wasm"):
-        if args.target and all(tgt not in target.stem for tgt in args.target):
+        if args.target and not any(tgt in target.stem for tgt in args.target):
             continue
         if args.no_parallel:
             await run_target(target)
