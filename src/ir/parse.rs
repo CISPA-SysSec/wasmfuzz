@@ -117,7 +117,7 @@ impl ModuleSpec {
             .parse_all(module_binary)
             .try_fold(Vec::new(), |mut acc, el| {
                 if let Payload::ImportSection(imports) = el? {
-                    for import in imports {
+                    for import in imports.into_imports() {
                         let import = import?;
                         let name = format!("{}::{}", import.module, import.name);
                         acc.push(name);
@@ -132,7 +132,7 @@ impl ModuleSpec {
             .parse_all(module_binary)
             .try_fold(Vec::new(), |mut acc, el| {
                 if let Payload::ImportSection(imports) = el? {
-                    for import in imports {
+                    for import in imports.into_imports() {
                         let import = import?;
                         if let wasmparser::TypeRef::Func(tyidx) = import.ty {
                             acc.push(tyidx);

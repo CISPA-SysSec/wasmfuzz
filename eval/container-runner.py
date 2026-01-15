@@ -109,6 +109,18 @@ fuzzers: list[str] = args.fuzzer or [
     "libafl-libfuzzer-wasm2c",
 ]
 
+if args.fuzzer == ["wasmfuzz|pass-ablations"]:
+    PASSES = [
+        "baseline", "cmpcov_hamming", "cmpcov_absdist", "perffuzz_func",
+        "perffuzz_bb", "perffuzz_edge", "perffuzz_edge_global", "func_rec_depth",
+        "call_value_profile", "func_input_size", "memory_op_value", "memory_op_address",
+        "path_hash_func", "path_hash_edge", "func_shortest_trace", "edge_shortest_trace",
+        "func_longest_trace", "func_rec_depth", "call_value_profile", "func_input_size",
+        "memory_op_value", "memory_op_address", "path_hash_func", "path_hash_edge",
+        "func_shortest_trace", "edge_shortest_trace", "func_longest_trace",
+    ]
+    fuzzers = [f"wasmfuzz|pass-ablation-{pass_}" for pass_ in PASSES]
+
 class LibfuzzerMonitor:
     def __init__(self, bin_path: Path, bucket:str, target_name: str, interval_secs=30, only_new=False):
         self.bin_path = bin_path

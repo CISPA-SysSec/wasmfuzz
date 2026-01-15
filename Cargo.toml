@@ -8,7 +8,7 @@ rust-version = "1.90"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.243"
+wasmparser = "0.244"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive", "env"] }
 md5 = "0.8"

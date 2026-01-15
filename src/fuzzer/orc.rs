@@ -559,7 +559,9 @@ impl Orchestrator {
         if self.opts.experiment == Some(Experiment::PassAblation) {
             let pass =
                 std::env::var("FUZZER_PASS_ABLATION").expect("FUZZER_PASS_ABLATION must be set");
-            opts.activate_from_str(&pass);
+            if pass != "baseline" {
+                opts.activate_from_str(&pass);
+            }
         } else if !is_saturated && self.rng.random_ratio(8, 10) {
             let mut light_knobs = [
                 &mut *cmpcov_absdist,

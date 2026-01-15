@@ -477,9 +477,6 @@ tag_manually(
     "39838838ec2d49021548f90cec60cc3d8f56b188",
     Tag.CRASHING,
 )
-tag_manually(
-    "zlib-rs-end_to_end.wasm", "39838838ec2d49021548f90cec60cc3d8f56b188", Tag.CRASHING
-)
 
 tag_manually("libzstd-rs-sys-decompress.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
 tag_manually("libzstd-rs-sys-decompress_overlapping.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
