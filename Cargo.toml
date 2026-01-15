@@ -52,7 +52,6 @@ libafl_bolts = { version = "0.15", default-features = false, features = [
     "serdeany_autoreg",
 ] }
 cranelift = { version = "0.127", features = [
-    # cranelift = { path = "../wasmtime/cranelift/umbrella", package = "cranelift", features = [
     "jit",
     "module",
     "native",
@@ -69,7 +68,7 @@ bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = t
 # feat:with_mimalloc
 mimalloc = { version = "0.1", optional = true, default-features = false }
 
-# feat:reports
+# feat:reports (default)
 askama = { version = "0.15", optional = true }
 lcov = { version = "0.8", optional = true }
 syntect = { version = "5.1", optional = true }
@@ -92,7 +91,7 @@ tracy_full = { version = "1.12.0", default-features = false, features = [
 ] }
 
 [features]
-default = ["reports", "compressed_harnesses"]
+default = ["reports"]
 reports = ["askama", "lcov", "syntect"]
 with_mimalloc = ["mimalloc"]
 compressed_harnesses = ["zstd"]

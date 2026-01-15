@@ -649,7 +649,6 @@ impl SolverInstance {
         let bv = model.eval(&bv.bv(), true);
 
         if let Some(solution) = bv {
-            // let solution = bv.bv().get_a_solution();
             Ok(solution.as_u64().unwrap())
         } else {
             Err(SolverBackendError::UnspecifiedError)

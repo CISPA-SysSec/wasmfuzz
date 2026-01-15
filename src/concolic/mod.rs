@@ -121,10 +121,6 @@ pub(crate) struct ConcolicProvider {
 }
 
 impl ConcolicProvider {
-    pub(crate) fn is_available() -> bool {
-        cfg!(any(feature = "concolic_z3", feature = "concolic_bitwuzla"))
-    }
-
     pub(crate) fn new(spec: Option<Arc<ModuleSpec>>) -> Self {
         Self {
             #[cfg(feature = "concolic")]
@@ -155,16 +151,28 @@ impl ConcolicProvider {
             #[cfg(feature = "concolic_z3")]
             Some(SolverKind::Z3) => Some(ConcolicSolver::Z3(Z3Solver::new(self.spec.clone()))),
             #[cfg(feature = "concolic")]
-            Some(SolverKind::SmtlibCVC5) => Some(ConcolicSolver::Smtlib(SmtlibSolver::new(
-                self.spec.clone(),
-                &self.smtlib_storage,
-                smtlib::Solver::new(
+            Some(SolverKind::SmtlibCVC5) => {
+                let mut solver = smtlib::Solver::new(
                     &self.smtlib_storage,
                     Box::new(smtlib::backend::cvc5_binary::Cvc5Binary::new("cvc5").unwrap())
                         as Box<dyn smtlib::Backend>,
                 )
-                .unwrap(),
-            ))),
+                .unwrap();
+                solver
+                    .run_command(smtlib::lowlevel::ast::Command::SetOption(
+                        smtlib::lowlevel::ast::Option::parse(
+                            &self.smtlib_storage,
+                            ":tlimit-per 250",
+                        )
+                        .unwrap(),
+                    ))
+                    .unwrap();
+                Some(ConcolicSolver::Smtlib(SmtlibSolver::new(
+                    self.spec.clone(),
+                    &self.smtlib_storage,
+                    solver,
+                )))
+            }
             _ => None,
         }
     }
@@ -373,6 +381,7 @@ pub(crate) enum ConcolicEvent {
         location: Location,
         address: u32,
         sym: SymValRef,
+        #[expect(unused)]
         purpose: MemoryConstraintPurpose,
     },
     // TODO: Where could we automatically apply tryalternatives? The select instruction? Indirect branches?
@@ -396,6 +405,7 @@ pub(crate) enum ConcolicEvent {
 }
 
 #[derive(Debug, Clone)]
+#[expect(unused)]
 pub(crate) enum MemoryConstraintPurpose {
     Load,
     LoadWithFixedOffset(u32),
@@ -459,6 +469,7 @@ pub(crate) struct Symvals {
     debug: bool,
     track_module_byte_offsets: bool,
     module_byte_offsets: Vec<u32>,
+    #[expect(unused)]
     refs: Vec<SymValRef>,
 }
 
@@ -567,6 +578,7 @@ struct MemoryLog {
 }
 
 impl MemoryLog {
+    #[expect(unused)]
     fn clear(&mut self) {
         self.epoch = 0;
         self.log.clear();
@@ -577,6 +589,7 @@ impl MemoryLog {
         self.log.push(dbg!(x))
     }
 
+    #[expect(unused)]
     fn load(&mut self) -> SymVal {
         /*SymVal::Load {
             kind,
@@ -1023,7 +1036,7 @@ impl ConcolicContext {
         let mut solver = SmtlibSolver::new(None, &storage, solver);
         solver
             .eval_as_u64_with_input(val, input, &self.symvals)
-            .unwrap()
+            .ok()
     }
     #[cfg(feature = "concolic_bitwuzla")]
     pub(crate) fn eval_as_u64_with_input(&self, val: SymValRef, input: &[u8]) -> Option<u64> {
@@ -1231,5 +1244,6 @@ pub(crate) struct ConcolicTrace {
     pub symvals: Symvals,
     pub events: Vec<ConcolicEvent>,
     pub event_inputs: Vec<BitVec>,
+    #[expect(unused)]
     pub events_by_location: HashMap<Location, Vec<usize>>,
 }

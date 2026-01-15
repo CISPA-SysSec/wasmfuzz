@@ -6,12 +6,12 @@ use crate::concolic::MemoryAccessKind;
 use super::smtlib_helpers::BitVecExt;
 use super::{BinaryOp, ConcolicEvent, SolverBackendError, SymVal, SymValRef, Symvals, UnaryOp};
 
-use smtlib::Logic;
 use smtlib::{
-    BitVec, Bool, SatResult,
+    BitVec, Bool, Float32, Float64, SatResult,
     prelude::*,
     terms::{Const, Dynamic},
 };
+use smtlib::{FloatingPoint, Logic, RoundingMode};
 
 #[derive(Clone, Debug)]
 enum Value<'ctx> {
@@ -19,6 +19,8 @@ enum Value<'ctx> {
     BV8(BitVec<'ctx, 8>),
     BV32(BitVec<'ctx, 32>),
     BV64(BitVec<'ctx, 64>),
+    F32(Float32<'ctx>),
+    F64(Float64<'ctx>),
 }
 impl<'ctx> Value<'ctx> {
     fn as_bv32(&self) -> BitVec<'ctx, 32> {
@@ -34,6 +36,8 @@ impl<'ctx> Value<'ctx> {
             Value::BV8(bv) => bv.into_dynamic(),
             Value::BV32(bv) => bv.into_dynamic(),
             Value::BV64(bv) => bv.into_dynamic(),
+            Value::F32(f) => f.into_dynamic(),
+            Value::F64(f) => f.into_dynamic(),
         }
     }
 }
@@ -54,6 +58,10 @@ impl<'ctx> From<Dynamic<'ctx>> for Value<'ctx> {
             Value::BV32(BitVec::<32>::from_dynamic(val))
         } else if BitVec::<64>::is_sort(val.sort()) {
             Value::BV64(BitVec::<64>::from_dynamic(val))
+        } else if Float32::is_sort(val.sort()) {
+            Value::F32(Float32::from_dynamic(val))
+        } else if Float64::is_sort(val.sort()) {
+            Value::F64(Float64::from_dynamic(val))
         } else {
             unreachable!()
         }
@@ -84,6 +92,18 @@ impl<'ctx> From<BitVec<'ctx, 64>> for Value<'ctx> {
     }
 }
 
+impl<'ctx> From<Float32<'ctx>> for Value<'ctx> {
+    fn from(val: Float32<'ctx>) -> Self {
+        Value::F32(val)
+    }
+}
+
+impl<'ctx> From<Float64<'ctx>> for Value<'ctx> {
+    fn from(val: Float64<'ctx>) -> Self {
+        Value::F64(val)
+    }
+}
+
 pub(crate) struct SolverInstance<'ctx> {
     storage: &'ctx smtlib::Storage,
     solver: smtlib::Solver<'ctx, Box<dyn smtlib::backend::Backend>>,
@@ -93,6 +113,7 @@ pub(crate) struct SolverInstance<'ctx> {
     inp_vals: HashMap<u16, Const<'ctx, BitVec<'ctx, 8>>>,
     spec: Option<Arc<ModuleSpec>>,
     prop_counter: usize,
+    tmp_counter: usize,
 }
 
 struct Logger;
@@ -117,7 +138,10 @@ impl<'ctx> SolverInstance<'ctx> {
             solver.set_logger(Logger);
         }
         // solver.set_logic(Logic::QF_ABV).unwrap();
-        solver.set_logic(Logic::QF_BV).unwrap();
+        // solver.set_logic(Logic::QF_BV).unwrap();
+        solver
+            .set_logic(Logic::Custom("QF_BVFP".to_string()))
+            .unwrap();
         if let Err(err) = solver.set_timeout(1500) {
             eprintln!("[WARN] failed to set solver timeout: {err:?}");
         }
@@ -130,6 +154,7 @@ impl<'ctx> SolverInstance<'ctx> {
             inp_vals: HashMap::default(),
             spec,
             prop_counter: 0,
+            tmp_counter: 0,
         }
     }
 
@@ -146,6 +171,12 @@ impl<'ctx> SolverInstance<'ctx> {
             .alloc_str(&format!("prop-{}", self.prop_counter));
         self.prop_counter += 1;
         Bool::new_const(self.storage, name)
+    }
+
+    fn new_tmp_bv<const M: usize>(&mut self) -> Const<'ctx, BitVec<'ctx, M>> {
+        let name = self.storage.alloc_str(&format!("tmp-{}", self.tmp_counter));
+        self.tmp_counter += 1;
+        BitVec::<M>::new_const(self.storage, name)
     }
 
     fn get_symval(
@@ -190,9 +221,8 @@ impl<'ctx> SolverInstance<'ctx> {
             SymVal::ConstI8(v) => BitVec::<8>::new(self.storage, v as i64).into(),
             SymVal::ConstI32(v) => BitVec::<32>::new(self.storage, v as i64).into(),
             SymVal::ConstI64(v) => BitVec::<64>::new(self.storage, v as i64).into(),
-            SymVal::ConstF32(_) | SymVal::ConstF64(_) => {
-                return Err(SolverBackendError::UnsupportedFloatingpointOperation);
-            }
+            SymVal::ConstF32(v) => Float32::new(self.storage, *v).into(),
+            SymVal::ConstF64(v) => Float64::new(self.storage, *v).into(),
             SymVal::Unary(op, bv) => {
                 let val = self.get_symval(bv, context)?;
                 self.build_unary(op, val)?
@@ -211,6 +241,8 @@ impl<'ctx> SolverInstance<'ctx> {
                     Value::BV8(v) => v._neq(0),
                     Value::BV32(v) => v._neq(0),
                     Value::BV64(v) => v._neq(0),
+                    Value::F32(v) => !v.fp_is_zero(),
+                    Value::F64(v) => !v.fp_is_zero(),
                 };
                 cond.ite(a.as_dynamic(), b.as_dynamic()).into()
             }
@@ -261,12 +293,17 @@ impl<'ctx> SolverInstance<'ctx> {
                     MemoryAccessKind::I64 => combine_64(&bytes).into(),
                     MemoryAccessKind::I64AsS8 => bytes[0].sext::<56, 64>().into(),
                     MemoryAccessKind::I64AsU8 => bytes[0].uext::<56, 64>().into(),
-                    MemoryAccessKind::I64AsS16 => combine_16(&bytes).sext::<16, 64>().into(),
-                    MemoryAccessKind::I64AsU16 => combine_16(&bytes).uext::<16, 64>().into(),
+                    MemoryAccessKind::I64AsS16 => combine_16(&bytes).sext::<48, 64>().into(),
+                    MemoryAccessKind::I64AsU16 => combine_16(&bytes).uext::<48, 64>().into(),
                     MemoryAccessKind::I64AsS32 => combine_32(&bytes).sext::<32, 64>().into(),
                     MemoryAccessKind::I64AsU32 => combine_32(&bytes).uext::<32, 64>().into(),
-                    MemoryAccessKind::F32 | MemoryAccessKind::F64 => {
-                        return Err(SolverBackendError::UnsupportedFloatingpointOperation);
+                    MemoryAccessKind::F32 => {
+                        let val = combine_32(&bytes);
+                        Float32::to_fp_from_bits(&self.storage, val).into()
+                    }
+                    MemoryAccessKind::F64 => {
+                        let val = combine_64(&bytes);
+                        Float64::to_fp_from_bits(&self.storage, val).into()
                     }
                 }
                 // zero-width bvs are not allowed :(
@@ -300,7 +337,7 @@ impl<'ctx> SolverInstance<'ctx> {
     }
 
     fn build_unary(
-        &self,
+        &mut self,
         op: UnaryOp,
         val: Value<'ctx>,
     ) -> Result<Value<'ctx>, SolverBackendError> {
@@ -394,11 +431,100 @@ impl<'ctx> SolverInstance<'ctx> {
     }
 
     fn build_unary_fp(
-        &self,
-        _op: UnaryOp,
-        _val: Value<'ctx>,
+        &mut self,
+        op: UnaryOp,
+        val: Value<'ctx>,
     ) -> Result<Value<'ctx>, SolverBackendError> {
-        Err(SolverBackendError::UnsupportedFloatingpointOperation)
+        use RoundingMode as RM;
+        use UnaryOp as U;
+        use Value as V;
+        let rne = RM::rne(self.storage);
+        let rtz = RM::rtz(self.storage);
+        Ok(match (op, val) {
+            // Note: ixx_trunc_fxx is undefined for NaN, infinity, and out-of-range values.
+            (U::I32TruncF32S, V::F32(val)) => val.fp_to_sbv::<32>(rtz).into(),
+            (U::I32TruncF32U, V::F32(val)) => val.fp_to_ubv::<32>(rtz).into(),
+            (U::I32TruncF64S, V::F64(val)) => val.fp_to_sbv::<32>(rtz).into(),
+            (U::I32TruncF64U, V::F64(val)) => val.fp_to_ubv::<32>(rtz).into(),
+            (U::I64TruncF32S, V::F32(val)) => val.fp_to_sbv::<64>(rtz).into(),
+            (U::I64TruncF32U, V::F32(val)) => val.fp_to_ubv::<64>(rtz).into(),
+            (U::I64TruncF64S, V::F64(val)) => val.fp_to_sbv::<64>(rtz).into(),
+            (U::I64TruncF64U, V::F64(val)) => val.fp_to_ubv::<64>(rtz).into(),
+            // The trunc_sat variants are fully defined, though I'm not sure if SMT-LIB matches the semantics.
+            (U::I32TruncSatF32S, V::F32(val)) => val.fp_to_sbv::<32>(rtz).into(),
+            (U::I32TruncSatF32U, V::F32(val)) => val.fp_to_ubv::<32>(rtz).into(),
+            (U::I32TruncSatF64S, V::F64(val)) => val.fp_to_sbv::<32>(rtz).into(),
+            (U::I32TruncSatF64U, V::F64(val)) => val.fp_to_ubv::<32>(rtz).into(),
+            (U::I64TruncSatF32S, V::F32(val)) => val.fp_to_sbv::<64>(rtz).into(),
+            (U::I64TruncSatF32U, V::F32(val)) => val.fp_to_ubv::<64>(rtz).into(),
+            (U::I64TruncSatF64S, V::F64(val)) => val.fp_to_sbv::<64>(rtz).into(),
+            (U::I64TruncSatF64U, V::F64(val)) => val.fp_to_ubv::<64>(rtz).into(),
+
+            (U::F32DemoteF64, V::F64(val)) => Float32::to_fp_from_fp(self.storage, rne, val).into(),
+            (U::F64PromoteF32, V::F32(val)) => {
+                Float64::to_fp_from_fp(self.storage, rne, val).into()
+            }
+            (U::F32ConvertI32S, V::BV32(val)) => {
+                Float32::to_fp_from_signed_bit_vec(self.storage, rne, val).into()
+            }
+            (U::F32ConvertI32U, V::BV32(val)) => {
+                Float32::to_fp_from_unsigned_bit_vec(self.storage, rne, val).into()
+            }
+            (U::F32ConvertI64S, V::BV64(val)) => {
+                Float32::to_fp_from_signed_bit_vec(self.storage, rne, val).into()
+            }
+            (U::F32ConvertI64U, V::BV64(val)) => {
+                Float32::to_fp_from_unsigned_bit_vec(self.storage, rne, val).into()
+            }
+            (U::F64ConvertI32S, V::BV32(val)) => {
+                Float64::to_fp_from_signed_bit_vec(self.storage, rne, val).into()
+            }
+            (U::F64ConvertI32U, V::BV32(val)) => {
+                Float64::to_fp_from_unsigned_bit_vec(self.storage, rne, val).into()
+            }
+            (U::F64ConvertI64S, V::BV64(val)) => {
+                Float64::to_fp_from_signed_bit_vec(self.storage, rne, val).into()
+            }
+            (U::F64ConvertI64U, V::BV64(val)) => {
+                Float64::to_fp_from_unsigned_bit_vec(self.storage, rne, val).into()
+            }
+            (U::I32ReinterpretF32, V::F32(val)) => {
+                let tmp = *self.new_tmp_bv::<32>();
+                self.solver
+                    .assert(val._eq(Float32::to_fp_from_bits(&self.storage, tmp)))
+                    .unwrap();
+                tmp.into()
+            }
+            (U::I64ReinterpretF64, V::F64(val)) => {
+                let tmp = *self.new_tmp_bv::<64>();
+                self.solver
+                    .assert(val._eq(Float64::to_fp_from_bits(&self.storage, tmp)))
+                    .unwrap();
+                tmp.into()
+            }
+            (U::F32ReinterpretI32, V::BV32(val)) => {
+                Float32::to_fp_from_bits(&self.storage, val).into()
+            }
+            (U::F64ReinterpretI64, V::BV64(val)) => {
+                Float64::to_fp_from_bits(&self.storage, val).into()
+            }
+            (U::FAbs, V::F32(val)) => val.fp_abs().into(),
+            (U::FAbs, V::F64(val)) => val.fp_abs().into(),
+            (U::FNeg, V::F32(val)) => val.fp_neg().into(),
+            (U::FNeg, V::F64(val)) => val.fp_neg().into(),
+            (U::FSqrt, V::F32(val)) => val.fp_sqrt(rne).into(),
+            (U::FSqrt, V::F64(val)) => val.fp_sqrt(rne).into(),
+
+            (U::FCeil, V::F32(val)) => val.fp_round_to_integral(RM::rtp(self.storage)).into(),
+            (U::FCeil, V::F64(val)) => val.fp_round_to_integral(RM::rtp(self.storage)).into(),
+            (U::FFloor, V::F32(val)) => val.fp_round_to_integral(RM::rtn(self.storage)).into(),
+            (U::FFloor, V::F64(val)) => val.fp_round_to_integral(RM::rtn(self.storage)).into(),
+            (U::FTrunc, V::F32(val)) => val.fp_round_to_integral(RM::rtz(self.storage)).into(),
+            (U::FTrunc, V::F64(val)) => val.fp_round_to_integral(RM::rtz(self.storage)).into(),
+            (U::FNearest, V::F32(val)) => val.fp_round_to_integral(RM::rne(self.storage)).into(),
+            (U::FNearest, V::F64(val)) => val.fp_round_to_integral(RM::rne(self.storage)).into(),
+            _ => unreachable!(),
+        })
     }
 
     fn build_binary(
@@ -450,14 +576,23 @@ impl<'ctx> SolverInstance<'ctx> {
             | BinaryOp::FLt
             | BinaryOp::FGt
             | BinaryOp::FLe
-            | BinaryOp::FGe
-            | BinaryOp::FAdd
+            | BinaryOp::FGe => match (a, b) {
+                (Value::F32(a), Value::F32(b)) => self.build_binary_fp_eq(op, a, b).map(Into::into),
+                (Value::F64(a), Value::F64(b)) => self.build_binary_fp_eq(op, a, b).map(Into::into),
+                _ => unreachable!(),
+            },
+
+            BinaryOp::FAdd
             | BinaryOp::FSub
             | BinaryOp::FMul
             | BinaryOp::FDiv
             | BinaryOp::FMin
             | BinaryOp::FMax
-            | BinaryOp::FCopysign => self.build_binary_fp(op, a, b),
+            | BinaryOp::FCopysign => match (a, b) {
+                (Value::F32(a), Value::F32(b)) => self.build_binary_fp(op, a, b).map(Into::into),
+                (Value::F64(a), Value::F64(b)) => self.build_binary_fp(op, a, b).map(Into::into),
+                _ => unreachable!(),
+            },
         }
     }
 
@@ -509,13 +644,41 @@ impl<'ctx> SolverInstance<'ctx> {
         })
     }
 
-    fn build_binary_fp(
+    fn build_binary_fp<const EB: usize, const SB: usize>(
         &self,
-        _op: BinaryOp,
-        _a: Value<'ctx>,
-        _b: Value<'ctx>,
+        op: BinaryOp,
+        a: FloatingPoint<'ctx, EB, SB>,
+        b: FloatingPoint<'ctx, EB, SB>,
+    ) -> Result<FloatingPoint<'ctx, EB, SB>, SolverBackendError> {
+        let rne = RoundingMode::rne(self.storage);
+        Ok(match op {
+            BinaryOp::FAdd => a.fp_add(rne, b),
+            BinaryOp::FSub => a.fp_sub(rne, b),
+            BinaryOp::FMul => a.fp_mul(rne, b),
+            BinaryOp::FDiv => a.fp_div(rne, b),
+            BinaryOp::FMin => a.fp_min(b),
+            BinaryOp::FMax => a.fp_max(b),
+            BinaryOp::FCopysign => b.fp_is_positive().ite(a.fp_abs(), a.fp_abs().fp_neg()),
+            _ => unreachable!(),
+        })
+    }
+
+    fn build_binary_fp_eq<const EB: usize, const SB: usize>(
+        &self,
+        op: BinaryOp,
+        a: FloatingPoint<'ctx, EB, SB>,
+        b: FloatingPoint<'ctx, EB, SB>,
     ) -> Result<Value<'ctx>, SolverBackendError> {
-        Err(SolverBackendError::UnsupportedFloatingpointOperation)
+        let bool = match op {
+            BinaryOp::FEq => a._eq(b),
+            BinaryOp::FNe => a._neq(b),
+            BinaryOp::FLt => a.fp_lt(b),
+            BinaryOp::FGt => a.fp_gt(b),
+            BinaryOp::FLe => a.fp_leq(b),
+            BinaryOp::FGe => a.fp_geq(b),
+            _ => unreachable!(),
+        };
+        Ok(BitVec::<32>::from_bool(bool).into())
     }
 
     fn event_as_constraint(
@@ -533,6 +696,10 @@ impl<'ctx> SolverInstance<'ctx> {
                     (Value::BV32(cond), false) => cond._eq(0),
                     (Value::BV64(cond), true) => cond._neq(0),
                     (Value::BV64(cond), false) => cond._eq(0),
+                    (Value::F32(cond), true) => !cond.fp_is_zero(),
+                    (Value::F32(cond), false) => cond.fp_is_zero(),
+                    (Value::F64(cond), true) => !cond.fp_is_zero(),
+                    (Value::F64(cond), false) => cond.fp_is_zero(),
                     _ => unreachable!(),
                 }
             }
@@ -624,8 +791,7 @@ impl<'ctx> SolverInstance<'ctx> {
         let model = self.solver.get_model().unwrap();
         for (i, bv) in &self.inp_vals {
             if let Some(solution) = model.eval(*bv) {
-                let solution: i64 = solution.try_into().unwrap();
-                input[*i as usize] = solution as u8;
+                input[*i as usize] = solution.try_into_prim().unwrap();
                 eprintln!("apply_model[{}] = {:#x}", *i as usize, input[*i as usize]);
             } else {
                 eprintln!("apply_model[{}] = unknown", *i as usize);
@@ -725,20 +891,20 @@ impl<'ctx> SolverInstance<'ctx> {
         val: SymValRef,
         input: &[u8],
         context: &Symvals,
-    ) -> Result<Option<u64>, SolverBackendError> {
+    ) -> Result<u64, SolverBackendError> {
         let prop = self.new_prop();
-        let tmp_const_name = self
-            .storage
-            .alloc_str(&format!("tmp_const_{}", self.prop_counter));
-        let tmp_const = BitVec::new_const(self.storage, tmp_const_name);
+        let tmp_const = self.new_tmp_bv::<64>();
         let bv = self.get_symval(val, context)?;
         self.solver
             .assert(tmp_const._eq(match bv {
-                // Value::Bool(bool) => todo!(),
-                // Value::BV8(bit_vec) => todo!(),
                 Value::BV32(v) => v.uext::<32, 64>(),
                 Value::BV64(v) => v,
-                _ => todo!(),
+                Value::F32(_) | Value::F64(_) => {
+                    // We can't eval floating point values as u64 since there's
+                    // multiple valid bit representations for NaNs.
+                    return Err(SolverBackendError::UnsupportedFloatingpointOperation);
+                }
+                _ => panic!(),
             }))
             .unwrap();
 
@@ -761,7 +927,7 @@ impl<'ctx> SolverInstance<'ctx> {
         assert_eq!(res, SatResult::Sat);
 
         let model = self.solver.get_model().unwrap();
-        let res: Option<i64> = model.eval(tmp_const).map(|v| v.try_into().unwrap());
-        Ok(res.map(|v| v as u64))
+        let val = model.eval(tmp_const).unwrap();
+        Ok(val.try_into_prim().unwrap())
     }
 }
