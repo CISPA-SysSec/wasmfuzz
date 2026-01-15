@@ -64,14 +64,28 @@ def time_as_seconds(v: str):
 
 PODMAN = os.environ.get("PODMAN", "podman" if shutil.which("podman") else "docker")
 if PODMAN == "podman":
-    with open("/proc/sys/kernel/keys/maxkeys") as f:
-        maxkeys = int(f.read().strip())
-    if maxkeys < os.cpu_count() * 2:
-        print(f"[WARN] spawning {os.cpu_count()} containers with podman would run into a kernel limit:")
-        print(f"       kernel.keys.maxkeys={maxkeys}")
+    REQS = {
+        "kernel.keys.maxkeys": os.cpu_count() * 2,
+        "kernel.keys.maxbytes": 1024 * os.cpu_count() * 2,
+        "fs.inotify.max_user_instances": os.cpu_count() * 2,
+    }
+    actual = {
+        key: int((Path("/proc/sys/") / key.replace(".", "/")).read_text().strip())
+        for key in REQS
+    }
+    satisfied = all(expected >= actual[key] for key, expected in REQS.items())
+    if not satisfied:
+        print(f"[WARN] spawning {os.cpu_count()} containers with podman would run into kernel limits:")
+        for key, value in actual.items():
+            if value < REQS[key]:
+                print(f"       {key}={value} (needs {REQS[key]})")
+            else:
+                print(f"       {key}={value} (ok)")
         print(f"Increase the limit accordingly to continue:")
-        print(f"sudo sysctl -w kernel.keys.maxkeys={os.cpu_count()*4}")
-        os.exit(1)
+        for key, expected in REQS.items():
+            if actual[key] < expected:
+                print(f"sudo sysctl -w {key}={expected}")
+        sys.exit(1)
 
 
 parser = argparse.ArgumentParser()
