@@ -490,7 +490,7 @@ impl Orchestrator {
             let res = res.next_power_of_two();
             res.min(self.codecov_sess.swarm.instruction_limit.unwrap())
         });
-        let memory_limit_pages = 1 << self.rng.random_range(8..16);
+        let memory_limit_pages = 1 << self.rng.random_range(7..13); // 2^13 pages is 512 MB
         let input_size_limit = *[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536 - 1]
             .choose(&mut self.rng)
             .unwrap();
@@ -498,7 +498,7 @@ impl Orchestrator {
         let mut swarm = SwarmConfig::default();
         swarm.instruction_limit =
             Some(fuel_limit.unwrap_or(self.codecov_sess.swarm.instruction_limit.unwrap()));
-        swarm.memory_limit_pages = Some(memory_limit_pages);
+        swarm.memory_limit_pages = self.rng.random_ratio(9, 10).then_some(memory_limit_pages);
         swarm.input_size_limit = Some(input_size_limit);
 
         let extra_musts_and_avoids = self.rng.random_ratio(5, 10);
