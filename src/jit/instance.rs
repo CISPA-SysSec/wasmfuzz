@@ -8,8 +8,7 @@ use super::{CompilationOptions, module::TrapKind, vmcontext::VMContext};
 pub(crate) struct ModuleInstance {
     pub vmctx: Box<VMContext>,
     pub code_size: usize,
-    #[allow(unused)]
-    module: JITModule,
+    module: Option<JITModule>,
     export_func_ptrs: HashMap<String, *const u8>,
     trap_pc_registry: HashMap<usize, TrapKind>,
     options: CompilationOptions,
@@ -26,7 +25,7 @@ impl ModuleInstance {
     ) -> Self {
         Self {
             vmctx,
-            module,
+            module: Some(module),
             export_func_ptrs,
             trap_pc_registry,
             code_size,
@@ -91,6 +90,15 @@ impl ModuleInstance {
 
         if self.options.is_concolic() {
             self.vmctx.concolic.mark_input(pos, buf.len());
+        }
+    }
+}
+
+impl Drop for ModuleInstance {
+    fn drop(&mut self) {
+        tracy_full::zone!("ModuleInstance::drop");
+        if let Some(module) = std::mem::take(&mut self.module) {
+            unsafe { module.free_memory() };
         }
     }
 }

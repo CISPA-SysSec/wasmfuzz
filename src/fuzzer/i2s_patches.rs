@@ -243,7 +243,7 @@ where
                 'outer: for i in off..len {
                     let mut size = core::cmp::min(a.len(), len - i);
                     while size != 0 {
-                        if &a[0..size] == &input.mutator_bytes()[i..i + size] {
+                        if a[0..size] == input.mutator_bytes()[i..i + size] {
                             input.mutator_bytes_mut()[i..i + size].copy_from_slice(&b[0..size]);
                             result = MutationResult::Mutated;
                             break 'outer;
@@ -252,7 +252,7 @@ where
                     }
                     size = core::cmp::min(b.len(), len - i);
                     while size != 0 {
-                        if &b[0..size] == &input.mutator_bytes()[i..i + size] {
+                        if b[0..size] == input.mutator_bytes()[i..i + size] {
                             input.mutator_bytes_mut()[i..i + size].copy_from_slice(&b[0..size]);
                             result = MutationResult::Mutated;
                             break 'outer;

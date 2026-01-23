@@ -175,13 +175,10 @@ impl CowResetMapping {
 impl Drop for CowResetMapping {
     fn drop(&mut self) {
         tracy_full::zone!("CowResetMapping::drop");
-        unsafe {
-            rustix::mm::munmap(self.ptr, self.mapping_size).expect("failed to deallocate mapping")
-        };
-        unsafe {
-            rustix::mm::munmap(self.ref_ptr, self.mapping_size)
-                .expect("failed to deallocate mapping")
-        };
+        unsafe { rustix::mm::munmap(self.ptr, self.mapping_size) }
+            .expect("failed to deallocate mapping");
+        unsafe { rustix::mm::munmap(self.ref_ptr, self.mapping_size) }
+            .expect("failed to deallocate mapping");
     }
 }
 
