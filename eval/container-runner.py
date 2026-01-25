@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import time
 import random
+import sys
 
 from collections import defaultdict
 from socket import gethostname
@@ -73,7 +74,7 @@ if PODMAN == "podman":
         key: int((Path("/proc/sys/") / key.replace(".", "/")).read_text().strip())
         for key in REQS
     }
-    satisfied = all(expected >= actual[key] for key, expected in REQS.items())
+    satisfied = all(actual[key] >= expected for key, expected in REQS.items())
     if not satisfied:
         print(f"[WARN] spawning {os.cpu_count()} containers with podman would run into kernel limits:")
         for key, value in actual.items():
