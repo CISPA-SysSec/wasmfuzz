@@ -176,7 +176,7 @@ def tag_from_corpus():
         else:
             if Tag.CRASHING in tags[harness]:
                 print(
-                    f"[WARN] harness {harness!r} was tagged as crashing but wasmfuzz corpus doesn't have a crashing input"
+                    f"[INFO] harness {harness!r} was tagged as crashing but wasmfuzz corpus doesn't have a crashing input"
                 )
         if summaries[0]["crashes"]:
             tags[harness].add(Tag.SHALLOW)
@@ -240,13 +240,13 @@ tag_fuzzbench(
 # called `Result::unwrap()` on an `Err` value: LayoutError { ty: [0], inner: NonPowerOfTwoWidth }
 tag_manually(
     "wgpu-spv_parser.wasm",
-    "d55bb2956a2391e3cd003b837bb406b4c1440bc7",
+    "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 tag_manually(
     "wgpu-glsl_parser.wasm",
-    "d55bb2956a2391e3cd003b837bb406b4c1440bc7",
+    "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
@@ -255,16 +255,16 @@ tag_manually(
 # [STDOUT] index out of bounds: the len is 1 but the index is 3132799673
 tag_manually(
     "wgpu-ir.wasm",
-    "d55bb2956a2391e3cd003b837bb406b4c1440bc7",
+    "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 
 # Note: naga's wgsl frontend is exposed in Firefox's WebGPU API, so keep it in the benchmark suite
-# tag_manually("wgpu-wgsl_parser.wasm", "d55bb2956a2391e3cd003b837bb406b4c1440bc7", Tag.SUITE)
+# tag_manually("wgpu-wgsl_parser.wasm", "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3", Tag.SUITE)
 # https://github.com/gfx-rs/wgpu/issues/5757#issuecomment-2830427879
 tag_manually(
-    "wgpu-wgsl_parser.wasm", "d55bb2956a2391e3cd003b837bb406b4c1440bc7", Tag.CRASHING
+    "wgpu-wgsl_parser.wasm", "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3", Tag.CRASHING
 )
 
 # rust-analyzer's syntax crate crashes instantly with the native fuzzing setup...
@@ -287,7 +287,7 @@ tag_manually(
 # reproduces upstream almost instantly
 tag_manually(
     "symphonia-decode_any.wasm",
-    "505458eb1e479d84df0a65f95ab3d536d6350d29",
+    "4295a846d002b4fa145824d4c11bc18f35d44999",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
@@ -307,31 +307,31 @@ tag_manually(
 # TODO: investigate, are we running into stack overflows?
 tag_manually(
     "ruff-ruff_parse_simple.wasm",
-    "01695513ce33f1f1615309323ba145c42f4720c1",
+    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 tag_manually(
     "ruff-ruff_parse_idempotency.wasm",
-    "01695513ce33f1f1615309323ba145c42f4720c1",
+    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 tag_manually(
     "ruff-ruff_formatter_idempotency.wasm",
-    "01695513ce33f1f1615309323ba145c42f4720c1",
+    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 tag_manually(
     "ruff-ruff_fix_validity.wasm",
-    "01695513ce33f1f1615309323ba145c42f4720c1",
+    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 tag_manually(
     "ruff-ty_check_invalid_syntax.wasm",
-    "01695513ce33f1f1615309323ba145c42f4720c1",
+    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
@@ -349,13 +349,17 @@ tag_manually(
 )
 tag_manually("image-script_guess.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
 tag_manually("image-script_tga.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
+# mostly: memory allocation of 536238276 bytes failed
+unknown_image_script_crashes = ["guess", "tga", "bmp", "gif", "hdr", "ico", "png", "pnm", "webp"]
+for harness in unknown_image_script_crashes:
+    tag_manually(f"image-script_{harness}.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
 
 # Note: wasmfuzz doesn't find after 48+ CPU hours
 #       aflpp finds this reliably
 # TODO: triage
 tag_manually(
     "ruff-ruff_formatter_validity.wasm",
-    "01695513ce33f1f1615309323ba145c42f4720c1",
+    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
     Tag.CRASHING,
 )
 
@@ -375,24 +379,24 @@ tag_manually(
     Tag.CRASHING,
 )
 
-tag_manually("jxl-rs-decode.wasm", "e01b3bd235bdad4a453df963a160d0387002315c", Tag.CRASHING)
-tag_manually("jxl-rs-decode_header.wasm", "e01b3bd235bdad4a453df963a160d0387002315c", Tag.CRASHING)
+tag_manually("jxl-rs-decode.wasm", "969813a030b32e8252fbf970e764c8cb05ad3ec7", Tag.CRASHING)
+tag_manually("jxl-rs-decode_header.wasm", "969813a030b32e8252fbf970e764c8cb05ad3ec7", Tag.CRASHING)
 
 # [STDOUT] thread '<unnamed>' panicked at /projects/sequoia/repo/buffered-reader/src/lib.rs:826:9:
 # [STDOUT] assertion failed: data.len() >= amount
 tag_manually(
     "sequoia-cert_from_bytes.wasm",
-    "05e6707ad2c68fa52a30c3c9a21d54dc00089919",
+    "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
     Tag.CRASHING,
 )
 tag_manually(
     "sequoia-decrypt_from_bytes.wasm",
-    "05e6707ad2c68fa52a30c3c9a21d54dc00089919",
+    "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
     Tag.CRASHING,
 )
 tag_manually(
     "sequoia-inline_verify_from_bytes.wasm",
-    "05e6707ad2c68fa52a30c3c9a21d54dc00089919",
+    "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
     Tag.CRASHING,
 )
 
@@ -400,26 +404,30 @@ tag_manually(
 # [STDOUT] called `Option::unwrap()` on a `None` value
 tag_manually(
     "zune-image-zune-bmp-decode_buffer.wasm",
-    "031f8b7032476458cba37ebe1ae09447a9e3746b",
+    "c032bb73ace7b963bcb31db0267aadd3f39528e9",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 tag_manually(
     "zune-image-zune-png-decode_buffer.wasm",
-    "031f8b7032476458cba37ebe1ae09447a9e3746b",
+    "c032bb73ace7b963bcb31db0267aadd3f39528e9",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 tag_manually(
     "zune-image-zune-png-roundtrip.wasm",
-    "031f8b7032476458cba37ebe1ae09447a9e3746b",
+    "c032bb73ace7b963bcb31db0267aadd3f39528e9",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
 # TODO: triage
-tag_manually("zune-image-zune-hdr-decode_buffer.wasm", "031f8b7032476458cba37ebe1ae09447a9e3746b", Tag.CRASHING)
-tag_manually("zune-image-zune-jpeg-decode_buffer.wasm", "031f8b7032476458cba37ebe1ae09447a9e3746b", Tag.CRASHING)
-tag_manually("zune-image-zune-psd-decode_buffer.wasm", "031f8b7032476458cba37ebe1ae09447a9e3746b", Tag.CRASHING)
+tag_manually("zune-image-zune-hdr-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
+tag_manually("zune-image-zune-jpeg-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
+tag_manually("zune-image-zune-psd-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
+# memory allocation of 855552672 bytes failed
+tag_manually("zune-image-zune-ppm-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
+# memory allocation of 805306368 bytes failed
+tag_manually("zune-image-zune-qoi-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
 
 # [STDOUT] thread '<unnamed>' panicked at /projects/lewton/repo/src/header.rs:505:29:
 # [STDOUT] capacity overflow
@@ -444,15 +452,7 @@ tag_manually(
     "635a4e420b75bf247e75312e4e872aa0e7fb9558",
     Tag.CRASHING,
 )
-# [STDOUT] thread '<unnamed>' panicked at /projects/comrak/repo/src/parser/mod.rs:3348:21:
-# [STDOUT] assertion failed: (sp.end.column - sp.start.column + 1 == x) || rem == 0
-# => >https://github.com/kivikakk/comrak/issues/595
-for target in ["parse", "fuzz_options", "gfm_footnotes", "commonmark", "all_options"]:
-    tag_manually(
-        f"comrak-{target}.wasm",
-        "32b4f7d55f4f8da27da19de9e458471815fda2c4",
-        *([Tag.CRASHING] + ([Tag.SKIP] if target != "parse" else [])),
-    )
+
 # tag_manually("comrak-quadratic.wasm", "36b06b8a9466e6109c9e162e18cabcd3ef8aead2", Tag.CRASHING)
 # [STDOUT] thread '<unnamed>' panicked at /projects/toml-edit/repo/crates/toml_edit/src/parser/inline_table.rs:160:18:
 # [STDOUT] setting a value should set a prefix
@@ -466,7 +466,7 @@ tag_manually(
 # [STDOUT]   left: Ok
 # [STDOUT]  right: DataError
 tag_manually(
-    "zlib-rs-compress.wasm", "39838838ec2d49021548f90cec60cc3d8f56b188", Tag.CRASHING
+    "zlib-rs-compress.wasm", "2396e463bd0e12220b2e556b356f790a76a6e6dd", Tag.CRASHING
 )
 # [STDOUT] thread '<unnamed>' panicked at fuzz_targets/inflate_chunked.rs:51:5:
 # [STDOUT] assertion `left == right` failed
@@ -474,7 +474,7 @@ tag_manually(
 # [STDOUT]  right: Ok
 tag_manually(
     "zlib-rs-inflate_chunked.wasm",
-    "39838838ec2d49021548f90cec60cc3d8f56b188",
+    "2396e463bd0e12220b2e556b356f790a76a6e6dd",
     Tag.CRASHING,
 )
 
@@ -489,6 +489,24 @@ for target in ["upstream", "ossfuzz", "ossfuzz2"]:
         "de73860cda5a49f97289a9924a3c5590edafef66",
         Tag.CRASHING,
     )
+
+
+
+# JIT-TRACE: _089_jbig2_decode_refinement_region/1009: Memory(I32Load8U(MemArg { align: 0, max_align: 0, offset: 0, memory: 0 }))
+# execution trapped with Abort(HeapOutOfBounds) which indicates that the target crashed
+tag_manually("jbig2dec.wasm", "6ecb04980813d693234190021bd1cf874c05b1b4", Tag.CRASHING)
+
+
+# JIT-TRACE: _1533_ZSTD_reset_matchState/0310: Memory(MemoryFill)
+# execution trapped with Abort(HeapOutOfBounds) which indicates that the target crashed
+tag_manually("zip2-fuzz_write.wasm", "6d3945645b7f3805068dd8c50d4fe56a66651069", Tag.CRASHING)
+
+
+
+# TODO: reproduce these two (one each from 10x8h func_shortest_trace ablation)
+tag_manually("libtiff-read_rgba.wasm", "XXX", Tag.CRASHING)
+tag_manually("openjpeg-opj_decompress_J2K.wasm", "XXX", Tag.CRASHING)
+
 
 
 PROJS = {"libpng", "freetype2", "jsoncpp"}
@@ -512,15 +530,22 @@ tag_from_corpus()
 
 tag_compilers()
 
-group_largest = set()
-group_max_total = defaultdict(lambda: 0)
+group_skip_small_dup = set()
+group_sizes = defaultdict(set)
 for harness in harnesses:
     key = harness.split(".")[0].split("-")[0]
-    group_max_total[key] = max(group_max_total[key], total_edges.get(harness, 0))
+    group_sizes[key].add(total_edges.get(harness, 0))
+
+# pick the nth-largest size as the minimum for each group
+MAX_SUITE_PER_PROJECT = 1
+group_min_size = {
+    key: sorted(sizes)[::-1][:MAX_SUITE_PER_PROJECT][-1]
+    for key, sizes in group_sizes.items()
+}
 for harness in harnesses:
     key = harness.split(".")[0].split("-")[0]
-    if total_edges.get(harness, 0) >= group_max_total[key]:
-        group_largest.add(harness)
+    if total_edges.get(harness, 0) < group_min_size[key]:
+        group_skip_small_dup.add(harness)
 
 for harness in harnesses:
     t = tags[harness]
@@ -538,14 +563,25 @@ for harness in harnesses:
     elif (
         Tag.PROGRESS_24H in t
         or Tag.FUZZBENCH in t
-        or (Tag.BIG in t and harness in group_largest)
-    ):
+        or Tag.BIG in t
+    ) and harness not in group_skip_small_dup:
         t.add(Tag.SUITE)
 
 
-print("Tag.SUITE:")
+interesting = [
+    "cmark-gfm-fuzz-quadratic-brackets", "goblin-parse", "html5ever-fuzz_document_parse",
+    "lcms-cms_transform_all", "libsndfile-alt", "libxml2-xml", "mbedtls-fuzz_dtlsclient",
+    "openssl-server", "openssl-x509", "openthread-radio-one-node", "pcre2-fuzzcheck",
+    "regex-ast_fuzz_match", "vorbis-decode", "woff2-convert_woff2ttf",
+]
+for harness in interesting:
+    if Tag.SUITE not in tags[harness + ".wasm"]:
+        print(f"[WARN] harness {harness} is not in the suite ({tags[harness + ".wasm"] = })")
+
+
+print(f"Tag.SUITE: ({len([k for k, v in tags.items() if Tag.SUITE in v])})")
 pprint(sorted({k for k, v in tags.items() if Tag.SUITE in v}))
-print("Tag.SUITE_BUGBENCH:")
+print(f"Tag.SUITE_BUGBENCH: ({len([k for k, v in tags.items() if Tag.SUITE_BUGBENCH in v])})")
 pprint(sorted({k for k, v in tags.items() if Tag.SUITE_BUGBENCH in v}))
 
 with open("tags.csv", "w") as csvfile:
