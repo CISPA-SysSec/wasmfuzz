@@ -109,7 +109,7 @@ parser.add_argument('--target', action='append', help="Only run harnesses that c
 parser.add_argument('--tag', action='append', help="Only run targets with this tag")
 parser.add_argument('--skip-tag', action='append', help="Don't run targets with this tag")
 parser.add_argument('--fuzzer', action='append', help="Run with this fuzzer")
-parser.add_argument('--keep-corpora', default=None, help="Copy resulting corpora to this path")
+parser.add_argument('--keep-corpora', action='store_true', help="Copy resulting corpora to this path")
 
 args = parser.parse_args()
 fuzzers: list[str] = args.fuzzer or [
