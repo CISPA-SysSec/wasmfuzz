@@ -59,7 +59,7 @@ cranelift = { version = "0.131", features = [
 ] }
 libc = "0.2.158"
 
-patlang = { path = "../" }
+lod = { path = "../lod-sketch" }
 
 # feat:concolic
 # Note: waiting for 0.3.1 upstream

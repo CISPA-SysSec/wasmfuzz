@@ -29,7 +29,7 @@ pub(crate) struct GeneralOpts {
     pub input_size_limit: usize,
 
     #[clap(long)]
-    pub patlang: Option<PathBuf>,
+    pub lod: Option<String>,
 }
 
 impl GeneralOpts {
