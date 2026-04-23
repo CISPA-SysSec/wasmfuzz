@@ -34,6 +34,7 @@ pub(crate) struct VMContext {
     pub host_ptrs_backing: RefCell<Vec<usize>>,
     pub tainted: bool,
     pub random_get_seed: u64,
+    pub input_size_custom: Option<u16>,
 }
 
 impl VMContext {
@@ -95,6 +96,7 @@ impl VMContext {
             concolic: ConcolicContext::new(module.globals.len()),
             tainted: false,
             random_get_seed: 0xdeadbeefdeadbeef,
+            input_size_custom: None,
         })
     }
 

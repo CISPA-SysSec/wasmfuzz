@@ -312,6 +312,7 @@ impl PassesGen for FullFeedbackPasses {
             func_input_size,
             func_input_size_cyclic,
             func_input_size_color,
+            func_input_size_custom,
             memory_op_value,
             memory_op_address,
             memory_store_prev_value,
@@ -364,6 +365,10 @@ impl PassesGen for FullFeedbackPasses {
         add_pass!(
             func_input_size_color,
             InputSizePass::new(InputComplexityMetric::DeBruijn, &self.spec, filter)
+        );
+        add_pass!(
+            func_input_size_custom,
+            InputSizePass::new(InputComplexityMetric::Custom, &self.spec, filter)
         );
 
         add_pass!(perffuzz_func, PerffuzzFunctionPass::new(&self.spec, filter));
@@ -535,6 +540,7 @@ pub(crate) struct FeedbackOptions {
     pub func_input_size: bool,
     pub func_input_size_cyclic: bool,
     pub func_input_size_color: bool,
+    pub func_input_size_custom: bool,
     pub memory_op_value: bool,
     pub memory_op_address: bool,
     pub memory_store_prev_value: bool,
@@ -572,6 +578,7 @@ impl FeedbackOptions {
             func_input_size: false,
             func_input_size_cyclic: false,
             func_input_size_color: false,
+            func_input_size_custom: false,
             memory_op_value: false,
             memory_op_address: false,
             memory_store_prev_value: false,
@@ -600,6 +607,7 @@ impl FeedbackOptions {
             func_input_size: true,
             func_input_size_cyclic: true,
             func_input_size_color: true,
+            func_input_size_custom: true,
             memory_op_value: true,
             memory_op_address: true,
             memory_store_prev_value: true,

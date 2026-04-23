@@ -13,6 +13,7 @@ pub(crate) enum InputComplexityMetric {
     Size,
     ByteDiversity,
     DeBruijn,
+    Custom,
 }
 
 /// Tracks the smallest input that reaches each function.
@@ -48,6 +49,7 @@ impl KVInstrumentationPass for InputSizePass {
             InputComplexityMetric::Size => "input-size",
             InputComplexityMetric::ByteDiversity => "input-size-diversity",
             InputComplexityMetric::DeBruijn => "input-size-debruijn",
+            InputComplexityMetric::Custom => "input-size-custom",
         }
     }
 
@@ -89,6 +91,7 @@ impl KVInstrumentationPass for InputSizePass {
             InputComplexityMetric::Size => compute_metric_size,
             InputComplexityMetric::ByteDiversity => compute_metric_byte_diversity,
             InputComplexityMetric::DeBruijn => compute_metric_debrujin,
+            InputComplexityMetric::Custom => compute_metric_custom,
         };
 
         let [cost_val] = ctx.state.host_call(
@@ -157,6 +160,17 @@ impl KVInstrumentationPass for InputSizePass {
                     }
                 }
                 res.try_into().unwrap_or(u16::MAX)
+            }
+        }
+
+        unsafe extern "C" fn compute_metric_custom(
+            _inp_ptr: u32,
+            _inp_size: u32,
+            vmctx: *mut VMContext,
+        ) -> u16 {
+            unsafe {
+                let vmctx = &mut *vmctx;
+                vmctx.input_size_custom.unwrap_or(u16::MAX)
             }
         }
     }

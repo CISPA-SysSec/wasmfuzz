@@ -79,10 +79,36 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
             .spawn(move || {
                 while orc_handle.should_continue() {
                     let mut fuzz_opts = FuzzOpts::parse_from(vec!["wasmfuzz-fuzz", "test.wasm"]);
+                    fuzz_opts.x = opts.x.clone();
                     fuzz_opts.t.idle_timeout = Some("20s".parse().unwrap());
                     fuzz_opts.x.ignore_bus_inputs =
                         (!matches!(opts.experiment, Some(orc::Experiment::UseBusInputs))).into();
                     fuzz_opts.g.lod = opts.g.lod.clone();
+                    if matches!(opts.experiment, Some(orc::Experiment::Lod)) {
+                        assert!(fuzz_opts.g.lod.is_none());
+                        let mapping = [
+                            ("asn1", &["x509"][..]),
+                            ("png", &["image-script_png", "png"][..]),
+                            ("jpeg", &["jpeg"][..]),
+                            ("jxl", &["jxl"][..]),
+                            ("elf", &["goblin-parse_elf"][..]),
+                            // TODO: goblin-parse is elf, coff, macho..?
+                        ];
+                        for (lod_mod_name, needles) in mapping {
+                            if needles
+                                .iter()
+                                .any(|needle| mod_spec.filename.contains(needle))
+                            {
+                                fuzz_opts.g.lod = Some(lod_mod_name.to_string());
+                                break;
+                            }
+                        }
+                        assert!(
+                            fuzz_opts.g.lod.is_some(),
+                            "didn't find LOD module for {:?}",
+                            mod_spec.filename
+                        );
+                    }
                     if matches!(opts.experiment, Some(orc::Experiment::Snapshot)) {
                         fuzz_opts.x.run_from_snapshot = true.into();
                     }

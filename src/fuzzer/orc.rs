@@ -25,6 +25,8 @@ use crate::{
 pub(crate) struct CliOpts {
     #[clap(flatten)]
     pub g: super::opts::GeneralOpts,
+    #[clap(flatten)]
+    pub x: super::opts::StrategyOpts,
     #[clap(long, default_value = "3m")]
     pub config_interval: Duration,
     #[clap(long)]
@@ -54,6 +56,7 @@ pub(crate) enum Experiment {
     Snapshot,
     OnlyEdgeCoverage,
     PassAblation,
+    Lod,
 }
 impl std::str::FromStr for Experiment {
     type Err = String;
@@ -64,6 +67,7 @@ impl std::str::FromStr for Experiment {
             "swarm-focus-edge" => Self::SwarmFocusEdge,
             "only-edge-coverage" => Self::OnlyEdgeCoverage,
             "pass-ablation" => Self::PassAblation,
+            "lod" => Self::Lod,
             _ => return Err("unknown Experiment".to_owned()),
         })
     }
@@ -367,6 +371,7 @@ impl Orchestrator {
             let res = self.add_corpus(input);
             if let Some(res) = res
                 && res.is_crash()
+                && !*self.opts.x.fuzz_through_crashes
             {
                 eprintln!("load_corpus with crashing input! {res:?}");
                 return Err(());
@@ -536,6 +541,8 @@ impl Orchestrator {
         // We always enable edge coverage, and edge coverage subsumes function and bb coverage.
         // Function coverage is enabled for the CLI status line.
         opts.live_bbs = false;
+        // Only for grammar experiment for now
+        opts.func_input_size_custom = self.opts.g.lod.is_some();
 
         let FeedbackOptions {
             live_funcs: _,
@@ -553,6 +560,7 @@ impl Orchestrator {
             func_input_size,
             func_input_size_cyclic,
             func_input_size_color,
+            func_input_size_custom: _,
             memory_op_value,
             memory_op_address,
             memory_store_prev_value,
@@ -650,7 +658,7 @@ impl Orchestrator {
     }
 
     fn should_continue(&self) -> bool {
-        !self.found_crashes
+        (!self.found_crashes || *self.opts.x.fuzz_through_crashes)
             && self
                 .opts
                 .timeout
@@ -664,9 +672,10 @@ impl Orchestrator {
             return None;
         }
         drop(corp);
+        let fuzzing = *self.opts.x.fuzz_through_crashes;
         let res = self
             .codecov_sess
-            .run_reusable_fresh(input, false, &mut Stats::new());
+            .run_reusable_fresh(input, fuzzing, &mut Stats::new());
         if res.novel_coverage_passes.contains(&"funcs") {
             self.last_func_find = Instant::now();
         }
@@ -768,6 +777,7 @@ impl PassesGen for OrcPassesGen {
             func_input_size,
             func_input_size_cyclic,
             func_input_size_color,
+            func_input_size_custom,
             memory_op_value,
             memory_op_address,
             memory_store_prev_value,
@@ -827,6 +837,10 @@ impl PassesGen for OrcPassesGen {
         add_pass!(
             func_input_size_color,
             InputSizePass::new(InputComplexityMetric::DeBruijn, &self.spec, key_filter)
+        );
+        add_pass!(
+            func_input_size_custom,
+            InputSizePass::new(InputComplexityMetric::Custom, &self.spec, key_filter)
         );
 
         add_pass!(

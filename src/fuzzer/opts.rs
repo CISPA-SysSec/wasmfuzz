@@ -158,6 +158,7 @@ impl InstrumentationOpts {
             func_input_size: **cov_func_input_size,
             func_input_size_cyclic: **cov_func_input_size_cyclic,
             func_input_size_color: **cov_func_input_size_color,
+            func_input_size_custom: false,
             memory_op_value: **cov_memory_op_value,
             memory_op_address: **cov_memory_op_address,
             memory_store_prev_value: **cov_memory_store_prev_value,

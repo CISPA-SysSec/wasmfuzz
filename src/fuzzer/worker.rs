@@ -467,7 +467,14 @@ impl Worker {
                         }
                         self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
 
+                        if let Some(instance) = self.sess.reusable_stage.instance.as_mut() {
+                            // TODO: also set input_size_custom during cmin?
+                            instance.vmctx.input_size_custom = engine.entropy().try_into().ok();
+                        }
                         let res = self.run_input(&lod_buf)?;
+                        if let Some(instance) = self.sess.reusable_stage.instance.as_mut() {
+                            instance.vmctx.input_size_custom = None;
+                        }
                         match res {
                             InputVerdict::Interesting => {
                                 // Re-feed the winning bytes so the splice corpus sees the new LOD level.

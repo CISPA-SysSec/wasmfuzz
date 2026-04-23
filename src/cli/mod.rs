@@ -175,6 +175,13 @@ pub(crate) enum Subcommand {
         corpus: PathBuf,
         file: Option<String>,
     },
+    #[clap(hide = true)]
+    SmallestCrash {
+        program: PathBuf,
+        corpus: PathBuf,
+        #[clap(long)]
+        lod: Option<String>,
+    },
 }
 
 fn parse_program(path: &Path) -> Arc<ModuleSpec> {
@@ -874,6 +881,50 @@ pub(crate) fn main() {
                 for (line, inp) in blame_lines {
                     println!("[{}:{}] {}", file, line, res.inputs[*inp]);
                 }
+            }
+        }
+        Subcommand::SmallestCrash {
+            program,
+            corpus,
+            lod,
+        } => {
+            let mod_spec = parse_program(&program);
+            let inputs = gather_inputs_paths(&Some(corpus), &[], true);
+
+            let mut stats = Stats::default();
+            let mut sess = JitFuzzingSession::builder(mod_spec.clone())
+                .feedback(FeedbackOptions::nothing())
+                .build();
+            sess.initialize(&mut stats);
+            let mut lod_engine = lod.as_deref().map(lod::make_engine);
+
+            let mut results = Vec::new();
+
+            for path in inputs {
+                let mut input = std::fs::read(&path).unwrap();
+                let size = match lod_engine.as_mut() {
+                    Some(engine) => {
+                        engine.feed(&input);
+                        input = engine.roundtrip(&input);
+                        engine.entropy()
+                    }
+                    None => input.len().try_into().unwrap_or(u32::MAX),
+                };
+                let res = sess.run_reusable(&input, true, &mut stats);
+                if res.is_crash() {
+                    println!("[{size:>5}] crash: {path:?}");
+                    results.push((size, path));
+                }
+            }
+            if results.is_empty() {
+                println!("No crashes found");
+                return;
+            }
+            results.sort_by_key(|(size, _)| *size);
+            println!();
+            println!("Smallest crashes: ({} inputs)", results.len());
+            for (size, path) in results {
+                println!("[{size:>5}] {path:?}");
             }
         }
     }
