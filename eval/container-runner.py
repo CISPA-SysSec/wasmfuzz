@@ -109,7 +109,7 @@ parser.add_argument('--target', action='append', help="Only run harnesses that c
 parser.add_argument('--tag', action='append', help="Only run targets with this tag")
 parser.add_argument('--skip-tag', action='append', help="Don't run targets with this tag")
 parser.add_argument('--fuzzer', action='append', help="Run with this fuzzer")
-parser.add_argument('--keep-corpora', action='store_true', help="Copy resulting corpora to this path")
+parser.add_argument('--copy-corpora-to', default=None, help="Copy resulting corpora to this path")
 
 args = parser.parse_args()
 fuzzers: list[str] = args.fuzzer or [
@@ -418,8 +418,8 @@ async def run_target(target, fuzzer, config=None, num_cores=1):
                     core_ids=core_ids if args.pin_cores else None
                 )
                 await wasm_job.run(fuzzer=fuzzer, env=config_env)
-                if args.keep_corpora:
-                    t_dir = Path(args.keep_corpora) / slug
+                if args.copy_corpora_to:
+                    t_dir = Path(args.copy_corpora_to) / slug
                     t_dir.mkdir(parents=True, exist_ok=True)
                     shutil.copytree(corpus_dir, t_dir, dirs_exist_ok=True)
         except Exception as e:

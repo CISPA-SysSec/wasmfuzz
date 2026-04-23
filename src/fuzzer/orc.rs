@@ -416,9 +416,17 @@ impl Orchestrator {
             swarm.input_size_limit = Some(1024 * self.config_epoch as u32);
             // First config: no additional feedback guidance.
             let mut opts = FeedbackOptions::minimal_code_coverage();
-            opts.cmpcov_hamming = true;
-            if self.config_epoch > 0 {
-                opts.edge_shortest_trace = true;
+            if self.opts.experiment == Some(Experiment::PassAblation) {
+                let pass = std::env::var("FUZZER_PASS_ABLATION")
+                    .expect("FUZZER_PASS_ABLATION must be set");
+                if pass != "baseline" {
+                    opts.activate_from_str(&pass);
+                }
+            } else {
+                opts.cmpcov_hamming = true;
+                if self.config_epoch > 0 {
+                    opts.edge_shortest_trace = true;
+                }
             }
             return Config {
                 passes: OrcPassesGen {
@@ -523,11 +531,15 @@ impl Orchestrator {
             swarm.discard_short_circuit_coverage = true;
         }
 
-        let mut opts = FeedbackOptions::nothing();
+        let mut opts = FeedbackOptions::minimal_code_coverage();
+        // We always enable edge coverage, and edge coverage subsumes function and bb coverage.
+        // Function coverage is enabled for the CLI status line.
+        opts.live_bbs = false;
+
         let FeedbackOptions {
-            live_funcs,
-            live_bbs,
-            live_edges,
+            live_funcs: _,
+            live_bbs: _,
+            live_edges: _,
             cmpcov_hamming,
             cmpcov_absdist,
             cmpcov_u16dist,
@@ -549,12 +561,6 @@ impl Orchestrator {
             edge_shortest_trace,
             func_longest_trace,
         } = &mut opts;
-
-        // We always enable edge coverage, and edge coverage subsumes function and bb coverage.
-        // Function coverage is enabled for the CLI status line.
-        *live_funcs = true;
-        *live_bbs = false;
-        *live_edges = true;
 
         if self.opts.experiment == Some(Experiment::PassAblation) {
             let pass =
@@ -611,7 +617,7 @@ impl Orchestrator {
 
         if matches!(self.opts.experiment, Some(Experiment::OnlyEdgeCoverage)) {
             opts = FeedbackOptions::minimal_code_coverage();
-            opts.live_edges = false;
+            opts.live_bbs = false;
         }
 
         Config {

@@ -57,6 +57,8 @@ pub(crate) enum Subcommand {
         run_from_snapshot: FlagBool,
         #[clap(long)]
         input_size_limit: Option<usize>,
+        #[clap(long)]
+        memory_limit_pages: Option<u32>,
     },
     /// Check the system configuration and WebAssembly module for potential issues.
     Doctor {
@@ -238,6 +240,7 @@ pub(crate) fn main() {
             print_stdout,
             run_from_snapshot,
             input_size_limit,
+            memory_limit_pages,
         } => {
             let inputs = gather_inputs_paths(&None, &inputs, true);
             let mod_spec = parse_program(&program);
@@ -253,6 +256,7 @@ pub(crate) fn main() {
                 .instruction_limit(Some(2_000_000_000))
                 .optimize_for_compilation_time(inputs.len() <= 10)
                 .run_from_snapshot(*run_from_snapshot)
+                .memory_limit_pages(memory_limit_pages)
                 .build();
             if inputs.is_empty() {
                 println!("No input specified. Exiting.")

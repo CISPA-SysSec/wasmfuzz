@@ -182,10 +182,8 @@ impl FuncCFG {
                 Operator::If { .. } | Operator::BrIf { .. } | Operator::Else => {
                     bb_starts.insert(InsnIdx(ip as u32 + 1));
                 }
-                Operator::End | Operator::Return => {
-                    if ip != end_idx.i() {
-                        bb_starts.insert(InsnIdx(ip as u32 + 1));
-                    }
+                Operator::End | Operator::Return if ip != end_idx.i() => {
+                    bb_starts.insert(InsnIdx(ip as u32 + 1));
                 }
                 _ => {}
             }

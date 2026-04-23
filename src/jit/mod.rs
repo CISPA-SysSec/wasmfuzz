@@ -183,7 +183,8 @@ impl SwarmConfig {
     }
 
     pub(crate) fn input_alloc_size(&self) -> usize {
-        // self.input_size_limit.unwrap_or(4096) as usize
+        // Always allocates a full WASM page (64KB) regardless of input_size_limit,
+        // so the harness can never read past the allocation.
         u16::MAX as usize
     }
 }
@@ -899,6 +900,11 @@ impl JitFuzzingSessionBuilder {
 
     pub(crate) fn instruction_limit(mut self, instruction_limit: Option<u64>) -> Self {
         self.swarm.instruction_limit = instruction_limit;
+        self
+    }
+
+    pub(crate) fn memory_limit_pages(mut self, memory_limit_pages: Option<u32>) -> Self {
+        self.swarm.memory_limit_pages = memory_limit_pages;
         self
     }
 

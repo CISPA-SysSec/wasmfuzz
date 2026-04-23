@@ -56,9 +56,10 @@ pub(crate) fn instrument_func(
             trace_strcmp(state, bcx, location, a, b)
         }
         if let Some(libfunc) = state.fspec().known_libfunc
-            && state.options.is_concolic() {
-                super::concolic::translate_concolic_trace_libcall(libfunc, state, bcx);
-            }
+            && state.options.is_concolic()
+        {
+            super::concolic::translate_concolic_trace_libcall(libfunc, state, bcx);
+        }
     }
 }
 

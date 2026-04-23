@@ -37,7 +37,7 @@ impl ModuleInstance {
         *self
             .export_func_ptrs
             .get(export)
-            .unwrap_or_else(|| panic!("export {export:?} not found"))
+            .unwrap_or_else(|| panic!("export {export:?} not found: can't continue"))
     }
 
     // TODO: Verify that ABI matches? ABI mismatches can be hard to track down!
