@@ -9,8 +9,10 @@ use covexp_core::rusqlite::Connection;
 use symbolic::debuginfo::Object;
 
 use crate::HashMap;
-use crate::instrumentation::{Edge, EdgeCoveragePass, FuncIdx, FunctionCoveragePass};
-use crate::ir::{InsnIdx, ModuleSpec, debuginfo_helper::resolve_source_location};
+use crate::instrumentation::{
+    BBCoveragePass, Edge, EdgeCoveragePass, FuncIdx, FunctionCoveragePass,
+};
+use crate::ir::{InsnIdx, Location, ModuleSpec, debuginfo_helper::resolve_source_location};
 use crate::jit::JitFuzzingSession;
 
 #[derive(Parser)]
@@ -88,6 +90,11 @@ pub(crate) fn import_coverage_into(
         .collect::<std::collections::BTreeSet<_>>();
     let covered_funcs = sess
         .get_pass::<FunctionCoveragePass>()
+        .coverage
+        .iter_covered_keys()
+        .collect::<std::collections::BTreeSet<_>>();
+    let covered_bbs = sess
+        .get_pass::<BBCoveragePass>()
         .coverage
         .iter_covered_keys()
         .collect::<std::collections::BTreeSet<_>>();
@@ -178,6 +185,14 @@ pub(crate) fn import_coverage_into(
         }
 
         let mut covered_blocks = std::collections::BTreeSet::<InsnIdx>::new();
+        for bb_start in &ordered_blocks {
+            if covered_bbs.contains(&Location {
+                function: func.idx,
+                index: bb_start.0,
+            }) {
+                covered_blocks.insert(*bb_start);
+            }
+        }
         if covered_funcs.contains(&FuncIdx(func.idx))
             && let Some(entry) = ordered_blocks.first()
         {
@@ -198,8 +213,6 @@ pub(crate) fn import_coverage_into(
             };
             let edge_id = imp.add_edge(from_block, to_block, kind).unwrap();
             if covered_cfg_edges.contains(&Edge::new(func.idx, from, to)) {
-                covered_blocks.insert(from);
-                covered_blocks.insert(to);
                 covered_edges.push(edge_id);
             }
         }
@@ -470,15 +483,26 @@ pub extern "C" fn LLVMFuzzerTestOneInput(buf: *const u8, len: usize) {
         let expected = r#"
 [3] | pub extern "C" fn LLVMFuzzerTestOneInput(buf: *const u8, len: usize) {
 [3] |     let data = unsafe { std::slice::from_raw_parts(buf, len) };
+[3] |     if data.len() == 4 {
+[3] |         if data[0] == 1 {
+[2] |             if data[1] == 2 {
+[1] |                 if data[2] == 3 {
+[0] |                     if data[3] == 4 {
+[0] |                         panic!()
+    |                     }
+    |                 }
+    |             }
+    |         }
+    |     }
 [3] |     let found = data.len() == 4
-[1] |         && data[0] == 1
-[1] |         && data[1] == 2
+[3] |         && data[0] == 1
+[2] |         && data[1] == 2
 [1] |         && data[2] == 3
 [0] |         && data[3] == 4;
-[0] |     if found {
+[3] |     if found {
 [0] |         panic!()
     |     }
-[0] | }
+[3] | }
 "#;
         let expected = &expected[1..expected.len() - 1];
         if expected != annotated {
