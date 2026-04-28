@@ -6,6 +6,8 @@ license = "Apache-2.0 OR MIT"
 edition = "2024"
 rust-version = "1.90"
 
+[workspace]
+
 [dependencies]
 wat = "1.0"
 wasmparser = "0.244"
@@ -68,10 +70,11 @@ bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = t
 # feat:with_mimalloc
 mimalloc = { version = "0.1", optional = true, default-features = false }
 
-# feat:reports (default)
-askama = { version = "0.15", optional = true }
+# feat:lcov
 lcov = { version = "0.8", optional = true }
-syntect = { version = "5.1", optional = true }
+
+# feat:covexp
+covexp-core = { path = "../covexp-core", optional = true }
 
 # feat:compressed_harnesses
 zstd = { version = "0.13.1", optional = true }
@@ -91,8 +94,9 @@ tracy_full = { version = "1.12.0", default-features = false, features = [
 ] }
 
 [features]
-default = ["reports"]
-reports = ["askama", "lcov", "syntect"]
+default = ["lcov", "covexp"]
+lcov = ["dep:lcov"]
+covexp = ["dep:covexp-core", "lcov"]
 with_mimalloc = ["mimalloc"]
 compressed_harnesses = ["zstd"]
 concolic = ["smtlib"]
@@ -101,7 +105,8 @@ concolic_z3 = ["z3", "concolic"]
 concolic_debug_verify = []
 tracy = ["tracy_full/enable"]
 full = [
-    "reports",
+    "lcov",
+    "covexp",
     "compressed_harnesses",
     "concolic_z3",
     "concolic_bitwuzla",

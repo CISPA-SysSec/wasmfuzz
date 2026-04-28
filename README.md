@@ -47,8 +47,11 @@ Pre-built binaries are dynamically linked against an old `glibc` version (2.31) 
 Run a simple fuzzing campaign:
 `wasmfuzz fuzz --timeout=1h --cores 8 --dir corpus/ the-module.wasm`
 
-Create a line coverage report:
-`wasmfuzz cov-html --corpus corpus/ --output report/ the-module.wasm`
+Export line coverage as LCOV:
+`wasmfuzz lcov --dir corpus/ --output coverage.info the-module.wasm`
+
+Import fuzz coverage into covexp:
+`wasmfuzz covexp-import --dir corpus/ --db covexp.db the-module.wasm`
 
 Other options are available via `wasmfuzz --help` and `wasmfuzz fuzz --help`.
 
@@ -60,7 +63,7 @@ Other options are available via `wasmfuzz --help` and `wasmfuzz fuzz --help`.
 - Fully deterministic execution with fast-ish snapshot restore via CoW memory mappings.
 - Pluggable instrumentation passes that can be configured on-the-fly.
 - Simple ensemble fuzzing strategy that periodically swaps out instrumentation options.
-- Coverage visualization via DWARF line debug information and DWARFv5 Embedded Source Code. We adapt [Coverage.py](https://github.com/nedbat/coveragepy)'s HTML template for our reports.
+- Coverage export via DWARF line debug information and DWARFv5 Embedded Source Code, with report visualization handled by `covexp`.
 
 #### Instrumentation Passes
 
@@ -92,7 +95,7 @@ Building these requires a Docker/Podman and Python installation. Use `make -C ha
 
 - Currently builds 18 C/C++ and 29 Rust projects. This includes 6 out of the 19 [fuzzbench targets](https://github.com/google/fuzzbench/tree/e72f5bb91bfafd98752fff29e3a961494b85a321/benchmarks) at the moment.
 
-- Optimized builds with full debug info: Harness modules also contain their source code so we can emit coverage reports without any additional files.
+- Optimized builds with full debug info: Harness modules also contain their source code so we can emit line coverage artifacts and import them into `covexp` without additional files.
 
 We target the [Lime1](https://github.com/WebAssembly/tool-conventions/blob/main/Lime.md#lime1) series of WebAssembly, which is WebAssembly 1.0 in combination with a few standardized post-1.0 features like the `bulk-memory-opt` extension.
 

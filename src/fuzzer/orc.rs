@@ -36,9 +36,9 @@ pub(crate) struct CliOpts {
     #[clap(long, default_value = "100ms")]
     pub stagger_cores: Duration,
 
-    #[cfg(feature = "reports")]
+    #[cfg(feature = "covexp")]
     #[clap(long)]
-    pub live_html_coverage: Option<PathBuf>,
+    pub live_covexp_db: Option<PathBuf>,
 
     #[clap(long, env)]
     pub experiment: Option<Experiment>,
@@ -666,12 +666,14 @@ impl Orchestrator {
     }
 
     fn update_live_coverage(&self) {
-        #[cfg(feature = "reports")]
-        if let Some(out_path) = self.opts.live_html_coverage.as_ref() {
-            crate::cli::cov_html::write_html_cov_report(
+        #[cfg(feature = "covexp")]
+        if let Some(out_path) = self.opts.live_covexp_db.as_ref() {
+            crate::cli::covexp::import_snapshot(
                 self.module.clone(),
                 &self.codecov_sess,
                 out_path,
+                "fuzz-live",
+                Some("live"),
             );
         }
     }

@@ -53,7 +53,7 @@ pub(crate) struct LcovOpts {
     #[clap(long)]
     pub dir: Option<String>,
     #[clap(short, long)]
-    output: Option<String>,
+    pub output: Option<String>,
 }
 
 fn resolve_(function: &Function<'_>, addr: u64, covered: &mut HashMap<String, FileLineCoverage>) {
@@ -156,26 +156,31 @@ pub(crate) fn process_file_line_coverage(
     covered
 }
 
-pub(crate) fn run(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf], opts: &LcovOpts) {
+pub(crate) fn run_inputs(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf]) -> JitFuzzingSession {
     let mut stats = crate::jit::Stats::default();
     let mut sess = JitFuzzingSession::builder(mod_spec.clone())
         .feedback(FeedbackOptions {
             live_funcs: true,
             live_bbs: true,
+            live_edges: true,
             ..FeedbackOptions::nothing()
         })
         .build();
     sess.initialize(&mut stats);
 
     for path in input_paths {
-        // dbg!(&path);
         let input = std::fs::read(path).unwrap();
         assert!(input.len() <= crate::TEST_CASE_SIZE_LIMIT);
         let _res = sess.run(&input, &mut stats);
     }
 
-    let covered = process_file_line_coverage(&mod_spec, &sess);
+    sess
+}
 
+pub(crate) fn build_lcov_records(
+    covered: HashMap<String, FileLineCoverage>,
+    verbose: bool,
+) -> Vec<lcov::Record> {
     let mut lcov_records = Vec::new();
     let mut covered: Vec<_> = covered.into_iter().collect();
     covered.sort_by_cached_key(|(key, _)| (!key.starts_with('/'), key.clone()));
@@ -199,10 +204,12 @@ pub(crate) fn run(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf], opts: &Lco
                 .as_deref()
                 .copied()
                 .unwrap_or(false);
-            if covered {
-                println!("{path}:{line} [x]");
-            } else {
-                println!("{path}:{line}  -");
+            if verbose {
+                if covered {
+                    println!("{path}:{line} [x]");
+                } else {
+                    println!("{path}:{line}  -");
+                }
             }
             lcov_records.push(lcov::Record::LineData {
                 line: line as u32,
@@ -212,16 +219,32 @@ pub(crate) fn run(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf], opts: &Lco
         }
         lcov_records.push(lcov::Record::EndOfRecord);
     }
+    lcov_records
+}
+
+pub(crate) fn render_lcov_records(records: Vec<lcov::Record>) -> String {
+    use std::fmt::Write;
+    records
+        .into_iter()
+        .fold(String::new(), |mut output, rec| {
+            let _ = writeln!(output, "{rec}");
+            output
+        })
+}
+
+pub(crate) fn collect_lcov_trace(mod_spec: &ModuleSpec, sess: &JitFuzzingSession) -> String {
+    let covered = process_file_line_coverage(mod_spec, sess);
+    let records = build_lcov_records(covered, false);
+    render_lcov_records(records)
+}
+
+pub(crate) fn run(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf], opts: &LcovOpts) {
+    let sess = run_inputs(mod_spec.clone(), input_paths);
+    let covered = process_file_line_coverage(&mod_spec, &sess);
+    let lcov_records = build_lcov_records(covered, true);
+    let contents = render_lcov_records(lcov_records);
 
     if let Some(path) = &opts.output {
-        use std::fmt::Write;
-        let contents = lcov_records
-            .into_iter()
-            .fold(String::new(), |mut output, rec| {
-                let _ = writeln!(output, "{rec}");
-                output
-            });
-
         std::fs::write(path, contents).unwrap();
     }
 }

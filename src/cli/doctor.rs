@@ -75,7 +75,8 @@ fn check_program(spec: &ModuleSpec) {
 
 fn print_system_info() {
     let default_features: &[(bool, &'static str)] = &[
-        (cfg!(feature = "reports"), "HTML coverage reports"),
+        (cfg!(feature = "covexp"), "Covexp-backed coverage reports"),
+        (cfg!(feature = "lcov"), "LCOV export and corpus blame"),
         (
             cfg!(feature = "compressed_harnesses"),
             "ZStandard-compressed harnesses (foo.wasm.zst)",

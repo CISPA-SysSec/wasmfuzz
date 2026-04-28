@@ -16,10 +16,10 @@ use crate::{
 mod cmin;
 #[cfg(feature = "concolic")]
 mod concolic_explore;
-#[cfg(feature = "reports")]
-pub(crate) mod cov_html;
+#[cfg(feature = "covexp")]
+pub(crate) mod covexp;
 mod doctor;
-#[cfg(feature = "reports")]
+#[cfg(feature = "lcov")]
 pub(crate) mod lcov;
 mod misc_eval;
 mod monitor_cov;
@@ -74,7 +74,7 @@ pub(crate) enum Subcommand {
         #[clap(long, default_value = "1000000")]
         instruction_limit: u64,
         #[clap(long)]
-        cov_html: Option<PathBuf>,
+        covexp_db: Option<PathBuf>,
         #[clap(long)]
         json_out: Option<PathBuf>,
     },
@@ -123,11 +123,11 @@ pub(crate) enum Subcommand {
         input: String,
     },
     /// Collect line coverage from debug information.
-    #[cfg(feature = "reports")]
+    #[cfg(feature = "lcov")]
     Lcov(lcov::LcovOpts),
-    /// Create a line coverage report from the source code embedded in the module's debug info.
-    #[cfg(feature = "reports")]
-    CovHtml(cov_html::HtmlCovOpts),
+    /// Import line coverage into a covexp SQLite database.
+    #[cfg(feature = "covexp")]
+    CovexpImport(covexp::CovexpImportOpts),
     /// Run corpus on program and evaluate instrumentation pass relationship
     #[clap(hide = true)]
     EvalPassCorr {
@@ -167,7 +167,7 @@ pub(crate) enum Subcommand {
         no_prefix: bool,
     },
     #[clap(hide = true)]
-    #[cfg(feature = "reports")]
+    #[cfg(feature = "lcov")]
     CorpusBlame {
         program: PathBuf,
         corpus: PathBuf,
@@ -440,7 +440,7 @@ pub(crate) fn main() {
             )
             .unwrap();
         }
-        #[cfg(feature = "reports")]
+        #[cfg(feature = "lcov")]
         Subcommand::Lcov(ref opts) => {
             let dir = opts.dir.as_ref().map(|dir| {
                 crate::fuzzer::FuzzOpts::resolve_corpus_dir(dir.to_owned(), &opts.program)
@@ -449,14 +449,14 @@ pub(crate) fn main() {
             let mod_spec = parse_program(&opts.program);
             lcov::run(mod_spec, &input_paths, opts);
         }
-        #[cfg(feature = "reports")]
-        Subcommand::CovHtml(ref opts) => {
-            let dir = opts.corpus.as_ref().map(|dir| {
+        #[cfg(feature = "covexp")]
+        Subcommand::CovexpImport(ref opts) => {
+            let dir = opts.dir.as_ref().map(|dir| {
                 crate::fuzzer::FuzzOpts::resolve_corpus_dir(dir.to_owned(), &opts.program)
             });
             let input_paths = gather_inputs_paths(&dir, &opts.seed_files, true);
             let mod_spec = parse_program(&opts.program);
-            cov_html::run(mod_spec, &input_paths, opts);
+            covexp::run(mod_spec, &input_paths, opts);
         }
         Subcommand::Fuzz(opts) => {
             let mod_spec = parse_program(&opts.g.program);
@@ -609,7 +609,7 @@ pub(crate) fn main() {
             generator,
             execs,
             instruction_limit,
-            cov_html,
+            covexp_db,
             simple_mutations_per_exec,
             json_out,
         } => {
@@ -724,13 +724,19 @@ pub(crate) fn main() {
                 out_file.write_all(b"\n").unwrap();
             }
 
-            if let Some(out_path) = cov_html {
-                #[cfg(feature = "reports")]
-                crate::cli::cov_html::write_html_cov_report(mod_spec, &sess, &out_path);
-                #[cfg(not(feature = "reports"))]
+            if let Some(out_path) = covexp_db {
+                #[cfg(feature = "covexp")]
+                crate::cli::covexp::import_snapshot(
+                    mod_spec,
+                    &sess,
+                    &out_path,
+                    "coverage-gym",
+                    Some("coverage-gym"),
+                );
+                #[cfg(not(feature = "covexp"))]
                 let _ = out_path;
-                #[cfg(not(feature = "reports"))]
-                panic!("trying to write html report without 'reports' feature")
+                #[cfg(not(feature = "covexp"))]
+                panic!("trying to write covexp report without 'covexp' feature")
             }
         }
         Subcommand::DumpEmbeddedSources {
@@ -791,7 +797,7 @@ pub(crate) fn main() {
                 );
             }
         }
-        #[cfg(feature = "reports")]
+        #[cfg(feature = "lcov")]
         Subcommand::CorpusBlame {
             program,
             corpus,
@@ -822,11 +828,18 @@ pub(crate) fn main() {
                 inputs: Vec<String>,
                 files: Vec<String>,
             }
-            fn blame(report_info: &cov_html::ReportInfo, input: &str, blame: &mut Blame) {
+            fn blame(
+                covered: &HashMap<String, lcov::FileLineCoverage>,
+                input: &str,
+                blame: &mut Blame,
+            ) {
                 let inp_idx = blame.inputs.len();
                 blame.inputs.push(input.to_string());
-                for (file_idx, file) in report_info.files.iter().enumerate() {
-                    for line_idx in file.line_coverage.covered.iter_ones() {
+                for (file_idx, file) in blame.files.iter().enumerate() {
+                    let Some(line_cov) = covered.get(file) else {
+                        continue;
+                    };
+                    for line_idx in line_cov.covered.iter_ones() {
                         let key = (file_idx, line_idx);
                         blame.map.entry(key).or_insert(inp_idx);
                     }
@@ -835,23 +848,24 @@ pub(crate) fn main() {
 
             print!("blaming <init>\r");
             sess.run(b"YELLOW SUBMARINE", &mut stats).expect_ok();
-            let mut report_info = cov_html::ReportInfo::new(mod_spec).unwrap();
-            report_info.process_line_coverage(&sess);
+            let covered = lcov::process_file_line_coverage(&mod_spec, &sess);
+            let mut files = covered.keys().cloned().collect::<Vec<_>>();
+            files.sort();
             let mut res = Blame {
                 map: HashMap::default(),
                 inputs: Vec::new(),
-                files: report_info.files.iter().map(|f| f.path.clone()).collect(),
+                files,
             };
-            blame(&report_info, "<init>", &mut res);
+            blame(&covered, "<init>", &mut res);
 
             let total = corpus_entries.len();
             for (i, (path, input)) in corpus_entries.into_iter().enumerate() {
                 print!("[{i}/{total}] blaming {path:?}: run                           \r");
                 sess.run(&input, &mut stats).expect_ok();
                 print!("[{i}/{total}] blaming {path:?}: process                       \r");
-                report_info.process_line_coverage_online(&sess);
+                let covered = lcov::process_file_line_coverage(&mod_spec, &sess);
                 print!("[{i}/{total}] blaming {path:?}: blame                         \r");
-                blame(&report_info, &path.to_string_lossy(), &mut res);
+                blame(&covered, &path.to_string_lossy(), &mut res);
             }
 
             for (file_idx, file) in res.files.iter().enumerate() {
