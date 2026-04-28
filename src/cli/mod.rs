@@ -182,6 +182,10 @@ pub(crate) enum Subcommand {
         #[clap(long)]
         lod: Option<String>,
     },
+    /// Detect the matching LOD grammar engine for a wasm module.
+    DetectLod {
+        program: PathBuf,
+    },
 }
 
 fn parse_program(path: &Path) -> Arc<ModuleSpec> {
@@ -925,6 +929,16 @@ pub(crate) fn main() {
             println!("Smallest crashes: ({} inputs)", results.len());
             for (size, path) in results {
                 println!("[{size:>5}] {path:?}");
+            }
+        }
+        Subcommand::DetectLod { program } => {
+            let mod_spec = parse_program(&program);
+            match crate::fuzzer::detect_lod_engine(mod_spec.clone()) {
+                Some(engine) => println!("{}", engine.format_name()),
+                None => {
+                    eprintln!("no LOD grammar matched {:?}", mod_spec.filename);
+                    std::process::exit(1);
+                }
             }
         }
     }

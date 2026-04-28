@@ -185,6 +185,14 @@ impl Worker {
                     worker.sess.get_edge_cov().unwrap_or(0),
                     worker.corpus.count()
                 );
+
+                if let Some(engine) = &mut worker.lod_engine {
+                    for idx in worker.corpus.ids() {
+                        let testcase = worker.corpus.get(idx).unwrap().borrow();
+                        let input = testcase.input().as_ref().unwrap().as_ref();
+                        engine.feed(input);
+                    }
+                }
             }
         }
         worker
@@ -195,6 +203,16 @@ impl Worker {
     fn on_corpus(&mut self, input: &[u8], is_seed: bool) -> Result<InputVerdict, libafl::Error> {
         tracy_full::zone!("Worker::on_corpus");
         let ignore_crashes = *self.opts.x.fuzz_through_crashes;
+
+        if let Some(engine) = &mut self.lod_engine {
+            self.sess
+                .reusable_stage
+                .instance
+                .as_mut()
+                .unwrap()
+                .vmctx
+                .input_size_custom = engine.get_entropy(input).try_into().ok();
+        }
 
         let mut was_interesting = false;
         if !*self.opts.x.run_from_snapshot {

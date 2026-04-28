@@ -13,8 +13,34 @@ pub(crate) use worker::Worker;
 
 use crate::fuzzer::orc::OrchestratorHandle;
 pub(crate) use crate::fuzzer::worker::WorkerExit;
+use crate::instrumentation::{CodeCovInstrumentationPass, EdgeCoveragePass};
 use crate::ir::ModuleSpec;
+use crate::jit::{FeedbackOptions, JitFuzzingSession, Stats};
 use crate::simple_bus::MessageBus;
+
+/// Picks the LOD grammar whose skeleton produces the most edge coverage on the
+/// given module. Returns `None` when no grammar wins by a clear margin.
+pub(crate) fn detect_lod_engine(mod_spec: Arc<ModuleSpec>) -> Option<Box<dyn lod::ErasedEngine>> {
+    use std::cell::RefCell;
+
+    let mut stats = Stats::default();
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .optimize_for_compilation_time(true)
+        .feedback(FeedbackOptions {
+            live_edges: true,
+            ..FeedbackOptions::nothing()
+        })
+        .build();
+    sess.initialize(&mut stats);
+    let cell = RefCell::new((sess, stats));
+    lod::guess_engine(|bytes: &[u8]| -> f32 {
+        let mut guard = cell.borrow_mut();
+        let (sess, stats) = &mut *guard;
+        sess.reset_pass_coverage();
+        let _ = sess.run_reusable_fresh(bytes, true, stats);
+        sess.get_pass::<EdgeCoveragePass>().count_saved() as f32
+    })
+}
 
 pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
     // https://stackoverflow.com/a/36031130
@@ -61,6 +87,23 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
     }
     orc_handle.load_corpus(seed_corpus);
 
+    let lod_override: Option<String> = if matches!(opts.experiment, Some(orc::Experiment::Lod)) {
+        let engine = detect_lod_engine(mod_spec.clone());
+        let name = engine.as_ref().map(|e| e.format_name().to_string());
+        eprintln!(
+            "Lod experiment: guess_engine selected {:?} for {:?}",
+            name, mod_spec.filename
+        );
+        assert!(
+            name.is_some(),
+            "guess_engine returned no winner for {:?}",
+            mod_spec.filename
+        );
+        name
+    } else {
+        None
+    };
+
     let mq = MessageBus::new();
 
     let mut handles = Vec::new();
@@ -73,6 +116,7 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
         let thread_name = format!("worker-{core_idx}");
         let mq = mq.clone();
         let opts = opts.clone();
+        let lod_override = lod_override.clone();
         let handle = std::thread::Builder::new()
             .stack_size(32 << 20) // 32 MB instead of default 2 MB for large concolic eval stacks
             .name(thread_name)
@@ -86,23 +130,7 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                     fuzz_opts.g.lod = opts.g.lod.clone();
                     if matches!(opts.experiment, Some(orc::Experiment::Lod)) {
                         assert!(fuzz_opts.g.lod.is_none());
-                        let mapping = [
-                            ("asn1", &["x509"][..]),
-                            ("png", &["image-script_png", "png"][..]),
-                            ("jpeg", &["jpeg"][..]),
-                            ("jxl", &["jxl"][..]),
-                            ("elf", &["goblin-parse_elf"][..]),
-                            // TODO: goblin-parse is elf, coff, macho..?
-                        ];
-                        for (lod_mod_name, needles) in mapping {
-                            if needles
-                                .iter()
-                                .any(|needle| mod_spec.filename.contains(needle))
-                            {
-                                fuzz_opts.g.lod = Some(lod_mod_name.to_string());
-                                break;
-                            }
-                        }
+                        fuzz_opts.g.lod = lod_override.clone();
                         assert!(
                             fuzz_opts.g.lod.is_some(),
                             "didn't find LOD module for {:?}",
