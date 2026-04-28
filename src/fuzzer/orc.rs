@@ -36,9 +36,9 @@ pub(crate) struct CliOpts {
     #[clap(long, default_value = "100ms")]
     pub stagger_cores: Duration,
 
-    #[cfg(feature = "reports")]
+    #[cfg(feature = "covexp")]
     #[clap(long)]
-    pub live_html_coverage: Option<PathBuf>,
+    pub live_covexp_db: Option<PathBuf>,
 
     #[clap(long, env)]
     pub experiment: Option<Experiment>,
@@ -111,17 +111,16 @@ impl OrchestratorHandle {
                             OrcMessage::RespShouldContinue(orc.should_continue())
                         }
                         OrcMessage::ReqReportFinds(finds) => {
-                            let mut update_live_coverage = false;
+                            let mut novel_coverage = false;
                             for input in finds {
                                 let res = orc.report_find(&input);
-                                update_live_coverage |=
-                                    res.map(|x| x.novel_coverage).unwrap_or(false);
+                                novel_coverage |= res.map(|x| x.novel_coverage).unwrap_or(false);
                             }
                             let mut corpus = orc.corpus.write().unwrap();
                             corpus.cull_and_update_weights();
                             drop(corpus);
-                            if update_live_coverage {
-                                orc.update_live_coverage();
+                            orc.update_live_coverage();
+                            if novel_coverage {
                                 orc.frontier_bbs = orc.compute_frontier().into_iter().collect();
                             }
                             orc.push_orc_edges_metrics();
@@ -331,6 +330,9 @@ pub(crate) struct Orchestrator {
     init_edges: HashSet<Edge>,
     config_epoch: usize,
     frontier_bbs: Vec<Location>,
+    /// Live coverage database, structure imported once at startup.
+    #[cfg(feature = "covexp")]
+    covexp_sink: Option<crate::cli::covexp::CovexpSink>,
 }
 
 impl Orchestrator {
@@ -341,11 +343,17 @@ impl Orchestrator {
         metrics: Arc<super::metrics::Accumulator>,
     ) -> Self {
         let now = Instant::now();
+        #[cfg(feature = "covexp")]
+        let live_call_sites = opts.live_covexp_db.is_some();
+        #[cfg(not(feature = "covexp"))]
+        let live_call_sites = false;
         let mut codecov_sess = JitFuzzingSessionBuilder::new(module.clone())
             .feedback(FeedbackOptions {
                 live_funcs: true,
                 live_bbs: true,
                 live_edges: true,
+                // The covexp sink needs it to attribute calls.
+                live_call_sites,
                 edge_shortest_trace: true,
                 ..FeedbackOptions::nothing()
             })
@@ -357,6 +365,24 @@ impl Orchestrator {
         let funcs_pass = codecov_sess.get_pass::<FunctionCoveragePass>();
         let init_edges = edges_pass.coverage.iter_covered_keys().collect();
         let init_funcs = funcs_pass.coverage.iter_covered_keys().collect();
+        #[cfg(feature = "covexp")]
+        let covexp_sink = opts.live_covexp_db.as_ref().map(|path| {
+            use crate::cli::covexp::{CovexpSink, Observed};
+            let mut sink = CovexpSink::open(path, &module, "fuzz-live", None, None, false)
+                .unwrap_or_else(|err| {
+                    eprintln!("--live-covexp-db: {err}");
+                    std::process::exit(1);
+                });
+            // Module initialization and the warm-up run above; no input of the
+            // corpus is responsible for these.
+            sink.add_testcase(
+                &codecov_sess,
+                Observed::Accumulated,
+                Some("<warm-up>"),
+                None,
+            );
+            sink
+        });
         Self {
             start: now,
             last_func_find: now,
@@ -373,6 +399,8 @@ impl Orchestrator {
             config_epoch: 0,
             frontier_bbs: Vec::new(),
             metrics,
+            #[cfg(feature = "covexp")]
+            covexp_sink,
         }
     }
 
@@ -569,6 +597,7 @@ impl Orchestrator {
             live_funcs: _,
             live_bbs: _,
             live_edges: _,
+            live_call_sites: _,
             cmpcov_hamming,
             cmpcov_absdist,
             cmpcov_u16dist,
@@ -690,9 +719,25 @@ impl Orchestrator {
             return None;
         }
         drop(corp);
+        // Per-run bits only, so the covexp sink can record this input's own
+        // coverage; the saved union is what the rest of the orchestrator reads.
+        #[cfg(feature = "covexp")]
+        if self.covexp_sink.is_some() {
+            self.codecov_sess.reset_pass_coverage_keep_saved();
+        }
         let res = self
             .codecov_sess
             .run_reusable_fresh(input, false, &mut Stats::new());
+        #[cfg(feature = "covexp")]
+        if let Some(sink) = self.covexp_sink.as_mut() {
+            let label = format!("{:x}", md5::compute(input));
+            sink.queue_testcase(
+                &self.codecov_sess,
+                crate::cli::covexp::Observed::LastRun,
+                Some(label.as_str()),
+                Some(input),
+            );
+        }
         if res.novel_coverage_passes.contains(&"funcs") {
             self.last_func_find = Instant::now();
         }
@@ -700,14 +745,11 @@ impl Orchestrator {
         Some(res)
     }
 
-    fn update_live_coverage(&self) {
-        #[cfg(feature = "reports")]
-        if let Some(out_path) = self.opts.live_html_coverage.as_ref() {
-            crate::cli::cov_html::write_html_cov_report(
-                self.module.clone(),
-                &self.codecov_sess,
-                out_path,
-            );
+    /// Write the corpus entries added since the last call to the covexp db.
+    fn update_live_coverage(&mut self) {
+        #[cfg(feature = "covexp")]
+        if let Some(sink) = self.covexp_sink.as_mut() {
+            sink.flush();
         }
     }
 
@@ -782,6 +824,7 @@ impl PassesGen for OrcPassesGen {
             live_funcs,
             live_bbs,
             live_edges,
+            live_call_sites,
             cmpcov_hamming,
             cmpcov_absdist,
             cmpcov_u16dist,
@@ -823,6 +866,10 @@ impl PassesGen for OrcPassesGen {
         add_pass!(live_funcs, FunctionCoveragePass::new(&self.spec, |_| true));
         add_pass!(live_bbs, BBCoveragePass::new(&self.spec, key_filter));
         add_pass!(live_edges, EdgeCoveragePass::new(&self.spec, key_filter));
+        add_pass!(
+            live_call_sites,
+            CallSiteCoveragePass::new(&self.spec, key_filter)
+        );
 
         macro_rules! add_pass {
             ($cond:expr, $pass:expr) => {

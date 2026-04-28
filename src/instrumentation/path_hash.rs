@@ -84,9 +84,14 @@ impl HashBitset {
         let entry_ptr = ctx.bcx.ins().iadd(entries_ptr, offset);
 
         if ctx.state.options.kind == CompilationKind::Reusable {
-            let val = ctx.bcx.ins().load(I8, MemFlagsData::trusted(), entry_ptr, 0);
+            let val = ctx
+                .bcx
+                .ins()
+                .load(I8, MemFlagsData::trusted(), entry_ptr, 0);
             let val = ctx.bcx.ins().bor(val, mask);
-            ctx.bcx.ins().store(MemFlagsData::trusted(), val, entry_ptr, 0);
+            ctx.bcx
+                .ins()
+                .store(MemFlagsData::trusted(), val, entry_ptr, 0);
         }
     }
 

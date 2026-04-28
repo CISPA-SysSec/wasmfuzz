@@ -39,10 +39,10 @@ fn instrument_site<
     let data = get_var(&mut ctx);
     let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
     let initial_fuel_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
-    let initial_fuel = ctx
-        .bcx
-        .ins()
-        .load(ir::types::I64, MemFlagsData::trusted(), initial_fuel_ptr, 0);
+    let initial_fuel =
+        ctx.bcx
+            .ins()
+            .load(ir::types::I64, MemFlagsData::trusted(), initial_fuel_ptr, 0);
 
     let vmctx = ctx.state.get_vmctx(ctx.bcx);
     let fuel = ctx.bcx.ins().load(

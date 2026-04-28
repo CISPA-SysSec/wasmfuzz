@@ -296,6 +296,7 @@ impl PassesGen for FullFeedbackPasses {
             live_funcs,
             live_bbs,
             live_edges,
+            live_call_sites,
             cmpcov_hamming,
             cmpcov_absdist,
             cmpcov_u16dist,
@@ -330,6 +331,10 @@ impl PassesGen for FullFeedbackPasses {
         add_pass!(live_funcs, FunctionCoveragePass::new(&self.spec, filter));
         add_pass!(live_bbs, BBCoveragePass::new(&self.spec, filter));
         add_pass!(live_edges, EdgeCoveragePass::new(&self.spec, filter));
+        add_pass!(
+            live_call_sites,
+            CallSiteCoveragePass::new(&self.spec, filter)
+        );
 
         macro_rules! add_pass {
             ($cond:expr, $pass:expr) => {
@@ -552,6 +557,9 @@ pub(crate) struct FeedbackOptions {
     pub live_funcs: bool,
     pub live_bbs: bool,
     pub live_edges: bool,
+    /// Call sites reached and returned from; only coverage reports use this.
+    #[serde(default)]
+    pub live_call_sites: bool,
     pub cmpcov_hamming: bool,
     pub cmpcov_absdist: bool,
     pub cmpcov_u16dist: bool,
@@ -591,6 +599,7 @@ impl FeedbackOptions {
             live_funcs: false,
             live_bbs: false,
             live_edges: false,
+            live_call_sites: false,
             cmpcov_hamming: false,
             cmpcov_absdist: false,
             cmpcov_u16dist: false,
@@ -619,6 +628,7 @@ impl FeedbackOptions {
             live_funcs: true,
             live_bbs: true,
             live_edges: true,
+            live_call_sites: true,
             cmpcov_hamming: true,
             cmpcov_absdist: true,
             cmpcov_u16dist: true,

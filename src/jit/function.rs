@@ -436,6 +436,38 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         ))
     }
 
+    /// Instrument the basic block at `target` on a branch into it, if the
+    /// operator there wouldn't do so itself.
+    ///
+    /// Basic block instrumentation is emitted before an operator is translated.
+    /// `block` and `end` only switch to `self.block(ip)` while being translated,
+    /// so for those the instrumentation sits on the fallthrough path and a
+    /// branch straight into that Cranelift block would skip it. (`loop` headers
+    /// are always entered by fallthrough first, so re-marking them on every
+    /// back edge would only cost fuel.)
+    pub(crate) fn instrument_branch_target_bb(
+        &mut self,
+        target: InsnIdx,
+        bcx: &mut FunctionBuilder,
+    ) {
+        use crate::ir::ControlInstruction;
+        let fspec = self.fspec();
+        if !fspec.is_bb_start.get(target.i()).is_some_and(|x| *x)
+            || !matches!(
+                fspec.operators[target.i()],
+                WFOperator::Control(
+                    ControlInstruction::Block { .. } | ControlInstruction::End { .. }
+                )
+            )
+        {
+            return;
+        }
+        let ip = std::mem::replace(&mut self.ip, target);
+        super::instrumentation::instrument_bb(self, bcx, self.loc());
+        self.iter_passes(bcx, |pass, ctx| pass.instrument_basic_block(ctx));
+        self.ip = ip;
+    }
+
     pub(crate) fn translate_op(&mut self, op: &WFOperator, bcx: &mut FunctionBuilder, ip: InsnIdx) {
         self.ip = ip;
         let loc = Location {

@@ -128,10 +128,12 @@ where
     let index = pass.coverage().keys.binary_search(&key).unwrap();
     let offset = index * std::mem::size_of::<u32>();
 
-    let val = ctx
-        .bcx
-        .ins()
-        .load(ir::types::I32, MemFlagsData::trusted(), buffer, offset as i32);
+    let val = ctx.bcx.ins().load(
+        ir::types::I32,
+        MemFlagsData::trusted(),
+        buffer,
+        offset as i32,
+    );
     let val = ctx.bcx.ins().iadd_imm_u(val, 1);
     ctx.bcx
         .ins()
@@ -285,10 +287,12 @@ impl KVInstrumentationPass for FunctionRecursionDepthPass {
         let index = self.coverage.keys.binary_search(&key).unwrap();
         let offset = index * std::mem::size_of::<u32>();
 
-        let val = ctx
-            .bcx
-            .ins()
-            .load(ir::types::I32, MemFlagsData::trusted(), buffer, offset as i32);
+        let val = ctx.bcx.ins().load(
+            ir::types::I32,
+            MemFlagsData::trusted(),
+            buffer,
+            offset as i32,
+        );
         let val = ctx.bcx.ins().iadd_imm_u(val, 1);
         ctx.bcx
             .ins()
@@ -309,10 +313,12 @@ impl KVInstrumentationPass for FunctionRecursionDepthPass {
         let index = self.coverage.keys.binary_search(&key).unwrap();
         let offset = index * std::mem::size_of::<u32>();
 
-        let val = ctx
-            .bcx
-            .ins()
-            .load(ir::types::I32, MemFlagsData::trusted(), buffer, offset as i32);
+        let val = ctx.bcx.ins().load(
+            ir::types::I32,
+            MemFlagsData::trusted(),
+            buffer,
+            offset as i32,
+        );
         let val = ctx.bcx.ins().iadd_imm_s(val, -1);
         ctx.bcx
             .ins()

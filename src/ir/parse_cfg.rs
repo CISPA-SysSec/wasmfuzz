@@ -38,16 +38,17 @@ pub(crate) struct FuncCFG {
     pub end_idx: InsnIdx,
     #[expect(unused)]
     pub insn_edges: Vec<(InsnIdx, InsnIdx)>,
-    #[expect(unused)]
-    pub insn_call_targets: Vec<(InsnIdx, u32)>,
-    #[expect(unused)]
-    pub insn_indirect_call_tables: Vec<(InsnIdx, u32)>,
+    /// Reachable `call`s and `call_indirect`s, with the callee if it's direct.
+    pub call_sites: Vec<(InsnIdx, Option<u32>)>,
     #[expect(unused)]
     pub insn_returns: Vec<InsnIdx>,
     #[expect(unused)]
     pub insn_unreachable: Vec<InsnIdx>,
     #[expect(unused)]
     pub block_edges: HashSet<(InsnIdx, InsnIdx)>,
+    /// Control flow edges at instruction granularity, minus the intra-block
+    /// sequential ones. Several entries can map onto the same block edge.
+    pub cfg_insn_edges: Vec<(InsnIdx, InsnIdx)>,
     pub critical_insn_edges: HashSet<(InsnIdx, InsnIdx)>,
 }
 
@@ -182,7 +183,16 @@ impl FuncCFG {
                 Operator::If { .. } | Operator::BrIf { .. } | Operator::Else => {
                     bb_starts.insert(InsnIdx(ip as u32 + 1));
                 }
-                Operator::End | Operator::Return if ip != end_idx.i() => {
+                // Whatever follows an unconditional transfer is only reachable
+                // through a label, if at all; keep it out of the terminator's
+                // block so the block doesn't claim to have run it.
+                Operator::End
+                | Operator::Return
+                | Operator::Br { .. }
+                | Operator::BrTable { .. }
+                | Operator::Unreachable
+                    if ip != end_idx.i() =>
+                {
                     bb_starts.insert(InsnIdx(ip as u32 + 1));
                 }
                 _ => {}
@@ -204,8 +214,7 @@ impl FuncCFG {
         bb_starts.sort();
 
         let mut insn_edges: Vec<(InsnIdx, InsnIdx)> = Vec::new();
-        let mut insn_call_targets: Vec<(InsnIdx, u32)> = Vec::new();
-        let mut insn_indirect_call_tables: Vec<(InsnIdx, u32)> = Vec::new();
+        let mut call_sites: Vec<(InsnIdx, Option<u32>)> = Vec::new();
         let mut insn_returns: Vec<InsnIdx> = Vec::new();
         let mut insn_unreachable: Vec<InsnIdx> = Vec::new();
 
@@ -218,12 +227,14 @@ impl FuncCFG {
             }
             prev_idx = Some(idx);
             match op {
-                Operator::If { .. } => {
-                    if let Some(else_idx) = if_elses.get(&idx) {
-                        insn_edges.push((idx, *else_idx));
-                    }
-                    insn_edges.push((idx, if_ends[&idx].inc()));
-                }
+                // Edges point at the instruction that runs next, not at the
+                // label: the false arm enters the else body past `else`, or
+                // skips to past `end` when there's no else. The JIT emits
+                // exactly these keys (see `jit::control`).
+                Operator::If { .. } => match if_elses.get(&idx) {
+                    Some(else_idx) => insn_edges.push((idx, else_idx.inc())),
+                    None => insn_edges.push((idx, if_ends[&idx].inc())),
+                },
                 Operator::Br { .. } | Operator::BrIf { .. } => {
                     let target = br_blocks
                         .get(&idx)
@@ -256,13 +267,10 @@ impl FuncCFG {
                     prev_idx = None;
                 }
                 Operator::Call { function_index } => {
-                    insn_call_targets.push((idx, function_index));
+                    call_sites.push((idx, Some(function_index)));
                 }
-                Operator::CallIndirect {
-                    type_index: _,
-                    table_index,
-                } => {
-                    insn_indirect_call_tables.push((idx, table_index));
+                Operator::CallIndirect { .. } => {
+                    call_sites.push((idx, None));
                 }
                 Operator::Return => {
                     insn_returns.push(idx);
@@ -275,6 +283,34 @@ impl FuncCFG {
                 _ => {}
             }
         }
+
+        // Drop code no edge leads to (what follows a `br` up to the next label
+        // anyone branches to, say). The JIT doesn't emit it, so nothing there
+        // can ever be covered, and edges out of it would only pad the graph.
+        let insn_count = insn_basic_block.len();
+        let mut successors = vec![Vec::new(); insn_count];
+        for &(from, to) in &insn_edges {
+            successors[from.i()].push(to);
+        }
+        let mut reachable = vec![false; insn_count];
+        let mut worklist = vec![InsnIdx(0)];
+        while let Some(idx) = worklist.pop() {
+            if idx.i() >= insn_count || std::mem::replace(&mut reachable[idx.i()], true) {
+                continue;
+            }
+            worklist.extend(successors[idx.i()].iter().copied());
+        }
+        insn_edges.retain(|(from, _)| reachable[from.i()]);
+        call_sites.retain(|(site, _)| reachable[site.i()]);
+
+        let cfg_insn_edges: Vec<(InsnIdx, InsnIdx)> = insn_edges
+            .iter()
+            .copied()
+            .filter(|(a, b)| {
+                let bb_edge = (insn_basic_block[a.i()], insn_basic_block[b.i()]);
+                bb_edge.0 != bb_edge.1 || a.0 + 1 != b.0
+            })
+            .collect();
 
         let block_edges: HashSet<(InsnIdx, InsnIdx)> = insn_edges
             .iter()
@@ -383,11 +419,11 @@ impl FuncCFG {
             bb_starts,
             end_idx,
             insn_edges,
-            insn_call_targets,
-            insn_indirect_call_tables,
+            call_sites,
             insn_returns,
             insn_unreachable,
             block_edges,
+            cfg_insn_edges,
             critical_insn_edges,
         })
     }

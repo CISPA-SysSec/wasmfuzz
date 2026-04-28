@@ -143,6 +143,7 @@ impl InstrumentationOpts {
             live_funcs: **cov_funcs,
             live_bbs: **cov_bbs,
             live_edges: **cov_edges,
+            live_call_sites: false,
             cmpcov_hamming: **cmpcov_hamming,
             cmpcov_absdist: **cmpcov_absdist,
             cmpcov_u16dist: **cmpcov_u16dist,

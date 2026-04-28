@@ -21,6 +21,11 @@ pub(crate) struct FuncSpec {
     pub basic_block_starts: Vec<InsnIdx>,
     pub operator_basic_block: Vec<InsnIdx>,
     pub critical_insn_edges: HashSet<(InsnIdx, InsnIdx)>,
+    /// Every CFG edge at instruction granularity, including the uninstrumented
+    /// ones that aren't in `critical_insn_edges`.
+    pub cfg_insn_edges: Vec<(InsnIdx, InsnIdx)>,
+    /// Reachable `call` / `call_indirect` sites, with the callee for direct calls.
+    pub call_sites: Vec<(InsnIdx, Option<u32>)>,
     pub is_bb_start: BitVec,
     pub ty: wasmparser::FuncType,
     pub idx: u32,
@@ -189,6 +194,8 @@ impl ModuleSpec {
             operator_basic_block: Vec::new(),
             is_bb_start: BitVec::new(),
             critical_insn_edges: cfg.critical_insn_edges,
+            cfg_insn_edges: cfg.cfg_insn_edges,
+            call_sites: cfg.call_sites,
             operators_wasm_bin_offset_base: body
                 .get_operators_reader()
                 .unwrap()
@@ -559,6 +566,8 @@ pub(crate) fn make_import_stub(idx: u32, name: String, ty: wasmparser::FuncType)
         operator_basic_block: Vec::new(),
         is_bb_start: BitVec::new(),
         critical_insn_edges: HashSet::default(),
+        cfg_insn_edges: Vec::new(),
+        call_sites: Vec::new(),
         operators_wasm_bin_offset_base: 0,
         operator_offset_rel: vec![0; ops.len()],
         operators: ops,

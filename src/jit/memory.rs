@@ -141,13 +141,7 @@ fn translate_store(
     if state.dead(bcx) {
         return;
     }
-    mark_store_dirty(
-        addr32,
-        imm.offset,
-        store_width(opcode, val_ty),
-        state,
-        bcx,
-    );
+    mark_store_dirty(addr32, imm.offset, store_width(opcode, val_ty), state, bcx);
     bcx.ins().Store(opcode, val_ty, flags, offset, val, addr);
     let kind = crate::concolic::MemoryAccessKind::from_opcode_and_ty(opcode, val_ty);
     state.concolic_memory_store(val, addr32, imm.offset as u32, kind, bcx);

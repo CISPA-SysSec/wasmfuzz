@@ -211,3 +211,115 @@ impl CodeCovInstrumentationPass for BBCoveragePass {
         self as &dyn std::any::Any
     }
 }
+
+/// A call instruction, and whether the key is for reaching it or for the callee
+/// having returned to it.
+#[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub(crate) struct CallSite {
+    pub(crate) location: Location,
+    pub(crate) returned: bool,
+}
+impl From<CallSite> for Location {
+    fn from(value: CallSite) -> Self {
+        value.location
+    }
+}
+
+/// Which call instructions ran, and which of them came back.
+///
+/// Basic block coverage can't tell: a block that ran may have trapped before
+/// its call, and one containing a call that never returned still counts as
+/// covered. Coverage reports use this to credit exactly the calls that happened
+/// and only the code after a call that returned.
+pub(crate) struct CallSiteCoveragePass {
+    pub coverage: CoverageBitset<CallSite>,
+}
+
+impl CallSiteCoveragePass {
+    /// Call instructions the JIT instruments: calls into stubbed imports are
+    /// translated as builtins and don't go through `instrument_call`.
+    pub(crate) fn instrumented_sites(
+        spec: &ModuleSpec,
+        func: &crate::ir::FuncSpec,
+    ) -> impl Iterator<Item = (crate::ir::InsnIdx, Option<u32>)> {
+        func.call_sites.iter().copied().filter(|(_, callee)| {
+            callee.is_none_or(|callee| !spec.functions[callee as usize].is_stub)
+        })
+    }
+}
+
+impl CodeCovInstrumentationPass for CallSiteCoveragePass {
+    type Key = CallSite;
+
+    fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
+        let keys = spec
+            .functions
+            .iter()
+            .flat_map(|func| {
+                Self::instrumented_sites(spec, func).flat_map(move |(site, _)| {
+                    let location = Location {
+                        function: func.idx,
+                        index: site.0,
+                    };
+                    [false, true].map(|returned| CallSite { location, returned })
+                })
+            })
+            .filter(|key| key_filter(&key.location))
+            .collect::<Vec<_>>();
+        Self {
+            coverage: CoverageBitset::new(&keys),
+        }
+    }
+
+    fn shortcode(&self) -> &'static str {
+        "calls"
+    }
+
+    fn coverage(&self) -> &CoverageBitset<Self::Key> {
+        &self.coverage
+    }
+
+    fn coverage_mut(&mut self) -> &mut CoverageBitset<Self::Key> {
+        &mut self.coverage
+    }
+
+    fn instrument_call(
+        &self,
+        _target: Option<FuncIdx>,
+        _params: &[cranelift::prelude::Value],
+        _tys: &[cranelift::prelude::Type],
+        ctx: InstrCtx,
+    ) {
+        let location = ctx.state.loc();
+        self.coverage.instrument(
+            &CallSite {
+                location,
+                returned: false,
+            },
+            ctx,
+            self,
+        );
+    }
+
+    fn instrument_call_return(
+        &self,
+        _target: Option<FuncIdx>,
+        _returns: &[cranelift::prelude::Value],
+        _tys: &[cranelift::prelude::Type],
+        ctx: InstrCtx,
+    ) {
+        let location = ctx.state.loc();
+        self.coverage.instrument(
+            &CallSite {
+                location,
+                returned: true,
+            },
+            ctx,
+            self,
+        );
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self as &dyn std::any::Any
+    }
+}

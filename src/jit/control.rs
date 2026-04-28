@@ -59,7 +59,14 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 let mut params = state.popn(&tys, bcx);
                 state.pop_control_frame();
                 params_augument_concolic(&mut params, state);
-                bcx.ins().jump(block, &values_to_blockargs(&params));
+                // Only falling off the end of the body takes this edge. A
+                // false `if` and the end of a `then` arm also land in `block`,
+                // but they emit their own edges past the `end`.
+                let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, state.ip.inc());
+                state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
+                if !state.dead(bcx) {
+                    bcx.ins().jump(block, &values_to_blockargs(&params));
+                }
                 state.mark_dead(bcx);
             }
 
@@ -77,8 +84,6 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             }
             bcx.switch_to_block(block);
             state.pushn(&tys, &block_return_values);
-            let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, state.ip.inc());
-            state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
             if *starts_new_block {
                 let next = state.block(state.ip.inc(), bcx);
                 if !state.dead(bcx) {
@@ -141,9 +146,12 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             bcx.ins().brif(cond, cont, &[], intermediate_block, &[]);
             bcx.seal_block(intermediate_block);
 
+            // Edge keys name the instruction that runs next (see `FuncCFG`):
+            // past the `else`, or past the `end` if there's no else arm.
             bcx.switch_to_block(intermediate_block);
             if let Some(else_index) = else_operator_index {
-                let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, *else_index);
+                let edge =
+                    crate::instrumentation::Edge::new(state.fidx, state.ip, else_index.inc());
                 state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
                 let else_block = state.block(*else_index, bcx);
                 if !state.dead(bcx) {
@@ -151,8 +159,11 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 }
                 bcx.seal_block(else_block);
             } else {
-                let edge =
-                    crate::instrumentation::Edge::new(state.fidx, state.ip, *end_operator_index);
+                let edge = crate::instrumentation::Edge::new(
+                    state.fidx,
+                    state.ip,
+                    end_operator_index.inc(),
+                );
                 state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
                 let end_block = state.block(*end_operator_index, bcx);
                 if !state.dead(bcx) {
@@ -162,6 +173,8 @@ pub(crate) fn translate_control<'a, 'b, 's>(
 
             bcx.seal_block(cont);
             bcx.switch_to_block(cont);
+            let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, state.ip.inc());
+            state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
         }
 
         ControlInstruction::Else {
@@ -179,7 +192,15 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 let param_tys = wasm2tys(target_params.params());
                 let mut params = state.popn(&param_tys, bcx);
                 params_augument_concolic(&mut params, state);
-                bcx.ins().jump(end_block, &values_to_blockargs(&params));
+                let edge = crate::instrumentation::Edge::new(
+                    state.fidx,
+                    state.ip,
+                    end_operator_index.inc(),
+                );
+                state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
+                if !state.dead(bcx) {
+                    bcx.ins().jump(end_block, &values_to_blockargs(&params));
+                }
                 state.mark_dead(bcx);
             }
             let else_block = state.block(state.ip, bcx);
@@ -200,6 +221,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             params_augument_concolic(&mut params, state);
             let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, *cfg_target);
             state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
+            state.instrument_branch_target_bb(*cfg_target, bcx);
             if !state.dead(bcx) {
                 bcx.ins().jump(target, &values_to_blockargs(&params));
                 state.mark_dead(bcx);
@@ -231,6 +253,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             bcx.switch_to_block(jump_block);
             let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, *cfg_target);
             state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
+            state.instrument_branch_target_bb(*cfg_target, bcx);
             let mut params = state.peekn(target_params.params().len(), bcx);
             if !state.dead(bcx) {
                 params_augument_concolic(&mut params, state);
@@ -276,6 +299,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 bcx.switch_to_block(*block);
                 let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, *target);
                 state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
+                state.instrument_branch_target_bb(*target, bcx);
                 if !state.dead(bcx) {
                     let target_block = state.block(*target, bcx);
                     bcx.ins().jump(target_block, &[]);
@@ -286,6 +310,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             bcx.switch_to_block(default_block);
             let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, *default);
             state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
+            state.instrument_branch_target_bb(*default, bcx);
             if !state.dead(bcx) {
                 bcx.ins().jump(default_target, &[]);
                 state.mark_dead(bcx);
@@ -421,7 +446,9 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             // traps before we dispatch to a bad pointer
             let sig_offset = bcx.ins().imul_imm_u(callee_idx, 4);
             let sig_addr = bcx.ins().iadd(sig_ptr, sig_offset);
-            let slot_sig = bcx.ins().load(I32, ir::MemFlagsData::trusted(), sig_addr, 0);
+            let slot_sig = bcx
+                .ins()
+                .load(I32, ir::MemFlagsData::trusted(), sig_addr, 0);
             let want_sig = bcx.ins().iconst(I32, expected_sig);
             let sig_mismatch = bcx.ins().icmp(IntCC::NotEqual, slot_sig, want_sig);
             bcx.ins().trapnz(
