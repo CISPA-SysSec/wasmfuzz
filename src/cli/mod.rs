@@ -935,7 +935,6 @@ pub(crate) fn main() {
         Subcommand::DetectLod { program_or_dir } => {
             use crate::instrumentation::CodeCovInstrumentationPass;
             use crate::instrumentation::EdgeCoveragePass;
-            use std::cell::RefCell;
             use std::collections::BTreeMap;
 
             let programs = if program_or_dir.is_dir() {
@@ -962,12 +961,9 @@ pub(crate) fn main() {
                         })
                         .build();
                     sess.initialize(&mut stats);
-                    let cell = RefCell::new((sess, stats));
                     let engines = lod::guess_engines(|bytes: &[u8]| -> Vec<bool> {
-                        let mut guard = cell.borrow_mut();
-                        let (sess, stats) = &mut *guard;
                         sess.reset_pass_coverage();
-                        let _ = sess.run_reusable_fresh(bytes, true, stats);
+                        let _ = sess.run_reusable_fresh(bytes, true, &mut stats);
                         let pass = sess.get_pass::<EdgeCoveragePass>();
                         pass.coverage().saved.iter().by_vals().collect()
                     });

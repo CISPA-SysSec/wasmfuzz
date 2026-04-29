@@ -77,12 +77,16 @@ impl Worker {
 
         let mut only_grammar_inputs = false;
 
+        let lod_engine;
+
         let sess = match orc {
             Some(ref handle) => {
                 let config = handle.suggest();
                 eprintln!("got config: {config:#?}");
                 schedule.timeout = Some(config.timeout);
                 only_grammar_inputs = config.swarm.only_grammar_inputs;
+                lod_engine = config.lod.as_deref().map(lod::make_engine);
+                only_grammar_inputs &= lod_engine.is_some();
                 JitFuzzingSession::builder(mod_spec.clone())
                     .passes_generator(Arc::new(config.passes))
                     .tracing(TracingOptions {
@@ -94,24 +98,23 @@ impl Worker {
                     .swarm(config.swarm)
                     .build()
             }
-            None => JitFuzzingSession::builder(mod_spec.clone())
-                .feedback(opts.i.to_feedback_opts())
-                .tracing(TracingOptions {
-                    stdout: true,
-                    cmplog: *opts.x.use_cmplog,
-                    concolic: *opts.x.use_concolic,
-                })
-                .swarm(SwarmConfig::from_instruction_limit(
-                    opts.x.instruction_limit,
-                ))
-                .run_from_snapshot(*opts.x.run_from_snapshot)
-                .input_size_limit(opts.g.input_size_limit as u32)
-                .build(),
+            None => {
+                lod_engine = opts.g.lod.as_deref().map(lod::make_engine);
+                JitFuzzingSession::builder(mod_spec.clone())
+                    .feedback(opts.i.to_feedback_opts())
+                    .tracing(TracingOptions {
+                        stdout: true,
+                        cmplog: *opts.x.use_cmplog,
+                        concolic: *opts.x.use_concolic,
+                    })
+                    .swarm(SwarmConfig::from_instruction_limit(
+                        opts.x.instruction_limit,
+                    ))
+                    .run_from_snapshot(*opts.x.run_from_snapshot)
+                    .input_size_limit(opts.g.input_size_limit as u32)
+                    .build()
+            }
         };
-
-        let lod_engine: Option<Box<dyn lod::ErasedEngine>> =
-            opts.g.lod.as_deref().map(lod::make_engine);
-        only_grammar_inputs &= lod_engine.is_some();
 
         let mut worker = Self {
             schedule,
@@ -156,6 +159,7 @@ impl Worker {
                     if let Some(engine) = &mut worker.lod_engine
                         && only_grammar_inputs
                     {
+                        tracy_full::zone!("lod: roundtrip");
                         input = engine.roundtrip(&input);
                     }
                     // NOTE: we don't need to trace here if we're going to throw them away anyways!
@@ -187,6 +191,7 @@ impl Worker {
                 );
 
                 if let Some(engine) = &mut worker.lod_engine {
+                    tracy_full::zone!("lod: feed_corpus");
                     for idx in worker.corpus.ids() {
                         let testcase = worker.corpus.get(idx).unwrap().borrow();
                         let input = testcase.input().as_ref().unwrap().as_ref();
@@ -205,6 +210,7 @@ impl Worker {
         let ignore_crashes = *self.opts.x.fuzz_through_crashes;
 
         if let Some(engine) = &mut self.lod_engine {
+            tracy_full::zone!("lod: get_entropy");
             self.sess
                 .reusable_stage
                 .instance
@@ -281,6 +287,7 @@ impl Worker {
             crate::util::print_input_hexdump(input);
         }
         if let Some(engine) = &mut self.lod_engine {
+            tracy_full::zone!("lod: feed");
             engine.feed(input);
         }
 
@@ -454,6 +461,7 @@ impl Worker {
             tracy_full::zone!("Worker loop");
 
             if let Some(mut engine) = self.lod_engine.take() {
+                tracy_full::zone!("lod: fuzz loop");
                 let mut lod_buf = Vec::new();
                 for _ in 0..64 {
                     let corp_count = self.corpus.count();
@@ -473,12 +481,12 @@ impl Worker {
                     for _ in 0..8 {
                         let start = Instant::now();
                         {
-                            tracy_full::zone!("LodEngine::mutate");
+                            tracy_full::zone!("lod: mutate");
                             let seed = self.rand.next();
                             engine.mutate(seed);
                         }
                         {
-                            tracy_full::zone!("LodEngine::serialize");
+                            tracy_full::zone!("lod: serialize");
                             lod_buf.clear();
                             engine.serialize_current(&mut lod_buf);
                             lod_buf.truncate(self.sess.swarm.input_alloc_size());
@@ -867,6 +875,7 @@ impl Worker {
         }
 
         if let Some(lod) = &mut self.lod_engine {
+            tracy_full::zone!("lod: cmin");
             if lod.count_corpus() > self.corpus.count() * 2 {
                 lod.reset_corpus();
                 for idx in self.corpus.ids() {

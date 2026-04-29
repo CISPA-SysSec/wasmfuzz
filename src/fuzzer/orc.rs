@@ -318,6 +318,7 @@ pub(crate) struct Orchestrator {
     init_edges: HashSet<Edge>,
     config_epoch: usize,
     frontier_bbs: Vec<Location>,
+    lod_options: Vec<&'static str>,
 }
 
 impl Orchestrator {
@@ -339,6 +340,23 @@ impl Orchestrator {
         let funcs_pass = codecov_sess.get_pass::<FunctionCoveragePass>();
         let init_edges = edges_pass.coverage.iter_covered_keys().collect();
         let init_funcs = funcs_pass.coverage.iter_covered_keys().collect();
+        let lod_options = if matches!(opts.experiment, Some(Experiment::Lod)) {
+            assert!(matches!(opts.g.lod, None));
+            lod::guess_engines(|bytes: &[u8]| -> Vec<bool> {
+                use crate::instrumentation::CodeCovInstrumentationPass;
+                codecov_sess.reset_pass_coverage();
+                let _ = codecov_sess.run_reusable_fresh(bytes, true, &mut Stats::default());
+                codecov_sess
+                    .get_pass::<EdgeCoveragePass>()
+                    .coverage()
+                    .saved
+                    .iter()
+                    .by_vals()
+                    .collect()
+            })
+        } else {
+            vec![]
+        };
         Self {
             start: now,
             last_func_find: now,
@@ -354,6 +372,7 @@ impl Orchestrator {
             init_edges,
             config_epoch: 0,
             frontier_bbs: Vec::new(),
+            lod_options,
         }
     }
 
@@ -434,6 +453,7 @@ impl Orchestrator {
                 }
             }
             return Config {
+                lod: None,
                 passes: OrcPassesGen {
                     opts,
                     spec: self.module.clone(),
@@ -630,7 +650,16 @@ impl Orchestrator {
             opts.live_bbs = false;
         }
 
+        let mut lod = None;
+        if self.rng.random_ratio(7, 10) {
+            lod = self
+                .lod_options
+                .choose(&mut self.rng)
+                .map(|x| x.to_string());
+        }
+
         Config {
+            lod,
             passes: OrcPassesGen {
                 opts,
                 spec: self.module.clone(),
@@ -732,6 +761,7 @@ pub(crate) struct Config {
     pub swarm: SwarmConfig,
     pub passes: OrcPassesGen,
     pub timeout: std::time::Duration,
+    pub lod: Option<String>,
 }
 
 #[derive(Clone)]
