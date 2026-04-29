@@ -1,6 +1,7 @@
 use clap::Parser;
 use rand::Rng;
 use std::{
+    collections::BTreeSet,
     io::{BufRead, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -184,7 +185,7 @@ pub(crate) enum Subcommand {
     },
     /// Detect the matching LOD grammar engine for a wasm module.
     DetectLod {
-        program: PathBuf,
+        program_or_dir: PathBuf,
     },
 }
 
@@ -931,13 +932,104 @@ pub(crate) fn main() {
                 println!("[{size:>5}] {path:?}");
             }
         }
-        Subcommand::DetectLod { program } => {
-            let mod_spec = parse_program(&program);
-            match crate::fuzzer::detect_lod_engine(mod_spec.clone()) {
-                Some(engine) => println!("{}", engine.format_name()),
-                None => {
-                    eprintln!("no LOD grammar matched {:?}", mod_spec.filename);
-                    std::process::exit(1);
+        Subcommand::DetectLod { program_or_dir } => {
+            use crate::instrumentation::CodeCovInstrumentationPass;
+            use crate::instrumentation::EdgeCoveragePass;
+            use std::cell::RefCell;
+            use std::collections::BTreeMap;
+
+            let programs = if program_or_dir.is_dir() {
+                std::fs::read_dir(program_or_dir)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect()
+            } else {
+                vec![program_or_dir]
+            };
+
+            let mut handles = Vec::new();
+            for program in &programs {
+                let program = program.clone();
+                handles.push(std::thread::spawn(move || {
+                    let mod_spec = parse_program(&program);
+                    let filename = mod_spec.filename.clone();
+                    let mut stats = Stats::default();
+                    let mut sess = JitFuzzingSession::builder(mod_spec)
+                        .optimize_for_compilation_time(true)
+                        .feedback(FeedbackOptions {
+                            live_edges: true,
+                            ..FeedbackOptions::nothing()
+                        })
+                        .build();
+                    sess.initialize(&mut stats);
+                    let cell = RefCell::new((sess, stats));
+                    let engines = lod::guess_engines(|bytes: &[u8]| -> Vec<bool> {
+                        let mut guard = cell.borrow_mut();
+                        let (sess, stats) = &mut *guard;
+                        sess.reset_pass_coverage();
+                        let _ = sess.run_reusable_fresh(bytes, true, stats);
+                        let pass = sess.get_pass::<EdgeCoveragePass>();
+                        pass.coverage().saved.iter().by_vals().collect()
+                    });
+                    (filename, engines)
+                }));
+            }
+
+            let results = handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>();
+            println!();
+
+            let mut results = results;
+            results.sort_by_key(|(program, _)| program.clone());
+
+            let mut by_engine: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
+            let mut no_engines = Vec::new();
+            for (program, engines) in &results {
+                if engines.is_empty() {
+                    no_engines.push(program);
+                }
+                for engine in engines {
+                    by_engine.entry(engine).or_default().insert(program.clone());
+                }
+            }
+
+            println!();
+            println!("by-program");
+            println!("{:<56} | engines", "program");
+            println!("{:-<56}-+-{:-<40}", "", "");
+            for (program, engines) in &results {
+                let engine_list = if engines.is_empty() && programs.len() < 5 {
+                    "-".to_string()
+                } else if engines.is_empty() {
+                    continue;
+                } else {
+                    engines.join(", ")
+                };
+                println!("{:<56} | {}", program, engine_list);
+            }
+
+            println!();
+            println!("by-engine");
+            println!("{:<24} | programs", "engine");
+            println!("{:-<24}-+-{:-<8}", "", "");
+            for (engine, programs) in &by_engine {
+                if programs.len() < 10 {
+                    let programs = programs.iter().map(|p| p.clone()).collect::<Vec<_>>();
+                    println!("{:<24} | {}", engine, programs.join(", "));
+                } else {
+                    println!("{:<24} | {}", engine, programs.len());
+                }
+            }
+
+            println!();
+            println!("no engines found");
+            if no_engines.is_empty() {
+                println!("- none");
+            } else {
+                for program in no_engines {
+                    println!("- {}", program);
                 }
             }
         }
