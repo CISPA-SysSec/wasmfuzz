@@ -186,6 +186,8 @@ pub(crate) enum Subcommand {
     /// Detect the matching LOD grammar engine for a wasm module.
     DetectLod {
         program_or_dir: PathBuf,
+        #[clap(short, long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -932,10 +934,20 @@ pub(crate) fn main() {
                 println!("[{size:>5}] {path:?}");
             }
         }
-        Subcommand::DetectLod { program_or_dir } => {
+        Subcommand::DetectLod {
+            program_or_dir,
+            output,
+        } => {
             use crate::instrumentation::CodeCovInstrumentationPass;
             use crate::instrumentation::EdgeCoveragePass;
             use std::collections::BTreeMap;
+
+            let mut out: Box<dyn Write> = match output {
+                Some(path) => Box::new(std::io::BufWriter::new(
+                    std::fs::File::create(path).unwrap(),
+                )),
+                None => Box::new(std::io::stdout()),
+            };
 
             let programs = if program_or_dir.is_dir() {
                 std::fs::read_dir(program_or_dir)
@@ -975,7 +987,7 @@ pub(crate) fn main() {
                 .into_iter()
                 .map(|handle| handle.join().unwrap())
                 .collect::<Vec<_>>();
-            println!();
+            writeln!(out).unwrap();
 
             let mut results = results;
             results.sort_by_key(|(program, _)| program.clone());
@@ -991,10 +1003,10 @@ pub(crate) fn main() {
                 }
             }
 
-            println!();
-            println!("by-program");
-            println!("{:<56} | engines", "program");
-            println!("{:-<56}-+-{:-<40}", "", "");
+            writeln!(out).unwrap();
+            writeln!(out, "by-program").unwrap();
+            writeln!(out, "{:<56} | engines", "program").unwrap();
+            writeln!(out, "{:-<56}-+-{:-<40}", "", "").unwrap();
             for (program, engines) in &results {
                 let engine_list = if engines.is_empty() && programs.len() < 5 {
                     "-".to_string()
@@ -1003,29 +1015,29 @@ pub(crate) fn main() {
                 } else {
                     engines.join(", ")
                 };
-                println!("{:<56} | {}", program, engine_list);
+                writeln!(out, "{:<56} | {}", program, engine_list).unwrap();
             }
 
-            println!();
-            println!("by-engine");
-            println!("{:<24} | programs", "engine");
-            println!("{:-<24}-+-{:-<8}", "", "");
+            writeln!(out).unwrap();
+            writeln!(out, "by-engine").unwrap();
+            writeln!(out, "{:<24} | programs", "engine").unwrap();
+            writeln!(out, "{:-<24}-+-{:-<8}", "", "").unwrap();
             for (engine, programs) in &by_engine {
                 if programs.len() < 10 {
                     let programs = programs.iter().map(|p| p.clone()).collect::<Vec<_>>();
-                    println!("{:<24} | {}", engine, programs.join(", "));
+                    writeln!(out, "{:<24} | {}", engine, programs.join(", ")).unwrap();
                 } else {
-                    println!("{:<24} | {}", engine, programs.len());
+                    writeln!(out, "{:<24} | {}", engine, programs.len()).unwrap();
                 }
             }
 
-            println!();
-            println!("no engines found");
+            writeln!(out).unwrap();
+            writeln!(out, "no engines match:").unwrap();
             if no_engines.is_empty() {
-                println!("- none");
+                writeln!(out, "- none").unwrap();
             } else {
                 for program in no_engines {
-                    println!("- {}", program);
+                    writeln!(out, "- {}", program).unwrap();
                 }
             }
         }
