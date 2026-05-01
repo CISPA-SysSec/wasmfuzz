@@ -140,7 +140,7 @@ impl Fuzzer {
         opts.t.timeout_steps = Some(timeout_steps);
         // opts.rng_seed = Some(42);
         let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
-        let mut worker = Worker::new(mod_spec, opts, MessageBus::new(), 0, None);
+        let mut worker = Worker::new(mod_spec, opts, MessageBus::new(), 0, None, None);
         let res = worker.run().unwrap();
         println!();
         println!();

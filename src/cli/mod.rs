@@ -1024,7 +1024,7 @@ pub(crate) fn main() {
             writeln!(out, "{:-<24}-+-{:-<8}", "", "").unwrap();
             for (engine, programs) in &by_engine {
                 if programs.len() < 10 {
-                    let programs = programs.iter().map(|p| p.clone()).collect::<Vec<_>>();
+                    let programs = programs.iter().cloned().collect::<Vec<_>>();
                     writeln!(out, "{:<24} | {}", engine, programs.join(", ")).unwrap();
                 } else {
                     writeln!(out, "{:<24} | {}", engine, programs.len()).unwrap();

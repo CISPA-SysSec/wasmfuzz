@@ -59,6 +59,7 @@ pub(crate) struct Worker {
     stop_requested: bool,
     lod_engine: Option<Box<dyn lod::ErasedEngine>>,
     only_grammar_inputs: bool,
+    experiment: Option<super::orc::Experiment>,
 }
 
 impl Worker {
@@ -68,6 +69,7 @@ impl Worker {
         bus: Arc<MessageBus<Message>>,
         idx: usize,
         orc: Option<super::orc::OrchestratorHandle>,
+        experiment: Option<super::orc::Experiment>,
     ) -> Self {
         tracy_full::zone!("Worker::new");
         let rng_seed = opts.rng_seed.unwrap_or_else(current_nanos);
@@ -136,6 +138,7 @@ impl Worker {
             stop_requested: false,
             lod_engine,
             only_grammar_inputs,
+            experiment,
         };
         // TODO: move this somewhere else?
         if let Some(ref orc) = orc {
@@ -480,7 +483,13 @@ impl Worker {
 
                     for _ in 0..8 {
                         let start = Instant::now();
-                        {
+                        if matches!(
+                            self.experiment,
+                            Some(super::orc::Experiment::LodGenerateOnly)
+                        ) {
+                            let seed = self.rand.next();
+                            engine.generate(seed);
+                        } else {
                             tracy_full::zone!("lod: mutate");
                             let seed = self.rand.next();
                             engine.mutate(seed);

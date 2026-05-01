@@ -49,14 +49,18 @@ pub(crate) struct CliOpts {
     pub expire_corpus_after: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Experiment {
     UseBusInputs,
     SwarmFocusEdge,
     Snapshot,
     OnlyEdgeCoverage,
     PassAblation,
+
     Lod,
+    LodDisable,
+    LodDummyOnly,
+    LodGenerateOnly,
 }
 impl std::str::FromStr for Experiment {
     type Err = String;
@@ -68,8 +72,22 @@ impl std::str::FromStr for Experiment {
             "only-edge-coverage" => Self::OnlyEdgeCoverage,
             "pass-ablation" => Self::PassAblation,
             "lod" => Self::Lod,
+            "lod-disable" => Self::LodDisable,
+            "lod-dummy-only" => Self::LodDummyOnly,
+            "lod-generate-only" => Self::LodGenerateOnly,
             _ => return Err("unknown Experiment".to_owned()),
         })
+    }
+}
+impl Experiment {
+    pub fn is_lod(&self) -> bool {
+        matches!(
+            self,
+            Experiment::Lod
+                | Experiment::LodDisable
+                | Experiment::LodDummyOnly
+                | Experiment::LodGenerateOnly
+        )
     }
 }
 
@@ -340,9 +358,9 @@ impl Orchestrator {
         let funcs_pass = codecov_sess.get_pass::<FunctionCoveragePass>();
         let init_edges = edges_pass.coverage.iter_covered_keys().collect();
         let init_funcs = funcs_pass.coverage.iter_covered_keys().collect();
-        let lod_options = if matches!(opts.experiment, Some(Experiment::Lod)) {
-            assert!(matches!(opts.g.lod, None));
-            lod::guess_engines(|bytes: &[u8]| -> Vec<bool> {
+        let mut lod_options = if opts.experiment.is_some_and(|x| x.is_lod()) {
+            assert!(opts.g.lod.is_none());
+            let results = lod::guess_engines(|bytes: &[u8]| -> Vec<bool> {
                 use crate::instrumentation::CodeCovInstrumentationPass;
                 codecov_sess.reset_pass_coverage();
                 let _ = codecov_sess.run_reusable_fresh(bytes, true, &mut Stats::default());
@@ -353,10 +371,30 @@ impl Orchestrator {
                     .iter()
                     .by_vals()
                     .collect()
-            })
+            });
+            assert!(
+                !results.is_empty(),
+                "lod experiment but no engines detected"
+            );
+            results
+        } else if let Some(engine) = &opts.g.lod {
+            let engine = Box::leak(Box::new(engine.clone()));
+            vec![engine.as_str()]
         } else {
-            vec![]
+            Vec::new()
         };
+        if matches!(opts.experiment, Some(Experiment::LodDisable)) {
+            lod_options.clear();
+        }
+        if matches!(opts.experiment, Some(Experiment::LodDummyOnly)) {
+            let mut corpus = corpus.write().unwrap();
+            for option in lod_options.drain(..) {
+                if let Some(dummy_bytes) = lod::get_dummy_bytes(option) {
+                    corpus.insert(&dummy_bytes, Instant::now());
+                }
+            }
+        }
+
         Self {
             start: now,
             last_func_find: now,

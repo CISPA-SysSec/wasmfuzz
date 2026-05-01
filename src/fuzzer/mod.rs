@@ -94,6 +94,7 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                         mq.clone(),
                         core_idx,
                         Some(orc_handle.clone()),
+                        opts.experiment,
                     );
                     let res = worker.run().unwrap();
                     use libafl::corpus::Corpus;
