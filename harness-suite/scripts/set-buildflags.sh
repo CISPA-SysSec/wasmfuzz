@@ -4,10 +4,10 @@ export WASI_SDK_PREFIX=/wasi-sdk/
 
 case $BUILD_TYPE in
     wasi-lime1)
-        TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi -mcpu=lime1"
+        TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasip1 -mcpu=lime1"
         ;;
     wasi-mvp)
-        TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasi -mcpu=mvp"
+        TARGET_FLAGS="--sysroot=$WASI_SDK_PREFIX/share/wasi-sysroot --target=wasm32-wasip1 -mcpu=mvp"
         ;;
     x86_64-libfuzzer|x86_64-libafl)
         TARGET_FLAGS=""

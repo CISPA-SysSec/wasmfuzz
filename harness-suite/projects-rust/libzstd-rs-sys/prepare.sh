@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/trifectatechfoundation/libzstd-rs-sys "$PROJECT/repo" 536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d
+git clone-rev.sh https://github.com/trifectatechfoundation/libzstd-rs-sys "$PROJECT/repo" 3dc8c859efb1eb7264631c4781e1d811a5bcc8fb
