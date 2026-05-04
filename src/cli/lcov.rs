@@ -169,7 +169,7 @@ pub(crate) fn run_inputs(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf]) -> 
     sess.initialize(&mut stats);
 
     for path in input_paths {
-        let input = std::fs::read(path).unwrap();
+        let input = std::fs::read(path).expect("failed to read input");
         assert!(input.len() <= crate::TEST_CASE_SIZE_LIMIT);
         let _res = sess.run(&input, &mut stats);
     }

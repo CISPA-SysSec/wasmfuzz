@@ -200,13 +200,19 @@ pub(crate) fn import_coverage_into(
         }
 
         for &(from, to) in &func.critical_insn_edges {
-            let Some(&from_block) = block_ids.get(&from) else {
+            let Some(&from_bb) = func.operator_basic_block.get(from.i()) else {
                 continue;
             };
-            let Some(&to_block) = block_ids.get(&to) else {
+            let Some(&to_bb) = func.operator_basic_block.get(to.i()) else {
                 continue;
             };
-            let kind = if next_bb.get(&from) == Some(&to) {
+            let Some(&from_block) = block_ids.get(&from_bb) else {
+                continue;
+            };
+            let Some(&to_block) = block_ids.get(&to_bb) else {
+                continue;
+            };
+            let kind = if next_bb.get(&from_bb) == Some(&to_bb) {
                 EdgeKind::Fallthrough
             } else {
                 EdgeKind::Branch
