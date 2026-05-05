@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/uclouvain/openjpeg "$PROJECT/repo" e7453e398b110891778d8da19209792c69ca7169
+git clone-rev.sh https://github.com/uclouvain/openjpeg "$PROJECT/repo" 21b70b0d62807e270994f94302e323da4f0d776b
 git -C "$PROJECT/repo" apply ../stub_clocks.patch

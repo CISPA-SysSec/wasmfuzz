@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://gitlab.xiph.org/xiph/ogg.git "$PROJECT/repo/ogg" fe20a3ed04b9e4de8d2b4c753077d9a7c2a7e588
-git clone-rev.sh https://gitlab.xiph.org/xiph/vorbis.git "$PROJECT/repo" 43bbff0141028e58d476c1d5fd45dd5573db576d
+git clone-rev.sh https://gitlab.xiph.org/xiph/ogg.git "$PROJECT/repo/ogg" 06a5e0262cdc28aa4ae6797627a783b5010440f0
+git clone-rev.sh https://gitlab.xiph.org/xiph/vorbis.git "$PROJECT/repo" 68a7fc2246e734f1a311b06083fc1249551c4412
