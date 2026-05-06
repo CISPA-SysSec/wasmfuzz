@@ -1,0 +1,27 @@
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 367975648..e51f3db42 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -39,6 +39,7 @@ if(OT_FTD AND BUILD_TESTING)
+ endif()
+ 
+ option(OT_FUZZ_TARGETS "enable fuzz targets" OFF)
++option(OT_NEXUS_TESTS "enable nexus tests" ON)
+ 
+ if(OT_FUZZ_TARGETS)
+     add_subdirectory(fuzz)
+diff --git a/tests/nexus/CMakeLists.txt b/tests/nexus/CMakeLists.txt
+index bdf169d4c..23de81cf1 100644
+--- a/tests/nexus/CMakeLists.txt
++++ b/tests/nexus/CMakeLists.txt
+@@ -165,6 +165,10 @@ set(COMMON_LIBS
+     openthread-ftd
+ )
+ 
++if(NOT OT_NEXUS_TESTS)
++    return()
++endif()
++
+ #----------------------------------------------------------------------------------------------------------------------
+ 
+ macro(ot_nexus_test name labels)

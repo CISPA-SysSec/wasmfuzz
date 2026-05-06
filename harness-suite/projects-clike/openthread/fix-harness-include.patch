@@ -1,7 +1,19 @@
-diff --git a/tests/fuzz/radio-one-node.cpp b/tests/fuzz/radio-one-node.cpp
-index b4535f339..1f9c75f84 100644
---- a/tests/fuzz/radio-one-node.cpp
-+++ b/tests/fuzz/radio-one-node.cpp
+diff --git a/tests/fuzz/fuzz_cli.cpp b/tests/fuzz/fuzz_cli.cpp
+index dcde321fa..a4c2f20d5 100644
+--- a/tests/fuzz/fuzz_cli.cpp
++++ b/tests/fuzz/fuzz_cli.cpp
+@@ -30,6 +30,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <assert.h>
+ 
+ #include <openthread/cli.h>
+ 
+diff --git a/tests/fuzz/fuzz_icmp6.cpp b/tests/fuzz/fuzz_icmp6.cpp
+index 99ed219e2..644afa449 100644
+--- a/tests/fuzz/fuzz_icmp6.cpp
++++ b/tests/fuzz/fuzz_icmp6.cpp
 @@ -30,6 +30,7 @@
  #include <stdio.h>
  #include <stdlib.h>
@@ -10,3 +22,51 @@ index b4535f339..1f9c75f84 100644
  
  #include "platform/nexus_core.hpp"
  #include "platform/nexus_node.hpp"
+diff --git a/tests/fuzz/fuzz_ip6.cpp b/tests/fuzz/fuzz_ip6.cpp
+index 5354a9c35..b04ff269c 100644
+--- a/tests/fuzz/fuzz_ip6.cpp
++++ b/tests/fuzz/fuzz_ip6.cpp
+@@ -30,6 +30,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <assert.h>
+ 
+ #include "platform/nexus_core.hpp"
+ #include "platform/nexus_node.hpp"
+diff --git a/tests/fuzz/fuzz_mdns.cpp b/tests/fuzz/fuzz_mdns.cpp
+index a54a17701..e78a1f082 100644
+--- a/tests/fuzz/fuzz_mdns.cpp
++++ b/tests/fuzz/fuzz_mdns.cpp
+@@ -30,6 +30,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <assert.h>
+ 
+ #include "platform/nexus_core.hpp"
+ #include "platform/nexus_node.hpp"
+diff --git a/tests/fuzz/fuzz_radio-one-node.cpp b/tests/fuzz/fuzz_radio-one-node.cpp
+index 9b50bf97a..5c2044253 100644
+--- a/tests/fuzz/fuzz_radio-one-node.cpp
++++ b/tests/fuzz/fuzz_radio-one-node.cpp
+@@ -30,6 +30,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <assert.h>
+ 
+ #include "platform/nexus_core.hpp"
+ #include "platform/nexus_node.hpp"
+diff --git a/tests/fuzz/fuzz_trel.cpp b/tests/fuzz/fuzz_trel.cpp
+index 317d425d2..5dde1e04a 100644
+--- a/tests/fuzz/fuzz_trel.cpp
++++ b/tests/fuzz/fuzz_trel.cpp
+@@ -30,6 +30,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <assert.h>
+ 
+ #include <openthread/platform/trel.h>
+ 
