@@ -280,7 +280,13 @@ pub(crate) fn main() {
                 if *print_stdout {
                     let stdout = &sess.tracing_context().stdout;
                     for line in stdout.lines() {
-                        eprintln!("[STDOUT] {}", line.unwrap())
+                        if let Ok(line) = line {
+                            eprintln!("[STDOUT] {}", line);
+                        } else {
+                            let data = String::from_utf8_lossy(stdout);
+                            eprintln!("[STDOUT:invalid utf-8] {data:?}");
+                            break;
+                        }
                     }
                 }
 

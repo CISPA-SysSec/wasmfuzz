@@ -25,6 +25,6 @@ subprocess.run([
 ] + ([
     "--cache-ttl=336h",
 ] if PODMAN == "podman" else []), check=True)
-subprocess.run([PODMAN, "create", "--name", cid, tag, "sh"], check=True)
+subprocess.run([PODMAN, "create", "--name", cid, "--replace", tag, "sh"], check=True)
 subprocess.run([PODMAN, "cp", f"{cid}:/out", "./"], check=True)
 subprocess.run([PODMAN, "rm", cid])
