@@ -1,31 +1,31 @@
 diff --git a/crates/ty/Cargo.toml b/crates/ty/Cargo.toml
-index 4b962179fe..0e9ffd474b 100644
+index 12bbce58c6..49093a77b4 100644
 --- a/crates/ty/Cargo.toml
 +++ b/crates/ty/Cargo.toml
-@@ -17,7 +17,7 @@ license.workspace = true
- ruff_db = { workspace = true, features = ["os", "cache"] }
- ruff_python_ast = { workspace = true }
+@@ -20,7 +20,7 @@ doctest = false
+ ruff_db = { workspace = true, features = ["os", "cache", "junit"] }
+ ruff_diagnostics = { workspace = true }
  ty_combine = { workspace = true }
--ty_project = { workspace = true, features = ["zstd"] }
-+ty_project = { workspace = true }
- ty_python_semantic = { workspace = true }
+-ty_project = { workspace = true, features = ["zstd", "junit"] }
++ty_project = { workspace = true, features = ["junit"] }
+ ty_python_semantic = { workspace = true, features = ["serde"] }
  ty_server = { workspace = true }
  ty_static = { workspace = true }
 diff --git a/crates/ty_project/Cargo.toml b/crates/ty_project/Cargo.toml
-index 33c1762b38..8e3387e1a8 100644
+index 8a3b32aea9..6136c11e8d 100644
 --- a/crates/ty_project/Cargo.toml
 +++ b/crates/ty_project/Cargo.toml
-@@ -52,7 +52,7 @@ insta = { workspace = true, features = ["redactions", "ron"] }
- ruff_db = { workspace = true, features = ["testing"] }
+@@ -60,7 +60,7 @@ ruff_db = { workspace = true, features = ["testing"] }
+ insta = { workspace = true, features = ["redactions", "ron"] }
  
  [features]
 -default = ["zstd"]
-+default = []#"zstd"]
++default = []
  deflate = ["ty_vendored/deflate"]
  schemars = [
      "dep:schemars",
 diff --git a/crates/ty_vendored/Cargo.toml b/crates/ty_vendored/Cargo.toml
-index 0461b834c3..a23ab1e06e 100644
+index a9b70a07ec..4509fd358b 100644
 --- a/crates/ty_vendored/Cargo.toml
 +++ b/crates/ty_vendored/Cargo.toml
 @@ -18,7 +18,7 @@ zip = { workspace = true }

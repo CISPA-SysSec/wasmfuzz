@@ -4,7 +4,7 @@ source set-buildflags.sh
 
 cd "$PROJECT/zlib"
 ./configure $CONFIGUREFLAGS
-make -j7 install prefix=/wasi-sdk/share/wasi-sysroot/ libdir=/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/
+make -j7 install prefix=/wasi-sdk/share/wasi-sysroot/ libdir=/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasip1/
 
 cd "$PROJECT/repo/jbigkit"
 make lib CC="$CC" CFLAGS="$CFLAGS" -j
@@ -13,7 +13,7 @@ cd "$PROJECT/repo/libjpeg-turbo"
 cmake . \
     -DWASI_SDK_PREFIX="${WASI_SDK_PREFIX}" \
     -DBUILD_SHARED_LIBS=OFF -DENABLE_SHARED=OFF \
-    -DWITH_TURBOJPEG=OFF
+    -DWITH_TURBOJPEG=OFF -DWITH_TESTS=OFF
 make -j
 make install
 

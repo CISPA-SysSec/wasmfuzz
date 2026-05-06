@@ -1,10 +1,10 @@
 diff --git a/xmlIO.c b/xmlIO.c
-index cc861402..8a1f1756 100644
+index 416743b2..bef948df 100644
 --- a/xmlIO.c
 +++ b/xmlIO.c
-@@ -1088,7 +1088,11 @@ xmlInputFromFd(xmlParserInputBufferPtr buf, int fd, int flags) {
+@@ -1203,7 +1203,11 @@ xmlInputFromFd(xmlParserInputBuffer *buf, int fd,
  
-         pos = lseek(fd, 0, SEEK_CUR);
+         pos = xmlSeek(fd, 0, SEEK_CUR);
  
 +#ifdef __wasi__
 +        copy = -1;
@@ -14,7 +14,7 @@ index cc861402..8a1f1756 100644
          if (copy == -1)
              return(xmlIOErr(errno));
  
-@@ -1118,7 +1122,11 @@ xmlInputFromFd(xmlParserInputBufferPtr buf, int fd, int flags) {
+@@ -1235,7 +1239,11 @@ xmlInputFromFd(xmlParserInputBuffer *buf, int fd,
      }
  #endif /* LIBXML_ZLIB_ENABLED */
  
@@ -27,7 +27,7 @@ index cc861402..8a1f1756 100644
      if (copy == -1)
          return(xmlIOErr(errno));
  
-@@ -1198,7 +1206,11 @@ xmlOutputDefaultOpen(xmlOutputBufferPtr buf, const char *filename,
+@@ -1269,7 +1277,11 @@ xmlOutputDefaultOpen(xmlOutputBufferPtr buf, const char *filename,
      (void) compression;
  
      if (!strcmp(filename, "-")) {

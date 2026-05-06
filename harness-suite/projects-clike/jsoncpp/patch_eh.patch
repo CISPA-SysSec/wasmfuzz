@@ -1,8 +1,8 @@
 diff --git a/src/lib_json/json_value.cpp b/src/lib_json/json_value.cpp
-index aa2b744..c3620a5 100644
+index 168251e..0ce4ab7 100644
 --- a/src/lib_json/json_value.cpp
 +++ b/src/lib_json/json_value.cpp
-@@ -212,13 +212,17 @@ JSONCPP_NORETURN void throwLogicError(String const& msg) {
+@@ -214,13 +214,17 @@ JSONCPP_NORETURN void throwLogicError(String const& msg) {
    throw LogicError(msg);
  }
  #else // !JSON_USE_EXCEPTION
@@ -23,28 +23,21 @@ index aa2b744..c3620a5 100644
  #endif
  
 diff --git a/src/test_lib_json/fuzz.cpp b/src/test_lib_json/fuzz.cpp
-index 5b75c22..8367d3b 100644
+index 3679a95..8367d3b 100644
 --- a/src/test_lib_json/fuzz.cpp
 +++ b/src/test_lib_json/fuzz.cpp
-@@ -11,10 +11,6 @@
- #include <memory>
- #include <string>
- 
--namespace Json {
--class Exception;
--}
--
- extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-   Json::CharReaderBuilder builder;
- 
-@@ -45,10 +41,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+@@ -41,14 +41,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
  
    Json::Value root;
    const auto data_str = reinterpret_cast<const char*>(data);
+-#if JSON_USE_EXCEPTION
 -  try {
+-#endif // JSON_USE_EXCEPTION
 -    reader->parse(data_str, data_str + size, &root, nullptr);
+-#if JSON_USE_EXCEPTION
 -  } catch (Json::Exception const&) {
 -  }
+-#endif // JSON_USE_EXCEPTION
 +  reader->parse(data_str, data_str + size, &root, nullptr);
    // Whether it succeeded or not doesn't matter.
    return 0;

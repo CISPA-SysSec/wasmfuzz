@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" 7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5
+git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" f2df3992ea5cac5ab43144b4d931e9d09574ccbc

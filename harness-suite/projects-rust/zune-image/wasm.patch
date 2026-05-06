@@ -1,8 +1,8 @@
 diff --git a/crates/zune-jpeg/fuzz/Cargo.toml b/crates/zune-jpeg/fuzz/Cargo.toml
-index 2574dcde..0de2bb82 100644
+index c1d258af..488dbd35 100644
 --- a/crates/zune-jpeg/fuzz/Cargo.toml
 +++ b/crates/zune-jpeg/fuzz/Cargo.toml
-@@ -25,8 +25,9 @@ path = "fuzz_targets/decode_buffer.rs"
+@@ -26,11 +26,12 @@ path = "fuzz_targets/decode_buffer.rs"
  test = false
  doc = false
  
@@ -17,6 +17,9 @@ index 2574dcde..0de2bb82 100644
 +#path = "fuzz_targets/fuzz_idct.rs"
 +#test = false
 +#doc = false
+ 
+ [[bin]]
+ name = "decode_incremental"
 diff --git a/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs b/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs
 index eec5b075..de290ba4 100644
 --- a/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs

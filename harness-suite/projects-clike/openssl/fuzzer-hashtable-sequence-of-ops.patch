@@ -1,5 +1,5 @@
 diff --git a/fuzz/hashtable.c b/fuzz/hashtable.c
-index 38d2295076..1bf42c2434 100644
+index 9e9519b865..cfc0f80177 100644
 --- a/fuzz/hashtable.c
 +++ b/fuzz/hashtable.c
 @@ -133,11 +133,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
@@ -15,12 +15,12 @@ index 38d2295076..1bf42c2434 100644
      /*
       * parse out our operation flags and key
       */
-@@ -322,15 +318,6 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+@@ -323,15 +319,6 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
          break;
  
      case OP_FLUSH:
 -        /*
--         * only flush the table rarely 
+-         * only flush the table rarely
 -         */
 -        if ((flushes % 100000) != 1) {
 -            skipped_values++;
@@ -31,7 +31,7 @@ index 38d2295076..1bf42c2434 100644
          /*
           * lock the table
           */
-@@ -382,6 +369,10 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+@@ -383,6 +370,10 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
          return -1;
      }
  

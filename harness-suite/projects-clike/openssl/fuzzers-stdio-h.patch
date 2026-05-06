@@ -1,5 +1,5 @@
 diff --git a/fuzz/ml-dsa.c b/fuzz/ml-dsa.c
-index 1088f9d..ecec951 100644
+index 094af9096a..679a8116f6 100644
 --- a/fuzz/ml-dsa.c
 +++ b/fuzz/ml-dsa.c
 @@ -10,6 +10,7 @@
@@ -11,7 +11,7 @@ index 1088f9d..ecec951 100644
  #include <openssl/err.h>
  #include <openssl/rand.h>
 diff --git a/fuzz/ml-kem.c b/fuzz/ml-kem.c
-index 7cf6e96..e8c4af4 100644
+index 6e3aed8b23..c9275781f0 100644
 --- a/fuzz/ml-kem.c
 +++ b/fuzz/ml-kem.c
 @@ -12,6 +12,7 @@
@@ -23,7 +23,7 @@ index 7cf6e96..e8c4af4 100644
  #include <openssl/err.h>
  #include <openssl/rand.h>
 diff --git a/fuzz/slh-dsa.c b/fuzz/slh-dsa.c
-index dada29a..24daa5e 100644
+index 17238bcf8b..c969558611 100644
 --- a/fuzz/slh-dsa.c
 +++ b/fuzz/slh-dsa.c
 @@ -12,6 +12,7 @@

@@ -5,7 +5,7 @@ source set-buildflags.sh
 
 cd "$PROJECT/zlib"
 ./configure $CONFIGUREFLAGS
-make -j7 install prefix=/wasi-sdk/share/wasi-sysroot/ libdir=/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/
+make -j7 install prefix=/wasi-sdk/share/wasi-sysroot/ libdir=/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasip1/
 
 cd "$PROJECT/repo"
 

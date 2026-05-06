@@ -1,8 +1,8 @@
 diff --git a/naga/fuzz/Cargo.toml b/naga/fuzz/Cargo.toml
-index 0e63bc4a2..ecf5ae2b4 100644
+index 0e63bc4a2..a793b911c 100644
 --- a/naga/fuzz/Cargo.toml
 +++ b/naga/fuzz/Cargo.toml
-@@ -10,11 +10,11 @@ build = "build.rs"
+@@ -10,13 +10,13 @@ build = "build.rs"
  [package.metadata]
  cargo-fuzz = true
  
@@ -14,27 +14,69 @@ index 0e63bc4a2..ecf5ae2b4 100644
 -[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "visionos")))'.dependencies.naga]
 +[dependencies.naga]
  workspace = true
- features = ["arbitrary", "spv-in", "wgsl-in", "glsl-in"]
+-features = ["arbitrary", "spv-in", "wgsl-in", "glsl-in"]
++features = ["spv-in", "wgsl-in", "glsl-in"]
  
+ [build-dependencies]
+ cfg_aliases.workspace = true
 diff --git a/naga/fuzz/build.rs b/naga/fuzz/build.rs
-index 9ad00f53a..a69970d63 100644
+index 9ad00f53a..257ff544f 100644
 --- a/naga/fuzz/build.rs
 +++ b/naga/fuzz/build.rs
 @@ -1,6 +1,6 @@
  fn main() {
      cfg_aliases::cfg_aliases! {
 -        fuzzable_platform: { not(any(target_arch = "wasm32", target_os = "ios", all(windows, target_arch = "aarch64"))) },
-+        fuzzable_platform: { not(false) },
++        fuzzable_platform: { not(any(target_os = "ios", all(windows, target_arch = "aarch64"))) },
      }
      // This cfg provided by cargo-fuzz
      println!("cargo::rustc-check-cfg=cfg(fuzzing)");
-diff --git a/rust-toolchain.toml b/rust-toolchain.toml
-deleted file mode 100644
-index 04d37a72c..000000000
---- a/rust-toolchain.toml
-+++ /dev/null
-@@ -1,4 +0,0 @@
--[toolchain]
--channel = "1.92"
--components = ["rustfmt", "clippy"]
--targets = ["wasm32-unknown-unknown"]
+diff --git a/naga/fuzz/fuzz_targets/glsl_parser.rs b/naga/fuzz/fuzz_targets/glsl_parser.rs
+index 159886f0c..882374aac 100644
+--- a/naga/fuzz/fuzz_targets/glsl_parser.rs
++++ b/naga/fuzz/fuzz_targets/glsl_parser.rs
+@@ -13,14 +13,19 @@ mod fuzz {
+ 
+     #[derive(Debug, Arbitrary)]
+     struct OptionsProxy {
+-        pub stage: ShaderStage,
++        pub stage: u8,
+         pub defines: std::collections::HashMap<String, String>,
+     }
+ 
+     impl From<OptionsProxy> for Options {
+         fn from(proxy: OptionsProxy) -> Self {
++            let stage = match proxy.stage % 3 {
++                0 => ShaderStage::Vertex,
++                1 => ShaderStage::Fragment,
++                _ => ShaderStage::Compute,
++            };
+             Options {
+-                stage: proxy.stage,
++                stage,
+                 // NOTE: This is a workaround needed due to lack of rust-fuzz/arbitrary support for hashbrown.
+                 defines: FastHashMap::from_iter(
+                     proxy
+diff --git a/naga/fuzz/fuzz_targets/ir.rs b/naga/fuzz/fuzz_targets/ir.rs
+index f2e7bea3f..a766d7228 100644
+--- a/naga/fuzz/fuzz_targets/ir.rs
++++ b/naga/fuzz/fuzz_targets/ir.rs
+@@ -4,12 +4,13 @@
+ mod fuzz {
+     use libfuzzer_sys::fuzz_target;
+ 
+-    fuzz_target!(|module: naga::Module| {
++    fuzz_target!(|data: &[u8]| {
+         use naga::valid as v;
+-        // Check if the module validates without errors.
+-        //TODO: may also fuzz the flags and capabilities
+-        let mut validator =
+-            v::Validator::new(v::ValidationFlags::all(), v::Capabilities::default());
++
++        let module = naga::Module::default();
++        let flags = v::ValidationFlags::from_bits_truncate(data.first().copied().unwrap_or(0));
++        let caps = v::Capabilities::from_bits_truncate(u64::from(data.get(1).copied().unwrap_or(0)));
++        let mut validator = v::Validator::new(flags, caps);
+         let _result = validator.validate(&module);
+     });
+ }

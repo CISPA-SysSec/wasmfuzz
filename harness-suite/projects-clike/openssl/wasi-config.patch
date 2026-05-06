@@ -1,9 +1,9 @@
 diff --git a/Configurations/10-main.conf b/Configurations/10-main.conf
-index cba57b4..264be91 100644
+index c7002eff39..597bfac788 100644
 --- a/Configurations/10-main.conf
 +++ b/Configurations/10-main.conf
-@@ -1948,6 +1948,17 @@ my %targets = (
-         multilib         => "64",
+@@ -1953,6 +1953,17 @@ my %targets = (
+         ranlib           => sub { env('RANLIB') },
      },
  
 +##### WebAssembly via WASI
@@ -17,6 +17,6 @@ index cba57b4..264be91 100644
 +        bn_ops => "THIRTY_TWO_BIT",
 +    },
 +
- ##### VxWorks for various targets
-     "vxworks-ppc60x" => {
-         inherit_from     => [ "BASE_unix" ],
+     ##### VMS
+     # Most things happen in vms-generic.
+     # Note that vms_info extracts the pointer size from the end of
