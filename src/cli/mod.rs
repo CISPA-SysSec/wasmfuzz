@@ -908,11 +908,10 @@ pub(crate) fn main() {
             let mut results = Vec::new();
 
             for path in inputs {
-                let mut input = std::fs::read(&path).unwrap();
+                let input = std::fs::read(&path).unwrap();
                 let size = match lod_engine.as_mut() {
                     Some(engine) => {
-                        engine.feed(&input);
-                        input = engine.roundtrip(&input);
+                        engine.set_input(&input);
                         engine.entropy()
                     }
                     None => input.len().try_into().unwrap_or(u32::MAX),

@@ -471,14 +471,27 @@ impl Worker {
                     if corp_count > 0 {
                         let corpus_idx = self.rand.below(corp_count.try_into().unwrap());
                         let corpus_idx = self.corpus.nth(corpus_idx);
-                        let entry = self
-                            .corpus
-                            .get(corpus_idx)?
-                            .borrow_mut()
-                            .load_input(&self.corpus)?
-                            .as_ref()
-                            .to_vec();
-                        engine.feed(&entry);
+                        let mut testcase = self.corpus.get(corpus_idx)?.borrow_mut();
+
+                        if matches!(self.experiment, Some(super::orc::Experiment::LodCmplog)) {
+                            use super::i2s_patches::{CmpLog, CmplogStore};
+                            if let Ok(i2s_metadata) = testcase.metadata::<CmplogStore>() {
+                                let c = engine.corpus_mut();
+                                c.clear_cmplog();
+                                for cmp in i2s_metadata.iter() {
+                                    match cmp {
+                                        CmpLog::Memcmp(a, b) => c.add_cmplog(&a, &b),
+                                        CmpLog::U16(a, b) => c.add_cmplog_u64(a as u64, b as u64),
+                                        CmpLog::U32(a, b) => c.add_cmplog_u64(a as u64, b as u64),
+                                        CmpLog::U64(a, b) => c.add_cmplog_u64(a, b),
+                                    };
+                                }
+                            }
+                        }
+
+                        let input = testcase.load_input(&self.corpus)?;
+                        let bytes = input.as_ref().to_vec();
+                        engine.set_input(&bytes);
                     }
 
                     for _ in 0..8 {
@@ -491,8 +504,16 @@ impl Worker {
                             engine.generate(seed);
                         } else {
                             tracy_full::zone!("lod: mutate");
+                            // TODO: cmplog mutations
                             let seed = self.rand.next();
-                            engine.mutate(seed);
+                            if matches!(
+                                self.experiment,
+                                Some(super::orc::Experiment::LodNoLevelSwitching)
+                            ) {
+                                engine.mutate_no_level_switching(seed);
+                            } else {
+                                engine.mutate(seed);
+                            }
                         }
                         {
                             tracy_full::zone!("lod: serialize");

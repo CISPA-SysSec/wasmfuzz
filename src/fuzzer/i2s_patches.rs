@@ -13,11 +13,11 @@ use speedy::{Readable, Writable};
 use std::io::{Cursor, Seek, SeekFrom};
 #[derive(Debug, Clone, Hash, PartialEq, Eq, speedy::Readable, speedy::Writable)]
 #[repr(u8)]
-pub(crate) enum CmpLog {
+pub enum CmpLog {
     U16(u16, u16),
     U32(u32, u32),
     U64(u64, u64),
-    Memcmp(Vec<u8>, Vec<u8>),
+    Memcmp(Box<[u8]>, Box<[u8]>),
 }
 
 impl CmpLog {
@@ -96,6 +96,30 @@ impl CmplogStore {
     }
     pub fn len(&self) -> usize {
         self.offsets.len()
+    }
+    pub fn iter<'a>(&'a self) -> CmplogStoreIter<'a> {
+        CmplogStoreIter {
+            store: self,
+            idx: 0,
+        }
+    }
+}
+
+pub struct CmplogStoreIter<'a> {
+    store: &'a CmplogStore,
+    idx: usize,
+}
+
+impl<'a> Iterator for CmplogStoreIter<'a> {
+    type Item = CmpLog;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.store.len() {
+            None
+        } else {
+            let item = self.store.get(self.idx);
+            self.idx += 1;
+            Some(item)
+        }
     }
 }
 

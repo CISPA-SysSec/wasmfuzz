@@ -61,6 +61,8 @@ pub(crate) enum Experiment {
     LodDisable,
     LodDummyOnly,
     LodGenerateOnly,
+    LodNoLevelSwitching,
+    LodCmplog,
 }
 impl std::str::FromStr for Experiment {
     type Err = String;
@@ -75,6 +77,8 @@ impl std::str::FromStr for Experiment {
             "lod-disable" => Self::LodDisable,
             "lod-dummy-only" => Self::LodDummyOnly,
             "lod-generate-only" => Self::LodGenerateOnly,
+            "lod-no-level-switching" => Self::LodNoLevelSwitching,
+            "lod-cmplog" => Self::LodCmplog,
             _ => return Err("unknown Experiment".to_owned()),
         })
     }

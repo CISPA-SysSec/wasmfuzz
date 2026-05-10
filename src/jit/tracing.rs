@@ -120,7 +120,7 @@ pub(crate) unsafe extern "C" fn builtin_trace_memcmp(
             .cmplog
             .entry(loc)
             .or_default()
-            .insert(CmpLog::Memcmp(a.to_vec(), b.to_vec()));
+            .insert(CmpLog::Memcmp(a.into(), b.into()));
     }
 }
 
@@ -172,6 +172,6 @@ pub(crate) unsafe extern "C" fn builtin_trace_strcmp(
             .cmplog
             .entry(loc)
             .or_default()
-            .insert(CmpLog::Memcmp(a.to_vec(), b.to_vec()));
+            .insert(CmpLog::Memcmp(a.into(), b.into()));
     }
 }
