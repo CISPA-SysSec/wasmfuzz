@@ -163,7 +163,8 @@ impl Worker {
                         && only_grammar_inputs
                     {
                         tracy_full::zone!("lod: roundtrip");
-                        input = engine.roundtrip(&input);
+                        // input = engine.roundtrip(&input);
+                        todo!();
                     }
                     // NOTE: we don't need to trace here if we're going to throw them away anyways!
                     let res = worker.on_corpus(&input, true);
