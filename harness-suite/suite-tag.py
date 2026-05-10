@@ -251,15 +251,6 @@ tag_manually(
     Tag.BUGGY_PROJECT,
 )
 
-# [STDOUT] thread '<unnamed>' panicked at /projects/naga/repo/src/valid/analyzer.rs:1004:82:
-# [STDOUT] index out of bounds: the len is 1 but the index is 3132799673
-tag_manually(
-    "wgpu-ir.wasm",
-    "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-
 # Note: naga's wgsl frontend is exposed in Firefox's WebGPU API, so keep it in the benchmark suite
 # tag_manually("wgpu-wgsl_parser.wasm", "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3", Tag.SUITE)
 # https://github.com/gfx-rs/wgpu/issues/5757#issuecomment-2830427879
@@ -290,6 +281,26 @@ tag_manually(
     "4295a846d002b4fa145824d4c11bc18f35d44999",
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
+)
+tag_manually(
+    "symphonia-decode_vorbis.wasm",
+    "4295a846d002b4fa145824d4c11bc18f35d44999",
+    Tag.CRASHING,
+)
+tag_manually(
+    "symphonia-demux_caf.wasm",
+    "4295a846d002b4fa145824d4c11bc18f35d44999",
+    Tag.CRASHING,
+)
+tag_manually(
+    "symphonia-demux_flac.wasm",
+    "4295a846d002b4fa145824d4c11bc18f35d44999",
+    Tag.CRASHING,
+)
+tag_manually(
+    "symphonia-demux_isomp4.wasm",
+    "4295a846d002b4fa145824d4c11bc18f35d44999",
+    Tag.CRASHING,
 )
 
 # Their harness builds on global mutable state to reach coverage. We patch the
@@ -329,28 +340,12 @@ tag_manually(
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
-tag_manually(
-    "ruff-ty_check_invalid_syntax.wasm",
-    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
-    Tag.CRASHING,
-    Tag.BUGGY_PORT,
-)
 
 # mcu_prog panic was fixed upstream in zune-image
 tag_manually(
     "image-script_jpeg.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING
 )
-# https://github.com/image-rs/image-tiff/pull/305
-tag_manually(
-    "image-script_tiff.wasm",
-    "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-tag_manually("image-script_guess.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
-tag_manually("image-script_tga.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
-# mostly: memory allocation of 536238276 bytes failed
-unknown_image_script_crashes = ["guess", "tga", "bmp", "gif", "hdr", "ico", "png", "pnm", "webp"]
+unknown_image_script_crashes = ["guess", "bmp", "ico", "webp"]
 for harness in unknown_image_script_crashes:
     tag_manually(f"image-script_{harness}.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
 
@@ -399,6 +394,11 @@ tag_manually(
     "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
     Tag.CRASHING,
 )
+tag_manually(
+    "sequoia-key_packet_from_bytes.wasm",
+    "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
+    Tag.CRASHING,
+)
 
 # [STDOUT] thread '<unnamed>' panicked at /projects/zune-image/repo/crates/zune-core/src/bytestream/reader/no_std_readers.rs:104:58:
 # [STDOUT] called `Option::unwrap()` on a `None` value
@@ -422,7 +422,6 @@ tag_manually(
 )
 # TODO: triage
 tag_manually("zune-image-zune-hdr-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
-tag_manually("zune-image-zune-jpeg-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
 tag_manually("zune-image-zune-psd-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
 # memory allocation of 855552672 bytes failed
 tag_manually("zune-image-zune-ppm-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
@@ -436,12 +435,7 @@ tag_manually(
 )
 # NULL-deref in ARMT_Convert
 tag_manually("lzma-7z.wasm", "d25e63d8f6b8186d04146cb19405bc5ad565412e", Tag.CRASHING)
-# dense::DFA::from_bytes validation order bug
-tag_manually(
-    "regex-fuzz_regex_automata_deserialize_dense_dfa.wasm",
-    "a76e0a0ef050f987d686268f1783a95b6bb25ea9",
-    Tag.CRASHING,
-)
+
 
 # [STDOUT] thread '<unnamed>' panicked at fuzzers/canonicalize.rs:15:9:
 # [STDOUT] assertion `left == right` failed
@@ -452,22 +446,12 @@ tag_manually(
     "635a4e420b75bf247e75312e4e872aa0e7fb9558",
     Tag.CRASHING,
 )
-
-# tag_manually("comrak-quadratic.wasm", "36b06b8a9466e6109c9e162e18cabcd3ef8aead2", Tag.CRASHING)
-# [STDOUT] thread '<unnamed>' panicked at /projects/toml-edit/repo/crates/toml_edit/src/parser/inline_table.rs:160:18:
-# [STDOUT] setting a value should set a prefix
 tag_manually(
-    "toml-toml_edit_fuzz-parse_document.wasm",
-    "80217f85ee8e6d91b4ed2469aecfdf93cef15985",
+    "capnproto-rust-test_all_types.wasm",
+    "635a4e420b75bf247e75312e4e872aa0e7fb9558",
     Tag.CRASHING,
 )
-# [STDOUT] thread '<unnamed>' panicked at fuzz_targets/compress.rs:27:5:
-# [STDOUT] assertion `left == right` failed
-# [STDOUT]   left: Ok
-# [STDOUT]  right: DataError
-tag_manually(
-    "zlib-rs-compress.wasm", "2396e463bd0e12220b2e556b356f790a76a6e6dd", Tag.CRASHING
-)
+
 # [STDOUT] thread '<unnamed>' panicked at fuzz_targets/inflate_chunked.rs:51:5:
 # [STDOUT] assertion `left == right` failed
 # [STDOUT]   left: StreamEnd
@@ -480,6 +464,7 @@ tag_manually(
 
 tag_manually("libzstd-rs-sys-decompress.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
 tag_manually("libzstd-rs-sys-decompress_overlapping.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
+tag_manually("libzstd-rs-sys-dictionary_train.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
 
 # JIT-TRACE: _257_find_pe_overlay/0067: Memory(I32Load16U(MemArg { align: 0, max_align: 1, offset: 20, memory: 0 }))
 # execution trapped with Abort(HeapOutOfBounds) which indicates that the target crashed
@@ -497,15 +482,17 @@ for target in ["upstream", "ossfuzz", "ossfuzz2"]:
 tag_manually("jbig2dec.wasm", "6ecb04980813d693234190021bd1cf874c05b1b4", Tag.CRASHING)
 
 
-# JIT-TRACE: _1533_ZSTD_reset_matchState/0310: Memory(MemoryFill)
-# execution trapped with Abort(HeapOutOfBounds) which indicates that the target crashed
-tag_manually("zip2-fuzz_write.wasm", "6d3945645b7f3805068dd8c50d4fe56a66651069", Tag.CRASHING)
-
-
-
 # TODO: reproduce these two (one each from 10x8h func_shortest_trace ablation)
-tag_manually("libtiff-read_rgba.wasm", "XXX", Tag.CRASHING)
 tag_manually("openjpeg-opj_decompress_J2K.wasm", "XXX", Tag.CRASHING)
+
+# TODO
+tag_manually("comrak-quadratic.wasm", "XXX", Tag.CRASHING)
+tag_manually("fontations-fuzz_skrifa_color.wasm", "XXX", Tag.CRASHING)
+tag_manually("fontations-fuzz_skrifa_outline.wasm", "XXX", Tag.CRASHING)
+tag_manually("gitoxide-ewah.wasm", "XXX", Tag.CRASHING)
+tag_manually("gitoxide-fuzz_names.wasm", "XXX", Tag.CRASHING)
+tag_manually("gitoxide-fuzz_value.wasm", "XXX", Tag.CRASHING)
+tag_manually("gitoxide-index_file.wasm", "XXX", Tag.CRASHING)
 
 
 
