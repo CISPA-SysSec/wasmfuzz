@@ -58,7 +58,6 @@ pub(crate) struct Worker {
     stage_depth: usize,
     stop_requested: bool,
     lod_engine: Option<Box<dyn lod::ErasedEngine>>,
-    only_grammar_inputs: bool,
     experiment: Option<super::orc::Experiment>,
 }
 
@@ -77,8 +76,6 @@ impl Worker {
 
         let mut schedule = WorkerSchedule::new(&opts);
 
-        let mut only_grammar_inputs = false;
-
         let lod_engine;
 
         let sess = match orc {
@@ -86,9 +83,7 @@ impl Worker {
                 let config = handle.suggest();
                 eprintln!("got config: {config:#?}");
                 schedule.timeout = Some(config.timeout);
-                only_grammar_inputs = config.swarm.only_grammar_inputs;
                 lod_engine = config.lod.as_deref().map(lod::make_engine);
-                only_grammar_inputs &= lod_engine.is_some();
                 JitFuzzingSession::builder(mod_spec.clone())
                     .passes_generator(Arc::new(config.passes))
                     .tracing(TracingOptions {
@@ -137,7 +132,6 @@ impl Worker {
             opts,
             stop_requested: false,
             lod_engine,
-            only_grammar_inputs,
             experiment,
         };
         // TODO: move this somewhere else?
@@ -154,17 +148,6 @@ impl Worker {
                     if input.len() > worker.sess.swarm.input_alloc_size() {
                         discarded_input_size += 1;
                         continue;
-                    }
-
-                    // if only_grammar_inputs: start with valid-ish inputs
-                    // TODO: possibly roundtrip in different ways? use coverage feedback to determine this?
-                    let mut input = input.as_ref().to_vec();
-                    if let Some(engine) = &mut worker.lod_engine
-                        && only_grammar_inputs
-                    {
-                        tracy_full::zone!("lod: roundtrip");
-                        // input = engine.roundtrip(&input);
-                        todo!();
                     }
                     // NOTE: we don't need to trace here if we're going to throw them away anyways!
                     let res = worker.on_corpus(&input, true);
@@ -297,7 +280,7 @@ impl Worker {
 
         self.save_input(input);
 
-        if *self.opts.x.exhaustive_stage && !is_seed && !self.only_grammar_inputs {
+        if *self.opts.x.exhaustive_stage && !is_seed {
             if input.len() <= 1024 {
                 self.exhaustive_queue.push_back(Box::new(
                     super::exhaustive::ReplaceEveryInputByte::new(input, &mut self.rand),
@@ -637,9 +620,6 @@ impl Worker {
             self.exhaustive_queue.extend(new_entries);
 
             'fast: for _ in 0..A_FEW_EXECS {
-                if self.only_grammar_inputs {
-                    continue;
-                }
                 if interesting && self.exhaustive_queue.len() <= 1 {
                     break;
                 }
