@@ -371,7 +371,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
     }
 
     pub(crate) fn undef(&mut self, ty: Type, bcx: &mut FunctionBuilder) -> ir::Value {
-        if self.options.debug_trace {
+        if self.options.debug_trace.enabled() {
             super::builtins::translate_debug_log(
                 "!!! using undefined value !!!".to_string(),
                 self,
@@ -458,16 +458,8 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             }
         }
 
-        if self.options.debug_trace
-            && !std::env::var("JITTRACE")
-                .map(|s| s == "thin")
-                .unwrap_or(false)
-        {
-            let is_line = std::env::var("JITTRACE")
-                .map(|s| s == "line")
-                .unwrap_or(false);
-
-            if is_line {
+        if self.options.debug_trace.include_instructions() {
+            if self.options.debug_trace.include_source_line() {
                 let addr = self.fspec().operators_wasm_bin_offset_base as u64
                     + self.fspec().operator_offset_rel[self.ip.i()] as u64;
                 let line = crate::ir::debuginfo_helper::resolve_source_location(

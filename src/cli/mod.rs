@@ -10,7 +10,9 @@ use std::{
 use crate::{
     fuzzer::opts::{FlagBool, InstrumentationOpts},
     ir::ModuleSpec,
-    jit::{FeedbackOptions, JitFuzzingSession, Stats, TracingOptions, module::TrapKind},
+    jit::{
+        DebugTrace, FeedbackOptions, JitFuzzingSession, Stats, TracingOptions, module::TrapKind,
+    },
 };
 
 mod cmin;
@@ -47,8 +49,14 @@ pub(crate) enum Subcommand {
     RunInput {
         program: PathBuf,
         inputs: Vec<String>,
-        #[clap(long)]
-        trace: bool,
+        #[clap(
+            long,
+            value_enum,
+            require_equals = true,
+            num_args = 0..=1,
+            default_missing_value = "instr"
+        )]
+        trace: Option<DebugTrace>,
         #[clap(long)]
         verbose_jit: bool,
         #[clap(long, default_value = "true")]
@@ -161,6 +169,7 @@ pub(crate) enum Subcommand {
         #[clap(long, default_value = "10000")]
         iters: usize,
     },
+    /// Extract embedded sources from the debug info.
     #[clap(hide = true)]
     DumpEmbeddedSources {
         program: PathBuf,
@@ -246,13 +255,14 @@ pub(crate) fn main() {
             let mod_spec = parse_program(&program);
             let mut stats = Stats::default();
             let mut sess = JitFuzzingSession::builder(mod_spec)
+                .debug_trace(trace.unwrap_or(DebugTrace::Disabled))
                 // .feedback(i.to_feedback_opts())
                 .feedback(FeedbackOptions::nothing())
                 .tracing(TracingOptions {
                     stdout: *print_stdout,
                     ..TracingOptions::default()
                 })
-                .debug(trace, verbose_jit)
+                .verbose(verbose_jit)
                 .instruction_limit(Some(2_000_000_000))
                 .optimize_for_compilation_time(inputs.len() <= 10)
                 .run_from_snapshot(*run_from_snapshot)
@@ -315,13 +325,18 @@ pub(crate) fn main() {
             let mod_spec = parse_program(&program);
             let mut stats = Stats::default();
             let mut sess = JitFuzzingSession::builder(mod_spec)
+                .debug_trace(if trace {
+                    DebugTrace::Instruction
+                } else {
+                    DebugTrace::Disabled
+                })
                 .feedback(i.to_feedback_opts())
                 .feedback(FeedbackOptions::nothing())
                 .tracing(TracingOptions {
                     stdout: true,
                     ..TracingOptions::default()
                 })
-                .debug(trace, verbose)
+                .verbose(verbose)
                 .run_from_snapshot(*run_from_snapshot)
                 .build();
             sess.initialize(&mut stats);

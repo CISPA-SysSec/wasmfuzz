@@ -308,7 +308,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 rvals.extend_from_slice(&concolic_vars);
             }
 
-            if state.options.debug_trace {
+            if state.options.debug_trace.enabled() {
                 let s = format!("returning from {} by explicit return", state.fspec().symbol);
                 super::builtins::translate_debug_log(s, state, bcx);
             }

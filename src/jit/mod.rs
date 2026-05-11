@@ -441,9 +441,47 @@ pub(crate) struct CompilationOptions {
     pub tracing: TracingOptions,
     pub swarm: SwarmConfig, // is `scope` a better name?
     pub verbose: bool,
-    pub debug_trace: bool,
+    pub debug_trace: DebugTrace,
     pub kind: CompilationKind,
     pub optimize_for_compilation_time: bool,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Default, clap::ValueEnum)]
+pub(crate) enum DebugTrace {
+    #[default]
+    Disabled,
+    Function,
+    Instruction,
+    Line,
+}
+
+impl DebugTrace {
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "thin" | "func" | "function" => Some(Self::Function),
+            "full" | "instr" | "instruction" | "1" => Some(Self::Instruction),
+            "line" => Some(Self::Line),
+            _ => None,
+        }
+    }
+    fn from_env() -> Option<Self> {
+        match std::env::var("JITTRACE").ok().as_deref() {
+            Some(s) => Self::from_str(s),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn enabled(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    pub(crate) fn include_instructions(self) -> bool {
+        matches!(self, Self::Instruction | Self::Line)
+    }
+
+    pub(crate) fn include_source_line(self) -> bool {
+        matches!(self, Self::Line)
+    }
 }
 
 impl CompilationOptions {
@@ -452,15 +490,12 @@ impl CompilationOptions {
         tracing: &TracingOptions,
         swarm: &SwarmConfig,
         kind: CompilationKind,
-        debug_trace: bool,
+        debug_trace: DebugTrace,
         verbose: bool,
         optimize_for_compilation_time: bool,
     ) -> Self {
         Self {
-            debug_trace: debug_trace
-                || std::env::var("JITTRACE")
-                    .map(|el| el == "1" || el == "thin" || el == "line")
-                    .unwrap_or_default(),
+            debug_trace: DebugTrace::from_env().unwrap_or(debug_trace),
             verbose: verbose
                 || std::env::var("JITDEBUG")
                     .map(|el| el == "1")
@@ -708,8 +743,14 @@ impl JitStage {
         if let Some(instance) = &mut self.instance
             && instance.vmctx.tainted
         {
-            // eprintln!("resetting vmctx because it's tainted");
-            self.inp_ptr = None;
+            if self.run_from_snapshot {
+                // `snapshot()` after init sets `heap_snapshot_is_initial = false`, so `reset()`
+                // cannot run. Any trap (including OutOfFuel) marks tainted; restore to the
+                // post-init snapshot and keep `inp_ptr` — `run()` also restores before each exec.
+                instance.vmctx.restore();
+            } else {
+                self.inp_ptr = None;
+            }
         }
 
         if self.inp_ptr.is_none() {
@@ -774,9 +815,12 @@ impl JitStage {
                 .expect("malloc shouldn't trap");
             self.inp_ptr = Some(inp_ptr);
             instance.vmctx.fuel_init = opts.swarm.instruction_limit.unwrap_or(u32::MAX as u64);
-            instance.vmctx.heap_pages_limit_soft =
-                opts.swarm.memory_limit_pages.unwrap_or(u32::MAX);
-            instance.vmctx.heap_pages_limit_hard = crate::MEMORY_PAGES_LIMIT;
+            let mem_pages = opts.swarm.memory_limit_pages;
+            instance.vmctx.heap_pages_limit_soft = mem_pages.unwrap_or(u32::MAX);
+            // Honor `--memory-limit-pages` for the hard cap too (default remains MEMORY_PAGES_LIMIT).
+            instance.vmctx.heap_pages_limit_hard = mem_pages
+                .unwrap_or(crate::MEMORY_PAGES_LIMIT)
+                .max(crate::MEMORY_PAGES_LIMIT);
             if self.run_from_snapshot {
                 instance.vmctx.snapshot();
             }
@@ -833,7 +877,7 @@ impl JitStage {
 pub(crate) struct JitFuzzingSessionBuilder {
     mod_spec: Arc<ModuleSpec>,
     tracing: TracingOptions,
-    debug_trace: bool,
+    debug_trace: DebugTrace,
     verbose: bool,
     swarm: SwarmConfig,
     passes_generator: Arc<dyn PassesGen>,
@@ -852,7 +896,7 @@ impl JitFuzzingSessionBuilder {
         };
         Self {
             tracing: TracingOptions::default(),
-            debug_trace: false,
+            debug_trace: DebugTrace::Disabled,
             verbose: false,
             swarm,
             passes_generator: Arc::new(FullFeedbackPasses {
@@ -882,8 +926,12 @@ impl JitFuzzingSessionBuilder {
         self
     }
 
-    pub(crate) fn debug(mut self, debug_trace: bool, verbose: bool) -> Self {
+    pub(crate) fn debug_trace(mut self, debug_trace: DebugTrace) -> Self {
         self.debug_trace = debug_trace;
+        self
+    }
+
+    pub(crate) fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
@@ -933,7 +981,7 @@ pub(crate) struct JitFuzzingSession {
     pub(crate) tracing_stage: JitStage,
     reusable_exec_history: Vec<Vec<u8>>,
     run_from_snapshot: bool,
-    debug_trace: bool,
+    debug_trace: DebugTrace,
     verbose: bool,
     optimize_for_compilation_time: bool,
     pub(crate) swarm: SwarmConfig,

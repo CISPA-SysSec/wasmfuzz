@@ -402,7 +402,7 @@ impl<'s> ModuleTranslator<'s> {
             println!("/ {}", func.symbol);
         }
 
-        if options.debug_trace {
+        if options.debug_trace.enabled() {
             super::builtins::translate_debug_log(
                 format!(
                     "entering {} ({})",
@@ -443,7 +443,7 @@ impl<'s> ModuleTranslator<'s> {
                 rvals.extend_from_slice(&concolic_vars);
             }
 
-            if options.debug_trace {
+            if options.debug_trace.enabled() {
                 super::builtins::translate_debug_log(
                     format!("returning from {} via function end", func.symbol),
                     &mut functrans,

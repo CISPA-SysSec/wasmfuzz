@@ -319,7 +319,8 @@ pub(crate) struct Orchestrator {
 impl Orchestrator {
     fn new(module: Arc<ModuleSpec>, opts: CliOpts, corpus: Arc<RwLock<SharedCorpus>>) -> Self {
         let now = Instant::now();
-        let mut codecov_sess = JitFuzzingSessionBuilder::new(module.clone())
+        let mut codecov_sess =
+            JitFuzzingSessionBuilder::new(module.clone())
             .feedback(FeedbackOptions {
                 live_funcs: true,
                 live_bbs: true,
