@@ -91,6 +91,8 @@ impl Experiment {
                 | Experiment::LodDisable
                 | Experiment::LodDummyOnly
                 | Experiment::LodGenerateOnly
+                | Experiment::LodCmplog
+                | Experiment::LodNoLevelSwitching
         )
     }
 }

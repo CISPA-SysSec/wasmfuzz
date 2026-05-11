@@ -182,7 +182,13 @@ impl Worker {
                     for idx in worker.corpus.ids() {
                         let testcase = worker.corpus.get(idx).unwrap().borrow();
                         let input = testcase.input().as_ref().unwrap().as_ref();
-                        engine.feed(input);
+                        engine.feed(
+                            input,
+                            !matches!(
+                                worker.experiment,
+                                Some(super::orc::Experiment::LodNoLevelSwitching)
+                            ),
+                        );
                     }
                 }
             }
@@ -275,7 +281,13 @@ impl Worker {
         }
         if let Some(engine) = &mut self.lod_engine {
             tracy_full::zone!("lod: feed");
-            engine.feed(input);
+            engine.feed(
+                input,
+                !matches!(
+                    self.experiment,
+                    Some(super::orc::Experiment::LodNoLevelSwitching)
+                ),
+            );
         }
 
         self.save_input(input);
@@ -518,7 +530,13 @@ impl Worker {
                         match res {
                             InputVerdict::Interesting => {
                                 // Re-feed the winning bytes so the splice corpus sees the new LOD level.
-                                engine.feed(&lod_buf);
+                                engine.feed(
+                                    &lod_buf,
+                                    !matches!(
+                                        self.experiment,
+                                        Some(super::orc::Experiment::LodNoLevelSwitching)
+                                    ),
+                                );
                                 eprintln!("[LOD/{}] found coverage", engine.format_name());
                             }
                             InputVerdict::NotInteresting => {}
@@ -892,7 +910,13 @@ impl Worker {
                 for idx in self.corpus.ids() {
                     let testcase = self.corpus.get(idx).unwrap().borrow();
                     let input = testcase.input().as_ref().unwrap().as_ref();
-                    lod.feed(input);
+                    lod.feed(
+                        input,
+                        !matches!(
+                            self.experiment,
+                            Some(super::orc::Experiment::LodNoLevelSwitching)
+                        ),
+                    );
                 }
             }
         }
