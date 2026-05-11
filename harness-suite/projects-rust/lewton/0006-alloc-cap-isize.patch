@@ -1,0 +1,23 @@
+diff --git a/src/header.rs b/src/header.rs
+--- a/src/header.rs
++++ b/src/header.rs
+@@ -506,7 +506,8 @@
+ 		Some(c) => c,
+ 		None => return Err(HeaderReadError::BufferNotAddressable),
+ 	};
+-	if cap.checked_mul(std::mem::size_of::<f32>()).is_none() {
++	let max_f32_elems = (isize::MAX as usize) / std::mem::size_of::<f32>();
++	if cap > max_f32_elems {
+ 		return Err(HeaderReadError::BufferNotAddressable);
+ 	}
+ 	let mut value_vectors = Vec::with_capacity(cap);
+@@ -757,7 +758,8 @@
+ 			codebook_entries as u64 * codebook_dimensions as u64
+ 		};
+ 		let multiplicands_cap = convert_to_usize!(codebook_lookup_values, u64);
+-		if multiplicands_cap.checked_mul(std::mem::size_of::<u32>()).is_none() {
++		let max_u32_elems = (isize::MAX as usize) / std::mem::size_of::<u32>();
++		if multiplicands_cap > max_u32_elems {
+ 			try!(Err(HeaderReadError::BufferNotAddressable));
+ 		}
+ 		let mut codebook_multiplicands = Vec::with_capacity(multiplicands_cap);

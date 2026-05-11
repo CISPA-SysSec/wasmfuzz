@@ -1,0 +1,97 @@
+diff --git a/naga/src/front/glsl/lex.rs b/naga/src/front/glsl/lex.rs
+index 9337491b5..16cf1998c 100644
+--- a/naga/src/front/glsl/lex.rs
++++ b/naga/src/front/glsl/lex.rs
+@@ -35,7 +35,12 @@ impl<'a> Lexer<'a> {
+     pub fn new(input: &'a str, defines: &'a FastHashMap<String, String>) -> Self {
+         let mut pp = Preprocessor::new(input);
+         for (define, value) in defines {
+-            pp.add_define(define, value).unwrap(); //TODO: handle error
++            // Silently skip malformed defines (e.g. names containing
++            // non-identifier characters). Returning a typed error here would
++            // require changing the public `Lexer::new` signature; downstream
++            // parsing can still surface lexer/parser diagnostics for the
++            // remaining input. //TODO: handle error
++            let _ = pp.add_define(define, value);
+         }
+         Lexer { pp }
+     }
+diff --git a/naga/src/front/spv/error.rs b/naga/src/front/spv/error.rs
+index c0c525d36..fdcb35ed4 100644
+--- a/naga/src/front/spv/error.rs
++++ b/naga/src/front/spv/error.rs
+@@ -10,7 +10,9 @@ use codespan_reporting::term;
+ use super::ModuleState;
+ #[cfg(feature = "stderr")]
+ use crate::error::ErrorWrite;
+-use crate::{arena::Handle, error::replace_control_chars, front::atomic_upgrade};
++use crate::{
++    arena::Handle, error::replace_control_chars, front::atomic_upgrade, proc::LayoutError,
++};
+ 
+ #[derive(Clone, Debug, thiserror::Error)]
+ pub enum Error {
+@@ -154,6 +156,9 @@ pub enum Error {
+ 
+     #[error("atomic upgrade error: {0}")]
+     AtomicUpgradeError(atomic_upgrade::Error),
++
++    #[error("type layout error: {0}")]
++    Layout(LayoutError),
+ }
+ 
+ impl Error {
+@@ -196,3 +201,9 @@ impl From<atomic_upgrade::Error> for Error {
+         Error::AtomicUpgradeError(source)
+     }
+ }
++
++impl From<LayoutError> for Error {
++    fn from(source: LayoutError) -> Self {
++        Error::Layout(source)
++    }
++}
+diff --git a/naga/src/front/spv/function.rs b/naga/src/front/spv/function.rs
+index df96dc460..e9d534660 100644
+--- a/naga/src/front/spv/function.rs
++++ b/naga/src/front/spv/function.rs
+@@ -400,7 +400,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+         // abstraction harder to follow than just writing out what we mean. `Layouter`
+         // and `Alignment` cover the worst parts already.
+         let mut members = Vec::new();
+-        self.layouter.update(module.to_ctx()).unwrap();
++        self.layouter.update(module.to_ctx())?;
+         let mut next_member_offset = 0;
+         let mut struct_alignment = crate::proc::Alignment::ONE;
+         let mut components = Vec::new();
+diff --git a/naga/src/front/spv/mod.rs b/naga/src/front/spv/mod.rs
+index 0ddb20b81..a37a01713 100644
+--- a/naga/src/front/spv/mod.rs
++++ b/naga/src/front/spv/mod.rs
+@@ -2392,7 +2392,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let decor = self.future_decor.remove(&id).unwrap_or_default();
+         let base = self.lookup_type.lookup(type_id)?.handle;
+ 
+-        self.layouter.update(module.to_ctx()).unwrap();
++        self.layouter.update(module.to_ctx())?;
+ 
+         // HACK if the underlying type is an image or a sampler, let's assume
+         //      that we're dealing with a binding-array
+@@ -2473,7 +2473,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let decor = self.future_decor.remove(&id).unwrap_or_default();
+         let base = self.lookup_type.lookup(type_id)?.handle;
+ 
+-        self.layouter.update(module.to_ctx()).unwrap();
++        self.layouter.update(module.to_ctx())?;
+ 
+         // HACK same case as in `parse_type_array()`
+         let inner = if let crate::TypeInner::Image { .. } | crate::TypeInner::Sampler { .. } =
+@@ -2524,7 +2524,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+             .as_ref()
+             .is_some_and(|decor| decor.storage_buffer);
+ 
+-        self.layouter.update(module.to_ctx()).unwrap();
++        self.layouter.update(module.to_ctx())?;
+ 
+         let mut members = Vec::<crate::StructMember>::with_capacity(inst.wc as usize - 2);
+         let mut member_lookups = Vec::with_capacity(members.capacity());

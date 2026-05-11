@@ -1,2 +1,5 @@
 out
 corpus
+# `prepare.sh` clones fresh; a local repo/ breaks git clone-rev in the image
+projects-rust/*/repo
+projects-clike/*/repo

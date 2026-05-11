@@ -45,6 +45,7 @@ class Tag(Enum):
     BUGGY_PORT = "buggy-port"
     BUGGY_PROJECT = "buggy-project"
     SKIP = "skip"
+    LOD = "lod"
 
 
 tags = defaultdict(set)
@@ -232,130 +233,47 @@ tag_fuzzbench(
     ]
 )
 
-# [naga/src/proc/layouter.rs:171:13] &ty.inner = Scalar {
-#     kind: Float,
-#     width: 63,
-# }
-# thread '<unnamed>' panicked at /code/_others/wgpu/naga/src/front/spv/mod.rs:5339:47:
-# called `Result::unwrap()` on an `Err` value: LayoutError { ty: [0], inner: NonPowerOfTwoWidth }
-tag_manually(
-    "wgpu-spv_parser.wasm",
-    "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-tag_manually(
-    "wgpu-glsl_parser.wasm",
-    "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-
-# Note: naga's wgsl frontend is exposed in Firefox's WebGPU API, so keep it in the benchmark suite
-# tag_manually("wgpu-wgsl_parser.wasm", "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3", Tag.SUITE)
-# https://github.com/gfx-rs/wgpu/issues/5757#issuecomment-2830427879
-tag_manually(
-    "wgpu-wgsl_parser.wasm", "aba9161b72c028aa8a1ce15aabd92e3c3cdb2da3", Tag.CRASHING
-)
-
-# rust-analyzer's syntax crate crashes instantly with the native fuzzing setup...
-tag_manually(
-    "rust-analyzer-syntax-reparse.wasm",
-    "bd06def3d3acd5f54fac953a015c0ac9b1e71b2f",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-tag_manually(
-    "rust-analyzer-syntax-parser.wasm",
-    "bd06def3d3acd5f54fac953a015c0ac9b1e71b2f",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-
-# Testcase: "corpus/symphonia-decode_any/snapshot-0d-4h-0m/b702b178e273440a992dacbd6ec6e6b7"
-# [STDOUT] thread '<unnamed>' panicked at rustlib/src/rust/library/core/src/iter/adapters/step_by.rs:35:9:
-# [STDOUT] assertion failed: step != 0
-# reproduces upstream almost instantly
-tag_manually(
-    "symphonia-decode_any.wasm",
-    "4295a846d002b4fa145824d4c11bc18f35d44999",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-tag_manually(
-    "symphonia-decode_vorbis.wasm",
-    "4295a846d002b4fa145824d4c11bc18f35d44999",
-    Tag.CRASHING,
-)
-tag_manually(
-    "symphonia-demux_caf.wasm",
-    "4295a846d002b4fa145824d4c11bc18f35d44999",
-    Tag.CRASHING,
-)
-tag_manually(
-    "symphonia-demux_flac.wasm",
-    "4295a846d002b4fa145824d4c11bc18f35d44999",
-    Tag.CRASHING,
-)
-tag_manually(
-    "symphonia-demux_isomp4.wasm",
-    "4295a846d002b4fa145824d4c11bc18f35d44999",
-    Tag.CRASHING,
-)
 
 # Their harness builds on global mutable state to reach coverage. We patch the
 # harness to do multiple iterations but something's not quite right apparently.
 tag_manually(
     "openssl-hashtable.wasm",
-    "5857bdbb766a206f4efe7e8c72cf6721a625bd90",
+    "945cc69f5448b9da2a0ae8ac1e55efa45a442d12",
     Tag.CRASHING,
     Tag.BUGGY_PORT,
 )
 
-# JIT-TRACE: entering _204_ruff_python_parser::parser::expression::<impl ruff_python_parser::parser::Parser>::parse_atom::hab656e63ebc4e656 (Tracing(<none>, [stdout]))
-# JIT-TRACE: entering _200_ruff_python_parser::parser::Parser::bump::h0a7d407e407cc458 (Tracing(<none>, [stdout]))
-# execution trapped with Cranelift(HeapOutOfBounds) which indicates that the target crashed
-# TODO: investigate, are we running into stack overflows?
+# Patched upstream pin + harness-suite fix-harness-crashes.patch: bounded Pratt/binary RHS depth,
+# nested `{` dict/set recovery, formatter idempotency fuzz uses 400-col line width, 16MB WASM stack.
 tag_manually(
     "ruff-ruff_parse_simple.wasm",
-    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
-    Tag.CRASHING,
+    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
     Tag.BUGGY_PORT,
+    Tag.SUITE_BUGBENCH,
 )
 tag_manually(
     "ruff-ruff_parse_idempotency.wasm",
-    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
-    Tag.CRASHING,
+    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
     Tag.BUGGY_PORT,
+    Tag.SUITE_BUGBENCH,
 )
 tag_manually(
     "ruff-ruff_formatter_idempotency.wasm",
-    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
-    Tag.CRASHING,
+    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
     Tag.BUGGY_PORT,
+    Tag.SUITE_BUGBENCH,
 )
 tag_manually(
     "ruff-ruff_fix_validity.wasm",
-    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
-    Tag.CRASHING,
+    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
     Tag.BUGGY_PORT,
+    Tag.SUITE_BUGBENCH,
 )
 
-# mcu_prog panic was fixed upstream in zune-image
-tag_manually(
-    "image-script_jpeg.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING
-)
-unknown_image_script_crashes = ["guess", "bmp", "ico", "webp"]
-for harness in unknown_image_script_crashes:
-    tag_manually(f"image-script_{harness}.wasm", "7e0c2bf7543a0182746cf1c5a7f04a11efc8dbd5", Tag.CRASHING)
-
-# Note: wasmfuzz doesn't find after 48+ CPU hours
-#       aflpp finds this reliably
-# TODO: triage
 tag_manually(
     "ruff-ruff_formatter_validity.wasm",
-    "11b551c2befa7d9a8f4650b41794d9ea265ddc23",
-    Tag.CRASHING,
+    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
+    Tag.SUITE_BUGBENCH,
 )
 
 
@@ -367,133 +285,9 @@ tag_manually(
     Tag.BUGGY_PROJECT,
 )
 
-# Bug benchmark: Re-introduce NaN issue https://github.com/tirr-c/jxl-oxide/pull/485
-tag_manually(
-    "jxl-oxide-libfuzzer-decode.wasm",
-    "e653b3cd48529509fbd6bd85bdb5379e5848b779",
-    Tag.CRASHING,
-)
 
-tag_manually("jxl-rs-decode.wasm", "969813a030b32e8252fbf970e764c8cb05ad3ec7", Tag.CRASHING)
-tag_manually("jxl-rs-decode_header.wasm", "969813a030b32e8252fbf970e764c8cb05ad3ec7", Tag.CRASHING)
-
-# [STDOUT] thread '<unnamed>' panicked at /projects/sequoia/repo/buffered-reader/src/lib.rs:826:9:
-# [STDOUT] assertion failed: data.len() >= amount
-tag_manually(
-    "sequoia-cert_from_bytes.wasm",
-    "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
-    Tag.CRASHING,
-)
-tag_manually(
-    "sequoia-decrypt_from_bytes.wasm",
-    "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
-    Tag.CRASHING,
-)
-tag_manually(
-    "sequoia-inline_verify_from_bytes.wasm",
-    "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
-    Tag.CRASHING,
-)
-tag_manually(
-    "sequoia-key_packet_from_bytes.wasm",
-    "46b1ccdf72edb4eddcd7e73e33f71cf6fd9901dc",
-    Tag.CRASHING,
-)
-
-# [STDOUT] thread '<unnamed>' panicked at /projects/zune-image/repo/crates/zune-core/src/bytestream/reader/no_std_readers.rs:104:58:
-# [STDOUT] called `Option::unwrap()` on a `None` value
-tag_manually(
-    "zune-image-zune-bmp-decode_buffer.wasm",
-    "c032bb73ace7b963bcb31db0267aadd3f39528e9",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-tag_manually(
-    "zune-image-zune-png-decode_buffer.wasm",
-    "c032bb73ace7b963bcb31db0267aadd3f39528e9",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-tag_manually(
-    "zune-image-zune-png-roundtrip.wasm",
-    "c032bb73ace7b963bcb31db0267aadd3f39528e9",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-# TODO: triage
-tag_manually("zune-image-zune-hdr-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
-tag_manually("zune-image-zune-psd-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
-# memory allocation of 855552672 bytes failed
-tag_manually("zune-image-zune-ppm-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
-# memory allocation of 805306368 bytes failed
-tag_manually("zune-image-zune-qoi-decode_buffer.wasm", "c032bb73ace7b963bcb31db0267aadd3f39528e9", Tag.CRASHING)
-
-# [STDOUT] thread '<unnamed>' panicked at /projects/lewton/repo/src/header.rs:505:29:
-# [STDOUT] capacity overflow
-tag_manually(
-    "lewton-parse_ogg.wasm", "bb2955b717094b40260902cf2f8dd9c5ea62a84a", Tag.CRASHING
-)
 # NULL-deref in ARMT_Convert
 tag_manually("lzma-7z.wasm", "d25e63d8f6b8186d04146cb19405bc5ad565412e", Tag.CRASHING)
-
-
-# [STDOUT] thread '<unnamed>' panicked at fuzzers/canonicalize.rs:15:9:
-# [STDOUT] assertion `left == right` failed
-# [STDOUT]   left: [1, 0, 0, 128, 0, 0, 0, 0]
-# [STDOUT]  right: [1, 0, 0, 0, 0, 0, 0, 0]
-tag_manually(
-    "capnproto-rust-canonicalize.wasm",
-    "635a4e420b75bf247e75312e4e872aa0e7fb9558",
-    Tag.CRASHING,
-)
-tag_manually(
-    "capnproto-rust-test_all_types.wasm",
-    "635a4e420b75bf247e75312e4e872aa0e7fb9558",
-    Tag.CRASHING,
-)
-
-# [STDOUT] thread '<unnamed>' panicked at fuzz_targets/inflate_chunked.rs:51:5:
-# [STDOUT] assertion `left == right` failed
-# [STDOUT]   left: StreamEnd
-# [STDOUT]  right: Ok
-tag_manually(
-    "zlib-rs-inflate_chunked.wasm",
-    "2396e463bd0e12220b2e556b356f790a76a6e6dd",
-    Tag.CRASHING,
-)
-
-tag_manually("libzstd-rs-sys-decompress.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
-tag_manually("libzstd-rs-sys-decompress_overlapping.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
-tag_manually("libzstd-rs-sys-dictionary_train.wasm", "536f7b3017c07b9ab924af6ae1dcdb4b4ab0ef3d", Tag.CRASHING)
-
-# JIT-TRACE: _257_find_pe_overlay/0067: Memory(I32Load16U(MemArg { align: 0, max_align: 1, offset: 20, memory: 0 }))
-# execution trapped with Abort(HeapOutOfBounds) which indicates that the target crashed
-for target in ["upstream", "ossfuzz", "ossfuzz2"]:
-    tag_manually(
-        f"libarchive-{target}.wasm",
-        "de73860cda5a49f97289a9924a3c5590edafef66",
-        Tag.CRASHING,
-    )
-
-
-
-# JIT-TRACE: _089_jbig2_decode_refinement_region/1009: Memory(I32Load8U(MemArg { align: 0, max_align: 0, offset: 0, memory: 0 }))
-# execution trapped with Abort(HeapOutOfBounds) which indicates that the target crashed
-tag_manually("jbig2dec.wasm", "6ecb04980813d693234190021bd1cf874c05b1b4", Tag.CRASHING)
-
-
-# TODO: reproduce these two (one each from 10x8h func_shortest_trace ablation)
-tag_manually("openjpeg-opj_decompress_J2K.wasm", "XXX", Tag.CRASHING)
-
-# TODO
-tag_manually("comrak-quadratic.wasm", "XXX", Tag.CRASHING)
-tag_manually("fontations-fuzz_skrifa_color.wasm", "XXX", Tag.CRASHING)
-tag_manually("fontations-fuzz_skrifa_outline.wasm", "XXX", Tag.CRASHING)
-tag_manually("gitoxide-ewah.wasm", "XXX", Tag.CRASHING)
-tag_manually("gitoxide-fuzz_names.wasm", "XXX", Tag.CRASHING)
-tag_manually("gitoxide-fuzz_value.wasm", "XXX", Tag.CRASHING)
-tag_manually("gitoxide-index_file.wasm", "XXX", Tag.CRASHING)
-
 
 
 PROJS = {"libpng", "freetype2", "jsoncpp"}
@@ -565,6 +359,26 @@ for harness in interesting:
     if Tag.SUITE not in tags[harness + ".wasm"]:
         print(f"[WARN] harness {harness} is not in the suite ({tags[harness + ".wasm"] = })")
 
+lod = [
+    "claxon-decode_full", "expat-xml_parsebuffer_UTF-8", "firefox-fuzz_target_qcms",
+    "fontations-fuzz_skrifa_outline", "freetype2-ftfuzzer", "goblin-parse",
+    "graphite-font", "image-script_png", "image-script_jpeg", "image-script_tiff",
+    "image-script_ico", "image-script_webp", "image-script_guess",
+    "jxl-oxide-libfuzzer-decode", "jxl-rs-decode", "lcms-cms_transform_all",
+    "lewton-parse_ogg", "libarchive-ossfuzz", "libarchive-upstream", "libpng-read",
+    "libsndfile", "libtiff-read_rgba", "libwebp-dwebp",
+    "openjpeg-opj_decompress_J2K", "openjpeg-opj_decompress_JP2",
+    "openssl-acert", "openssl-crl", "openssl-x509",  # openthread? # jbig2dec? # mbedtls?
+    "quick-xml-fuzz_target_1", "sqlite-ossfuzz", "stb-png_read", "symphonia-decode_any",
+    "vorbis-decode", "woff2-convert_woff2ttf",
+    "x509-parser-certreq", "x509-parser-crl", "x509-parser-x509_parse",
+    "zip2-zip2-read", "zune-image-zune-jpeg-decode_incremental",
+]
+for x in lod:
+    if x + ".wasm" not in tags:
+        print(f"[WARN] harness {x} is not in the suite ({tags[x + ".wasm"] = })")
+        continue
+    tags[x + ".wasm"].add(Tag.LOD)
 
 print(f"Tag.SUITE: ({len([k for k, v in tags.items() if Tag.SUITE in v])})")
 pprint(sorted({k for k, v in tags.items() if Tag.SUITE in v}))

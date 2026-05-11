@@ -17,6 +17,7 @@
 */
 
 #include <cstdint>
+#include <cstddef>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -131,7 +132,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
       if (image != NULL)
       {
         int sum = 0;
-        for (int i = 0; i < image->height * image->stride; i++)
+        size_t nbytes = (size_t)image->height * (size_t)image->stride;
+        for (size_t i = 0; i < nbytes; i++)
           sum += image->data[i];
         printf("sum of image data bytes: %d\n", sum);
       }

@@ -1,0 +1,66 @@
+--- a/src/mcu.rs
++++ b/src/mcu.rs
+@@ -331,7 +331,18 @@
+ 
+         // Size of our output image(width*height)
+         let is_hv = usize::from(self.is_interleaved);
+-        let upsampler_scratch_size = is_hv * self.components[0].width_stride;
++        // Match `decode_baseline_interleaved`: HV upsampling needs `max(width_stride) * 8` i16
++        // scratch elements. Using only `components[0].width_stride` is too small when another
++        // component has a larger stride (malformed / edge-case JPEGs), which trips asserts in
++        // `upsample_hv` (input.len() * 2 <= scratch_space.len()).
++        let upsampler_scratch_size = is_hv
++            * self
++                .components
++                .iter()
++                .map(|x| x.width_stride)
++                .max()
++                .unwrap_or(0)
++            * 8;
+         let width = usize::from(self.info.width);
+         let padded_width = calculate_padded_width(width, self.info.sample_ratio);
+ 
+--- a/src/mcu_prog.rs
++++ b/src/mcu_prog.rs
+@@ -502,7 +502,18 @@
+ 
+         // Size of our output image(width*height)
+         let is_hv = usize::from(self.is_interleaved);
+-        let upsampler_scratch_size = is_hv * self.components[0].width_stride;
++        // Match `decode_mcu_ycbcr_baseline` and `finish_baseline_decoding`: HV upsampling needs
++        // `max(width_stride) * 8` i16 scratch elements. Using only the first component's stride
++        // under-allocates scratch space for some progressive JPEG layouts and triggers
++        // `upsample_hv` assertions.
++        let upsampler_scratch_size = is_hv
++            * self
++                .components
++                .iter()
++                .map(|x| x.width_stride)
++                .max()
++                .unwrap_or(0)
++            * 8;
+         let width = usize::from(self.info.width);
+         let padded_width = calculate_padded_width(width, self.info.sample_ratio);
+ 
+--- a/src/upsampler/scalar.rs
++++ b/src/upsampler/scalar.rs
+@@ -80,8 +80,17 @@
+ 
+     assert_eq!(input.len() * 4, output.len());
+ 
+-    assert!(input.len() * 2 <= scratch_space.len());
+-    let scratch_space = &mut scratch_space[..input.len() * 2];
++    let needed = input.len() * 2;
++    // Some malformed JPEGs can route larger rows into HV upsampling than the caller's
++    // preallocated scratch size. Avoid panicking on hostile inputs and use a temporary
++    // buffer when needed.
++    let mut owned_scratch = Vec::new();
++    let scratch_space: &mut [i16] = if needed <= scratch_space.len() {
++        &mut scratch_space[..needed]
++    } else {
++        owned_scratch.resize(needed, 0);
++        &mut owned_scratch
++    };
+ 
+ 
+     let mut t = [0];

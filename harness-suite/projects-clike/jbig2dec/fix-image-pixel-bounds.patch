@@ -1,0 +1,111 @@
+diff --git a/jbig2_generic.c b/jbig2_generic.c
+index 1cdc79a..71b9444 100644
+--- a/jbig2_generic.c
++++ b/jbig2_generic.c
+@@ -342,13 +342,28 @@ NEWCONTEXT |= (line_m2 >> (10-x_minor)) & 0x80;
+ The optimized decoding functions for GBTEMPLATE 0, 1 and 3 all
+ work similarly. */
+ 
+-/* Get a bit. No bounds checking. */
++/* Fast path when caller proved coordinates land inside the bitmap. */
+ static inline int
+ jbig2_image_get_pixel_fast(Jbig2Image *image, int x, int y)
+ {
+-    const int byte = (x >> 3) + y * image->stride;
+-    const int bit = 7 - (x & 7);
++    uint32_t w = image->width;
++    uint32_t h = image->height;
++    uint32_t stride = image->stride;
++    size_t nbytes;
++    size_t byte;
++    int bit;
++
++    if (x < 0 || y < 0)
++        return 0;
++    if ((uint32_t)x >= w || (uint32_t)y >= h)
++        return 0;
++
++    nbytes = (size_t)stride * (size_t)h;
++    byte = ((size_t)(uint32_t)x >> 3) + (size_t)(uint32_t)y * stride;
++    if (byte >= nbytes)
++        return 0;
+ 
++    bit = 7 - (x & 7);
+     return ((image->data[byte] >> bit) & 1);
+ }
+ 
+diff --git a/jbig2_image.c b/jbig2_image.c
+index 6be9223..1760fee 100644
+--- a/jbig2_image.c
++++ b/jbig2_image.c
+@@ -24,6 +24,7 @@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <stddef.h>
+ #include <string.h>             /* memcpy() */
+ 
+ #include "jbig2.h"
+@@ -470,16 +471,24 @@ jbig2_image_clear(Jbig2Ctx *ctx, Jbig2Image *image, int value)
+ int
+ jbig2_image_get_pixel(Jbig2Image *image, int x, int y)
+ {
+-    const int w = image->width;
+-    const int h = image->height;
+-    const int byte = (x >> 3) + y * image->stride;
+-    const int bit = 7 - (x & 7);
+-
+-    if ((x < 0) || (x >= w))
++    uint32_t w = image->width;
++    uint32_t h = image->height;
++    uint32_t stride = image->stride;
++    size_t nbytes;
++    size_t byte;
++    int bit;
++
++    if (x < 0 || y < 0)
++        return 0;
++    if ((uint32_t)x >= w || (uint32_t)y >= h)
+         return 0;
+-    if ((y < 0) || (y >= h))
++
++    nbytes = (size_t)stride * (size_t)h;
++    byte = ((size_t)(uint32_t)x >> 3) + (size_t)(uint32_t)y * stride;
++    if (byte >= nbytes)
+         return 0;
+ 
++    bit = 7 - (x & 7);
+     return ((image->data[byte] >> bit) & 1);
+ }
+ 
+@@ -487,17 +496,24 @@ jbig2_image_get_pixel(Jbig2Image *image, int x, int y)
+ void
+ jbig2_image_set_pixel(Jbig2Image *image, int x, int y, bool value)
+ {
+-    const int w = image->width;
+-    const int h = image->height;
++    uint32_t w = image->width;
++    uint32_t h = image->height;
++    uint32_t stride = image->stride;
++    size_t nbytes;
++    size_t byte;
+     int scratch, mask;
+-    int bit, byte;
++    int bit;
+ 
+-    if ((x < 0) || (x >= w))
++    if (x < 0 || y < 0)
++        return;
++    if ((uint32_t)x >= w || (uint32_t)y >= h)
+         return;
+-    if ((y < 0) || (y >= h))
++
++    nbytes = (size_t)stride * (size_t)h;
++    byte = ((size_t)(uint32_t)x >> 3) + (size_t)(uint32_t)y * stride;
++    if (byte >= nbytes)
+         return;
+ 
+-    byte = (x >> 3) + y * image->stride;
+     bit = 7 - (x & 7);
+     mask = (1 << bit) ^ 0xff;
+ 

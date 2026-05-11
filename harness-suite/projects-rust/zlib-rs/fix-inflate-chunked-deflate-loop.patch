@@ -1,0 +1,35 @@
+diff --git a/fuzz/fuzz_targets/inflate_chunked.rs b/fuzz/fuzz_targets/inflate_chunked.rs
+index 908f6a5..51c06ed 100644
+--- a/fuzz/fuzz_targets/inflate_chunked.rs
++++ b/fuzz/fuzz_targets/inflate_chunked.rs
+@@ -45,10 +45,26 @@ fn deflate_ng(data: &[u8], window_bits: i32) -> Vec<u8> {
+         assert_eq!(ReturnCode::Ok, return_code);
+     };
+ 
+-    let error = unsafe { libz_ng_sys::deflate(&mut stream, libz_ng_sys::Z_FINISH) };
+-
+-    let error: ReturnCode = ReturnCode::from(error as i32);
+-    assert_eq!(ReturnCode::StreamEnd, error);
++    loop {
++        let error = unsafe { libz_ng_sys::deflate(&mut stream, libz_ng_sys::Z_FINISH) };
++        let return_code: ReturnCode = ReturnCode::from(error as i32);
++        match return_code {
++            ReturnCode::StreamEnd => break,
++            ReturnCode::Ok => {
++                let pos = stream.total_out as usize;
++                let new_len = deflated
++                    .len()
++                    .saturating_mul(2)
++                    .max(pos.saturating_add(8 * 1024));
++                deflated.resize(new_len, 0);
++                unsafe {
++                    stream.next_out = deflated.as_mut_ptr().add(pos);
++                }
++                stream.avail_out = (deflated.len() - pos) as _;
++            }
++            _ => panic!("deflate: {return_code:?}"),
++        }
++    }
+ 
+     deflated.truncate(stream.total_out as _);
+ 

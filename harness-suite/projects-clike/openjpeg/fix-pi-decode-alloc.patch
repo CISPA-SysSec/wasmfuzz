@@ -1,0 +1,128 @@
+diff --git a/src/lib/openjp2/pi.c b/src/lib/openjp2/pi.c
+index de4915a..0034d58 100644
+--- a/src/lib/openjp2/pi.c
++++ b/src/lib/openjp2/pi.c
+@@ -40,6 +40,13 @@
+ 
+ #include "opj_includes.h"
+ 
++/* Decode-side packet-iterator include vector; without a cap, pathological SIZ /
++ * COD combinations can force multi-gigabyte allocations while still passing
++ * header checks (e.g. extreme aspect ratios). */
++#ifndef OPJ_PI_DECODE_INCLUDE_CAP
++#define OPJ_PI_DECODE_INCLUDE_CAP (268435456U)
++#endif
++
+ /** @defgroup PI PI - Implementation of a packet iterator */
+ /*@{*/
+ 
+@@ -992,17 +999,35 @@ static void opj_get_all_encoding_parameters(const opj_image_t *p_image,
+             l_py0 = opj_uint_floordivpow2(l_ry0, l_pdy) << l_pdy;
+             l_px1 = opj_uint_ceildivpow2(l_rx1, l_pdx) << l_pdx;
+             py1 = opj_uint_ceildivpow2(l_ry1, l_pdy) << l_pdy;
+-            l_pw = (l_rx0 == l_rx1) ? 0 : ((l_px1 - l_px0) >> l_pdx);
+-            l_ph = (l_ry0 == l_ry1) ? 0 : ((py1 - l_py0) >> l_pdy);
++            /* Guard against unsigned wrap in (l_px1 - l_px0) / (py1 - l_py0) on
++             * malformed codestreams; otherwise l_pw*l_ph explodes and packet-
++             * iterator allocations try to calloc multi-gigabyte buffers. */
++            if (l_rx0 == l_rx1) {
++                l_pw = 0;
++            } else if (l_px1 < l_px0) {
++                l_pw = 0;
++            } else {
++                l_pw = (l_px1 - l_px0) >> l_pdx;
++            }
++            if (l_ry0 == l_ry1) {
++                l_ph = 0;
++            } else if (py1 < l_py0) {
++                l_ph = 0;
++            } else {
++                l_ph = (py1 - l_py0) >> l_pdy;
++            }
+             if (lResolutionPtr) {
+                 *lResolutionPtr++ = l_pw;
+                 *lResolutionPtr++ = l_ph;
+             }
+-            l_product = l_pw * l_ph;
+-
+-            /* update precision*/
+-            if (l_product > *p_max_prec) {
+-                *p_max_prec = l_product;
++            if (l_pw != 0 && l_ph != 0) {
++                OPJ_UINT64 prod = (OPJ_UINT64)l_pw * (OPJ_UINT64)l_ph;
++                if (prod <= (OPJ_UINT64)UINT32_MAX) {
++                    l_product = (OPJ_UINT32)prod;
++                    if (l_product > *p_max_prec) {
++                        *p_max_prec = l_product;
++                    }
++                }
+             }
+ 
+         }
+@@ -1462,9 +1487,22 @@ opj_pi_iterator_t *opj_pi_create_decode(opj_image_t *p_image,
+ 
+     /* step calculations */
+     l_step_p = 1;
+-    l_step_c = l_max_prec * l_step_p;
+-    l_step_r = numcomps * l_step_c;
+-    l_step_l = l_max_res * l_step_r;
++    {
++        OPJ_UINT64 step_c = (OPJ_UINT64)l_max_prec * (OPJ_UINT64)l_step_p;
++        OPJ_UINT64 step_r = step_c * (OPJ_UINT64)numcomps;
++        OPJ_UINT64 step_l = step_r * (OPJ_UINT64)l_max_res;
++        if (step_c > (OPJ_UINT64)UINT32_MAX ||
++                step_r > (OPJ_UINT64)UINT32_MAX ||
++                step_l > (OPJ_UINT64)UINT32_MAX) {
++            opj_free(l_tmp_data);
++            opj_free(l_tmp_ptr);
++            opj_pi_destroy(l_pi, l_bound);
++            return 00;
++        }
++        l_step_c = (OPJ_UINT32)step_c;
++        l_step_r = (OPJ_UINT32)step_r;
++        l_step_l = (OPJ_UINT32)step_l;
++    }
+ 
+     /* set values for first packet iterator */
+     l_current_pi = l_pi;
+@@ -1475,6 +1513,14 @@ opj_pi_iterator_t *opj_pi_create_decode(opj_image_t *p_image,
+     l_current_pi->include = 00;
+     if (l_step_l <= (UINT_MAX / (l_tcp->numlayers + 1U))) {
+         l_current_pi->include_size = (l_tcp->numlayers + 1U) * l_step_l;
++        if (l_current_pi->include_size > OPJ_PI_DECODE_INCLUDE_CAP) {
++            opj_event_msg(manager, EVT_ERROR,
++                          "opj_pi_create_decode: packet iterator too large\n");
++            opj_free(l_tmp_data);
++            opj_free(l_tmp_ptr);
++            opj_pi_destroy(l_pi, l_bound);
++            return 00;
++        }
+         l_current_pi->include = (OPJ_INT16*) opj_calloc(
+                                     l_current_pi->include_size, sizeof(OPJ_INT16));
+     }
+@@ -1679,9 +1725,22 @@ opj_pi_iterator_t *opj_pi_initialise_encode(const opj_image_t *p_image,
+ 
+     /* step calculations*/
+     l_step_p = 1;
+-    l_step_c = l_max_prec * l_step_p;
+-    l_step_r = numcomps * l_step_c;
+-    l_step_l = l_max_res * l_step_r;
++    {
++        OPJ_UINT64 step_c = (OPJ_UINT64)l_max_prec * (OPJ_UINT64)l_step_p;
++        OPJ_UINT64 step_r = step_c * (OPJ_UINT64)numcomps;
++        OPJ_UINT64 step_l = step_r * (OPJ_UINT64)l_max_res;
++        if (step_c > (OPJ_UINT64)UINT32_MAX ||
++                step_r > (OPJ_UINT64)UINT32_MAX ||
++                step_l > (OPJ_UINT64)UINT32_MAX) {
++            opj_free(l_tmp_data);
++            opj_free(l_tmp_ptr);
++            opj_pi_destroy(l_pi, l_bound);
++            return 00;
++        }
++        l_step_c = (OPJ_UINT32)step_c;
++        l_step_r = (OPJ_UINT32)step_r;
++        l_step_l = (OPJ_UINT32)step_l;
++    }
+ 
+     /* set values for first packet iterator*/
+     l_pi->tp_on = (OPJ_BYTE)p_cp->m_specific_param.m_enc.m_tp_on;

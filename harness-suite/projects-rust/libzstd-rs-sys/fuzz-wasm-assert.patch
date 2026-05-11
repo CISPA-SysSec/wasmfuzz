@@ -1,0 +1,110 @@
+diff --git a/fuzz/fuzz_targets/decompress.rs b/fuzz/fuzz_targets/decompress.rs
+index ffadb3d..cd1316e 100644
+--- a/fuzz/fuzz_targets/decompress.rs
++++ b/fuzz/fuzz_targets/decompress.rs
+@@ -61,7 +61,6 @@ fn c(compressed: &[u8]) -> (usize, Vec<u8>) {
+ }
+ 
+ fuzz_target!(|data: &[u8]| {
+-    let (c_err, c_out) = c(data);
+     let (rs_err, rs_out) = rs(data);
+ 
+     let rs_err = match ERR_getErrorCode(rs_err) {
+@@ -71,23 +70,28 @@ fuzz_target!(|data: &[u8]| {
+             Err(()) => Ok(code),
+         },
+     };
+-    let c_err = match ERR_getErrorCode(c_err) {
+-        0 => Ok(c_err),
+-        code => match Error::try_from(code) {
+-            Ok(v) => Err(v),
+-            Err(()) => Ok(code),
+-        },
+-    };
+ 
+     // The zstd version that we're testing against supports much older legacy versions.
+     if rs_err == Err(Error::prefix_unknown) {
+         return;
+     }
+ 
+-    assert_eq!(rs_err, c_err);
+-
+-    if rs_err.is_ok() {
+-        assert_eq!(rs_out, c_out);
++    #[cfg(not(target_family = "wasm"))]
++    {
++        let (c_err, c_out) = c(data);
++        let c_err = match ERR_getErrorCode(c_err) {
++            0 => Ok(c_err),
++            code => match Error::try_from(code) {
++                Ok(v) => Err(v),
++                Err(()) => Ok(code),
++            },
++        };
++
++        assert_eq!(rs_err, c_err);
++
++        if rs_err.is_ok() {
++            assert_eq!(rs_out, c_out);
++        }
+     }
+ });
+ 
+diff --git a/fuzz/fuzz_targets/decompress_overlapping.rs b/fuzz/fuzz_targets/decompress_overlapping.rs
+index 7ac6135..dc96228 100644
+--- a/fuzz/fuzz_targets/decompress_overlapping.rs
++++ b/fuzz/fuzz_targets/decompress_overlapping.rs
+@@ -105,21 +105,25 @@ fn c(compressed: &[u8]) -> (usize, Vec<u8>) {
+ }
+ 
+ fuzz_target!(|data: &[u8]| {
+-    let (c_err, c_out) = c(data);
+     let (rs_err, rs_out) = rs(data);
+ 
+     let rs_err = to_result(rs_err);
+-    let c_err = to_result(c_err);
+ 
+     // The zstd version that we're testing against supports much older legacy versions.
+     if rs_err == Err(Error::prefix_unknown) {
+         return;
+     }
+ 
+-    assert_eq!(rs_err, c_err);
++    #[cfg(not(target_family = "wasm"))]
++    {
++        let (c_err, c_out) = c(data);
++        let c_err = to_result(c_err);
+ 
+-    if rs_err.is_ok() {
+-        assert_eq!(rs_out, c_out);
++        assert_eq!(rs_err, c_err);
++
++        if rs_err.is_ok() {
++            assert_eq!(rs_out, c_out);
++        }
+     }
+ });
+ 
+diff --git a/fuzz/src/lib.rs b/fuzz/src/lib.rs
+index f918aac..1107efe 100644
+--- a/fuzz/src/lib.rs
++++ b/fuzz/src/lib.rs
+@@ -52,7 +52,8 @@ impl arbitrary::Arbitrary<'_> for ArbitrarySamples {
+ #[macro_export]
+ macro_rules! assert_eq_rs_c {
+     ($tt:tt) => {{
+-        #[cfg(not(miri))]
++        // Wasm: skip strict C vs Rust parity (dict training + decompress errors); native asserts.
++        #[cfg(all(not(miri), not(target_family = "wasm")))]
+         #[allow(clippy::macro_metavars_in_unsafe)]
+         let _c = unsafe {
+             use zstd_sys::*;
+@@ -69,7 +70,7 @@ macro_rules! assert_eq_rs_c {
+             $tt
+         };
+ 
+-        #[cfg(not(miri))]
++        #[cfg(all(not(miri), not(target_family = "wasm")))]
+         assert_eq!(_rs, _c);
+ 
+         _rs

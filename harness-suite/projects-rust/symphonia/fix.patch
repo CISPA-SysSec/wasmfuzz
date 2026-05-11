@@ -1,0 +1,334 @@
+diff --git a/symphonia-codec-adpcm/src/lib.rs b/symphonia-codec-adpcm/src/lib.rs
+index 6cba413..ab395a5 100644
+--- a/symphonia-codec-adpcm/src/lib.rs
++++ b/symphonia-codec-adpcm/src/lib.rs
+@@ -26,10 +26,13 @@ use symphonia_core::codecs::audio::well_known::{
+ };
+ use symphonia_core::codecs::audio::{AudioCodecId, AudioCodecParameters, AudioDecoderOptions};
+ use symphonia_core::codecs::audio::{AudioDecoder, FinalizeResult};
+-use symphonia_core::errors::{Result, unsupported_error};
++use symphonia_core::errors::{Result, decode_error, unsupported_error};
+ use symphonia_core::io::ReadBytes;
+ use symphonia_core::packet::Packet;
+ 
++/// Upper bound on frames per packet for buffer preallocation (hostile `max_frames_per_packet`).
++const MAX_ADPCM_PACKET_FRAMES: usize = 65_536;
++
+ mod codec_ima_qt;
+ mod codec_ima_wav;
+ mod codec_ms;
+@@ -85,6 +88,10 @@ impl AdpcmDecoder {
+             _ => return unsupported_error("adpcm: maximum frames per packet is required"),
+         };
+ 
++        if frames > MAX_ADPCM_PACKET_FRAMES {
++            return decode_error("adpcm: max frames per packet exceeds limit");
++        }
++
+         if params.frames_per_block.is_none() || params.frames_per_block.unwrap() == 0 {
+             return unsupported_error("adpcm: valid frames per block is required");
+         }
+@@ -126,8 +133,13 @@ impl AdpcmDecoder {
+ 
+         let block_count = packet.block_dur().get() as usize / frames_per_block;
+ 
++        let total_frames = block_count.saturating_mul(frames_per_block);
++        if total_frames > MAX_ADPCM_PACKET_FRAMES {
++            return decode_error("adpcm: packet frame count exceeds limit");
++        }
++
+         self.buf.clear();
+-        self.buf.render_uninit(Some(block_count * frames_per_block));
++        self.buf.render_uninit(Some(total_frames));
+ 
+         let channel_count = self.buf.spec().channels().count();
+         match channel_count {
+diff --git a/symphonia-codec-pcm/src/lib.rs b/symphonia-codec-pcm/src/lib.rs
+index 60f660f..2e44224 100644
+--- a/symphonia-codec-pcm/src/lib.rs
++++ b/symphonia-codec-pcm/src/lib.rs
+@@ -47,6 +47,9 @@ use symphonia_core::errors::{Result, decode_error, unsupported_error};
+ use symphonia_core::io::ReadBytes;
+ use symphonia_core::packet::Packet;
+ 
++/// Upper bound on frames per packet for buffer preallocation and decode growth (hostile metadata).
++const MAX_PCM_PACKET_FRAMES: usize = 65_536;
++
+ macro_rules! read_pcm_signed {
+     ($buf:expr, $fmt:tt, $read:expr, $width:expr, $shift:expr) => {
+         // Get buffer of the correct sample format.
+@@ -243,6 +246,9 @@ impl PcmDecoder {
+         // If the maximum number of frames is known, use it to pre-allocate the audio buffer.
+         // Otherwise, start with a 0 capacity and let the buffer grow dynamically while decoding.
+         let capacity = params.max_frames_per_packet.unwrap_or(0) as usize;
++        if capacity > MAX_PCM_PACKET_FRAMES {
++            return decode_error("pcm: max frames per packet exceeds limit");
++        }
+ 
+         // Determine the sample format for the audio buffer based on the codec ID.
+         let (sample_format, sample_format_width, bytes_per_coded_sample) = match params.codec {
+@@ -318,6 +324,9 @@ impl PcmDecoder {
+     fn decode_inner(&mut self, packet: &Packet) -> Result<()> {
+         // Calculate the number of complete audio frames per-packet.
+         let num_frames = packet.buf().len() / self.bytes_per_coded_frame;
++        if num_frames > MAX_PCM_PACKET_FRAMES {
++            return decode_error("pcm: packet frame count exceeds limit");
++        }
+ 
+         // Clear and grow the audio buffer to the required capacity.
+         self.buf.clear();
+diff --git a/symphonia-codec-vorbis/src/codebook.rs b/symphonia-codec-vorbis/src/codebook.rs
+index 1cb2ac0..36d90ad 100644
+--- a/symphonia-codec-vorbis/src/codebook.rs
++++ b/symphonia-codec-vorbis/src/codebook.rs
+@@ -153,6 +153,9 @@ fn synthesize_codewords(code_lens: &[u8]) -> Result<Vec<u32>> {
+             // codewords of length N will use the next codeword for codewords of length N-1 as its
+             // prefix.
+             if next_codeword[i] & 1 == 1 {
++                if i == 0 {
++                    return decode_error("vorbis: invalid codebook codeword assignment");
++                }
+                 next_codeword[i] = next_codeword[i - 1] << 1;
+                 break;
+             }
+diff --git a/symphonia-format-caf/src/chunks.rs b/symphonia-format-caf/src/chunks.rs
+index 63ec093..994fbda 100644
+--- a/symphonia-format-caf/src/chunks.rs
++++ b/symphonia-format-caf/src/chunks.rs
+@@ -6,7 +6,7 @@
+ // file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ 
+ use log::{debug, error, info, warn};
+-use std::{convert::TryFrom, fmt, mem::size_of, str};
++use std::{fmt, mem::size_of, str};
+ use symphonia_core::{
+     audio::{AmbisonicBFormat, ChannelLabel, Channels, Position, layouts},
+     codecs::audio::{AudioCodecId, well_known::*},
+@@ -58,6 +58,22 @@ const CHANNEL_LABEL_DISCRETE_65535: u32 = (1 << 16) | 65535;
+ const CHANNEL_LABEL_HOA_ACN_0: u32 = (2 << 16) | 0;
+ const CHANNEL_LABEL_HOA_ACN_65024: u32 = (2 << 16) | 65024;
+ 
++/// Maximum payload size for a `kuki` (magic cookie) chunk.
++const MAX_MAGIC_COOKIE_BYTES: i64 = 32 * 1024 * 1024;
++
++/// Maximum size of one CAF audio packet in variable-length modes (packet table + `next_packet`).
++pub(crate) const MAX_CAF_PACKET_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
++
++#[inline]
++pub(crate) fn limit_caf_packet_size(size: u64) -> Result<()> {
++    if size > MAX_CAF_PACKET_PAYLOAD_BYTES {
++        decode_error("caf: packet size exceeds limit")
++    }
++    else {
++        Ok(())
++    }
++}
++
+ #[derive(Debug)]
+ pub enum Chunk {
+     AudioDescription(AudioDescription),
+@@ -94,12 +110,11 @@ impl Chunk {
+                 Chunk::PacketTable(PacketTable::read(reader, audio_description, chunk_size)?)
+             }
+             b"kuki" => {
+-                if let Ok(chunk_size) = usize::try_from(chunk_size) {
+-                    Chunk::MagicCookie(reader.read_boxed_slice_exact(chunk_size)?)
+-                }
+-                else {
++                if chunk_size < 0 || chunk_size > MAX_MAGIC_COOKIE_BYTES {
+                     return invalid_chunk_size_error("Magic Cookie", chunk_size);
+                 }
++                let sz = chunk_size as usize;
++                Chunk::MagicCookie(reader.read_boxed_slice_exact(sz)?)
+             }
+             b"free" => {
+                 if chunk_size < 0 {
+@@ -153,6 +168,10 @@ impl AudioDescription {
+         let bytes_per_packet = reader.read_be_u32()?;
+         let frames_per_packet = reader.read_be_u32()?;
+ 
++        if bytes_per_packet > 0 {
++            limit_caf_packet_size(u64::from(bytes_per_packet))?;
++        }
++
+         let channels_per_frame = reader.read_be_u32()?;
+         if channels_per_frame == 0 {
+             return decode_error("caf: channels per frame must be not be zero");
+@@ -478,6 +497,33 @@ impl PacketTable {
+             return decode_error("caf: invalid number of packets in the packet table");
+         }
+ 
++        /// Hard cap on packet-table rows so a bogus `total_packets` cannot force billions of
++        /// iterations or unbounded `Vec` growth.
++        pub const MAX_PACKET_TABLE_ENTRIES: i64 = 16 * 1024 * 1024;
++
++        if total_packets > MAX_PACKET_TABLE_ENTRIES {
++            error!(
++                "packet table entry count ({total_packets}) exceeds limit ({MAX_PACKET_TABLE_ENTRIES})"
++            );
++            return decode_error("caf: packet table has too many entries");
++        }
++
++        let data_budget = chunk_size - 24;
++        let min_bytes_per_packet: i64 = match (desc.bytes_per_packet, desc.frames_per_packet) {
++            // Two variable-length integers per packet.
++            (0, 0) => 2,
++            // One variable-length integer per packet.
++            (0, _) | (_, 0) => 1,
++            (_, _) => 0,
++        };
++
++        if min_bytes_per_packet > 0 && total_packets > 0 {
++            let need = (total_packets as u128).saturating_mul(min_bytes_per_packet as u128);
++            if need > data_budget.max(0) as u128 {
++                return decode_error("caf: packet table exceeds chunk size");
++            }
++        }
++
+         let valid_frames = reader.read_be_i64()?;
+         if valid_frames < 0 {
+             error!("invalid number of frames in the packet table ({valid_frames})");
+@@ -499,6 +545,7 @@ impl PacketTable {
+             (0, 0) => {
+                 for _ in 0..total_packets {
+                     let size = read_variable_length_integer(reader)?;
++                    limit_caf_packet_size(size)?;
+                     let frames = Duration::from(read_variable_length_integer(reader)?);
+                     packets.push(CafPacket {
+                         size,
+@@ -516,6 +563,7 @@ impl PacketTable {
+             (0, frames_per_packet) => {
+                 for _ in 0..total_packets {
+                     let size = read_variable_length_integer(reader)?;
++                    limit_caf_packet_size(size)?;
+                     let frames = Duration::from(frames_per_packet);
+                     packets.push(CafPacket {
+                         size,
+@@ -533,6 +581,7 @@ impl PacketTable {
+             (bytes_per_packet, 0) => {
+                 for _ in 0..total_packets {
+                     let size = bytes_per_packet as u64;
++                    limit_caf_packet_size(size)?;
+                     let frames = Duration::from(read_variable_length_integer(reader)?);
+                     packets.push(CafPacket {
+                         size,
+diff --git a/symphonia-format-caf/src/demuxer.rs b/symphonia-format-caf/src/demuxer.rs
+index 1de22e5..9f3e371 100644
+--- a/symphonia-format-caf/src/demuxer.rs
++++ b/symphonia-format-caf/src/demuxer.rs
+@@ -148,6 +148,7 @@ impl FormatReader for CafReader<'_> {
+             PacketInfo::VariableAudioPacket { packets, current_packet_index } => {
+                 if let Some(packet) = packets.get(*current_packet_index) {
+                     *current_packet_index += 1;
++                    limit_caf_packet_size(packet.size)?;
+                     let buffer = self.reader.read_boxed_slice(packet.size as usize)?;
+                     Ok(Some(Packet::new(0, packet.start_frame, packet.frames, buffer)))
+                 }
+diff --git a/symphonia-format-isomp4/src/atoms/ftyp.rs b/symphonia-format-isomp4/src/atoms/ftyp.rs
+index d070bf4..275ac46 100644
+--- a/symphonia-format-isomp4/src/atoms/ftyp.rs
++++ b/symphonia-format-isomp4/src/atoms/ftyp.rs
+@@ -33,7 +33,8 @@ impl Atom for FtypAtom {
+         }
+ 
+         // Major
+-        let major = FourCc::new(it.read_quad_bytes()?);
++        let major = FourCc::try_new(it.read_quad_bytes()?)
++            .ok_or(Error::DecodeError("isomp4 (ftyp): invalid FourCC (non-ASCII)"))?;
+ 
+         // Minor
+         let minor = it.read_quad_bytes()?;
+@@ -47,7 +48,9 @@ impl Atom for FtypAtom {
+ 
+         for _ in 0..n_brands {
+             let brand = it.read_quad_bytes()?;
+-            compatible.push(FourCc::new(brand));
++            let brand = FourCc::try_new(brand)
++                .ok_or(Error::DecodeError("isomp4 (ftyp): invalid compatible brand FourCC"))?;
++            compatible.push(brand);
+         }
+ 
+         Ok(FtypAtom { major, minor, compatible })
+diff --git a/symphonia-format-isomp4/src/atoms/hdlr.rs b/symphonia-format-isomp4/src/atoms/hdlr.rs
+index a3c4a68..4e108c8 100644
+--- a/symphonia-format-isomp4/src/atoms/hdlr.rs
++++ b/symphonia-format-isomp4/src/atoms/hdlr.rs
+@@ -56,7 +56,10 @@ impl Atom for HdlrAtom {
+             b"subt" => HandlerType::Subtitle,
+             b"text" => HandlerType::Text,
+             &hdlr => {
+-                warn!("unknown handler type {:?}", FourCc::new(hdlr));
++                match FourCc::try_new(hdlr) {
++                    Some(cc) => warn!("unknown handler type {:?}", cc),
++                    None => warn!("unknown handler type {:x?}", hdlr),
++                }
+                 HandlerType::Other(hdlr)
+             }
+         };
+diff --git a/symphonia-metadata/src/embedded/flac.rs b/symphonia-metadata/src/embedded/flac.rs
+index e075197..bf727be 100644
+--- a/symphonia-metadata/src/embedded/flac.rs
++++ b/symphonia-metadata/src/embedded/flac.rs
+@@ -32,6 +32,11 @@ pub const FLAC_METADATA_INFO: MetadataInfo = MetadataInfo {
+     long_name: "Free Lossless Audio Codec",
+ };
+ 
++/// Upper bound for embedded picture payload allocation (FLAC `PICTURE` block).
++const MAX_FLAC_PICTURE_DATA_BYTES: usize = 32 * 1024 * 1024;
++/// Upper bound for MIME type / description strings in a `PICTURE` block.
++const MAX_FLAC_PICTURE_TEXT_FIELD_BYTES: usize = 256 * 1024;
++
+ /// Converts a string of bytes to an ASCII string if all characters are within the printable ASCII
+ /// range. If a null byte is encounted, the string terminates at that point.
+ fn printable_ascii_to_string(bytes: &[u8]) -> Option<String> {
+@@ -63,8 +68,10 @@ pub fn read_flac_picture_block<B: ReadBytes>(reader: &mut B) -> Result<Visual> {
+     let type_enc = reader.read_be_u32()?;
+ 
+     // Read the Media Type length in bytes.
+-    // TODO: Apply a limit.
+     let media_type_len = reader.read_be_u32()? as usize;
++    if media_type_len > MAX_FLAC_PICTURE_TEXT_FIELD_BYTES {
++        return decode_error("meta (flac): picture mime-type length exceeds limit");
++    }
+ 
+     // Read the Media Type bytes
+     let media_type_buf = reader.read_boxed_slice_exact(media_type_len)?;
+@@ -81,8 +88,10 @@ pub fn read_flac_picture_block<B: ReadBytes>(reader: &mut B) -> Result<Visual> {
+     let mut tags = vec![];
+ 
+     // Read the description length in bytes.
+-    // TODO: Apply a limit.
+     let desc_len = reader.read_be_u32()? as usize;
++    if desc_len > MAX_FLAC_PICTURE_TEXT_FIELD_BYTES {
++        return decode_error("meta (flac): picture description length exceeds limit");
++    }
+ 
+     // Read the description bytes.
+     let desc_buf = reader.read_boxed_slice_exact(desc_len)?;
+@@ -113,8 +122,10 @@ pub fn read_flac_picture_block<B: ReadBytes>(reader: &mut B) -> Result<Visual> {
+     let _color_mode = reader.read_be_u32()?;
+ 
+     // Read the image data length in bytes.
+-    // TODO: Apply a limit.
+     let data_len = reader.read_be_u32()? as usize;
++    if data_len > MAX_FLAC_PICTURE_DATA_BYTES {
++        return decode_error("meta (flac): picture data length exceeds limit");
++    }
+ 
+     // Read the image data.
+     let data = reader.read_boxed_slice_exact(data_len)?;
+diff --git a/symphonia/fuzz/fuzz_targets/decode_any.rs b/symphonia/fuzz/fuzz_targets/decode_any.rs
+index 0534d69..d9de293 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_any.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_any.rs
+@@ -5,8 +5,8 @@ use symphonia::core::formats::{FormatOptions, TrackType};
+ use symphonia::core::io::MediaSourceStream;
+ use symphonia::core::meta::MetadataOptions;
+ 
+-fuzz_target!(|data: Vec<u8>| {
+-    let data = std::io::Cursor::new(data);
++fuzz_target!(|data: &[u8]| {
++    let data = std::io::Cursor::new(data.to_vec());
+ 
+     let source = MediaSourceStream::new(Box::new(data), Default::default());
+ 

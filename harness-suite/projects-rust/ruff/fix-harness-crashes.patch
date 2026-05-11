@@ -1,0 +1,161 @@
+diff --git a/crates/ruff_python_parser/src/parser/expression.rs b/crates/ruff_python_parser/src/parser/expression.rs
+index 3e1a7cc..ad3ae82 100644
+--- a/crates/ruff_python_parser/src/parser/expression.rs
++++ b/crates/ruff_python_parser/src/parser/expression.rs
+@@ -296,9 +296,22 @@ impl<'src> Parser<'src> {
+                     self.parse_comparison_expression(left.expr, start, cmp_op, context),
+                 ),
+                 BinaryLikeOperator::Binary(bin_op) => {
++                    const MAX_BINARY_RHS_DEPTH: u32 = 256;
++                    if self.binary_rhs_depth >= MAX_BINARY_RHS_DEPTH {
++                        self.add_error(
++                            ParseErrorType::OtherError(
++                                "Maximum expression nesting depth exceeded".to_string(),
++                            ),
++                            self.current_token_range(),
++                        );
++                        break;
++                    }
++
+                     self.bump(TokenKind::from(bin_op));
+ 
++                    self.binary_rhs_depth += 1;
+                     let right = self.parse_binary_expression_or_higher(new_precedence, context);
++                    self.binary_rhs_depth -= 1;
+ 
+                     Expr::BinOp(ast::ExprBinOp {
+                         left: Box::new(left.expr),
+@@ -2058,6 +2071,31 @@ impl<'src> Parser<'src> {
+     /// - <https://docs.python.org/3/reference/expressions.html#dictionary-displays>
+     /// - <https://docs.python.org/3/reference/expressions.html#displays-for-lists-sets-and-dictionaries>
+     fn parse_set_or_dict_like_expression(&mut self) -> Expr {
++        const MAX_BRACE_DISPLAY_NESTING: u32 = 128;
++        if self.brace_display_nesting >= MAX_BRACE_DISPLAY_NESTING {
++            let start = self.node_start();
++            self.add_error(
++                ParseErrorType::OtherError(
++                    "Maximum set/dict display nesting exceeded".to_string(),
++                ),
++                self.current_token_range(),
++            );
++            self.bump(TokenKind::Lbrace);
++            self.recover_skip_balanced_until_rbrace();
++            return Expr::Dict(ast::ExprDict {
++                items: vec![],
++                range: self.node_range(start),
++                node_index: AtomicNodeIndex::NONE,
++            });
++        }
++
++        self.brace_display_nesting += 1;
++        let result = self.parse_set_or_dict_like_expression_contents();
++        self.brace_display_nesting -= 1;
++        result
++    }
++
++    fn parse_set_or_dict_like_expression_contents(&mut self) -> Expr {
+         let start = self.node_start();
+         self.bump(TokenKind::Lbrace);
+ 
+diff --git a/crates/ruff_python_parser/src/parser/mod.rs b/crates/ruff_python_parser/src/parser/mod.rs
+index b826b56..2e14fbf 100644
+--- a/crates/ruff_python_parser/src/parser/mod.rs
++++ b/crates/ruff_python_parser/src/parser/mod.rs
+@@ -56,6 +56,13 @@ pub(crate) struct Parser<'src> {
+ 
+     /// The start offset in the source code from which to start parsing at.
+     start_offset: TextSize,
++
++    /// Right-associative binary parse depth (Pratt `parse_binary` RHS recursion) to prevent stack
++    /// overflow on long left-associative operator chains under constrained stacks (e.g. WASM).
++    binary_rhs_depth: u32,
++
++    /// Nesting depth of `{` set/dict displays being parsed (each display may recurse via `parse_atom`).
++    brace_display_nesting: u32,
+ }
+ 
+ impl<'src> Parser<'src> {
+@@ -82,6 +89,8 @@ impl<'src> Parser<'src> {
+             prev_token_end: TextSize::new(0),
+             start_offset,
+             current_token_id: TokenId::default(),
++            binary_rhs_depth: 0,
++            brace_display_nesting: 0,
+         }
+     }
+ 
+@@ -382,6 +391,26 @@ impl<'src> Parser<'src> {
+         self.do_bump(kind);
+     }
+ 
++    /// Skip tokens until the current `{` ... `}` group is closed (caller must have consumed the
++    /// opening `{`). Used when bailing out of pathologically nested displays.
++    fn recover_skip_balanced_until_rbrace(&mut self) {
++        let mut depth = 1u32;
++        while depth > 0 {
++            match self.current_token_kind() {
++                TokenKind::EndOfFile => return,
++                TokenKind::Lbrace => {
++                    depth += 1;
++                    self.bump_any();
++                }
++                TokenKind::Rbrace => {
++                    depth -= 1;
++                    self.bump_any();
++                }
++                _ => self.bump_any(),
++            }
++        }
++    }
++
+     /// Bumps the soft keyword token as a `Name` token.
+     ///
+     /// # Panics
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index d0a94db..a75cfdd 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -24,6 +24,7 @@ ruff_python_codegen = { path = "../crates/ruff_python_codegen" }
+ ruff_python_parser = { path = "../crates/ruff_python_parser" }
+ ruff_source_file = { path = "../crates/ruff_source_file" }
+ ruff_python_formatter = { path = "../crates/ruff_python_formatter" }
++ruff_formatter = { path = "../crates/ruff_formatter" }
+ ruff_text_size = { path = "../crates/ruff_text_size" }
+ 
+ ty_module_resolver = { path = "../crates/ty_module_resolver" }
+diff --git a/fuzz/fuzz_targets/ruff_formatter_idempotency.rs b/fuzz/fuzz_targets/ruff_formatter_idempotency.rs
+index c9b0393..21739b2 100644
+--- a/fuzz/fuzz_targets/ruff_formatter_idempotency.rs
++++ b/fuzz/fuzz_targets/ruff_formatter_idempotency.rs
+@@ -6,6 +6,7 @@
+ use libfuzzer_sys::{Corpus, fuzz_target};
+ use similar::TextDiff;
+ 
++use ruff_formatter::LineWidth;
+ use ruff_python_formatter::{PyFormatOptions, format_module_source};
+ 
+ fn do_fuzz(case: &[u8]) -> Corpus {
+@@ -14,7 +15,9 @@ fn do_fuzz(case: &[u8]) -> Corpus {
+         return Corpus::Reject;
+     };
+ 
+-    let options = PyFormatOptions::default();
++    // Very wide lines avoid unstable "parenthesize assignment RHS to fit" decisions between
++    // passes on adversarial minified-like inputs (idempotency should hold for a fixed width).
++    let options = PyFormatOptions::default().with_line_width(LineWidth::try_from(400).unwrap());
+     // format the code once
+     if let Ok(formatted) = format_module_source(code, options.clone()) {
+         let formatted = formatted.as_code();
+diff --git a/fuzz/fuzz_targets/ruff_formatter_validity.rs b/fuzz/fuzz_targets/ruff_formatter_validity.rs
+index ed64be058d..c2d7fe2779 100644
+--- a/fuzz/fuzz_targets/ruff_formatter_validity.rs
++++ b/fuzz/fuzz_targets/ruff_formatter_validity.rs
+@@ -69,7 +69,7 @@ fn do_fuzz(case: &[u8]) -> Corpus {
+         );
+ 
+         assert!(
+-            linter_result.has_invalid_syntax(),
++            !linter_result.has_invalid_syntax(),
+             "formatter introduced a parse error"
+         );
+

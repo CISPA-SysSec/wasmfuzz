@@ -1,0 +1,21 @@
+--- a/src/decoder.rs
++++ b/src/decoder.rs
+@@ -684,7 +684,17 @@
+             if self.has_alpha {
+                 decoder.decode_frame(self.width, self.height, false, buf)?;
+             } else {
+-                let mut data = vec![0; self.width as usize * self.height as usize * 4];
++                let tmp_len = (self.width as usize)
++                    .checked_mul(self.height as usize)
++                    .and_then(|x| x.checked_mul(4))
++                    .ok_or(DecodingError::MemoryLimitExceeded)?;
++                if tmp_len > self.memory_limit {
++                    return Err(DecodingError::MemoryLimitExceeded);
++                }
++                let mut data = Vec::new();
++                data.try_reserve_exact(tmp_len)
++                    .map_err(|_| DecodingError::MemoryLimitExceeded)?;
++                data.resize(tmp_len, 0);
+                 decoder.decode_frame(self.width, self.height, false, &mut data)?;
+                 for (rgba_val, chunk) in data.chunks_exact(4).zip(buf.chunks_exact_mut(3)) {
+                     chunk.copy_from_slice(&rgba_val[..3]);

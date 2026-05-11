@@ -10,7 +10,13 @@ $CC -lz empty.c
 
 cd "$PROJECT/freetype"
 ./autogen.sh
-./configure $CONFIGUREFLAGS --enable-static --disable-shared
+# Disable HarfBuzz (and other optional deps) so configure doesn't auto-enable
+# FT_CONFIG_OPTION_USE_HARFBUZZ_DYNAMIC via wasi-libc's weak `dlopen` stub.
+# Without this, af_autofitter_init() ends up calling dlopen()/dlsym() which
+# resolve to wasi-libc's `undefined_stub` (an `unreachable` instruction) at
+# runtime and crash the harness on the first input.
+./configure $CONFIGUREFLAGS --enable-static --disable-shared \
+    --with-harfbuzz=no --with-brotli=no --with-png=no --with-bzip2=no
 make -j8
 
 # Note: The configure step here is very slow. Is it building optimized binaries for every include test?

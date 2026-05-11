@@ -1,0 +1,34 @@
+diff --git a/src/audio.rs b/src/audio.rs
+--- a/src/audio.rs
++++ b/src/audio.rs
+@@ -998,6 +998,16 @@
+ 		} else {
+ 			let bs_0_exp = 1 << ident.blocksize_0;
+ 			((n * 3 - bs_0_exp) >> 2, (n * 3 + bs_0_exp) >> 2)
+ 		};
+ 
++	{
++		let n_usz = n as usize;
++		let lws = left_win_start as usize;
++		let rws = right_win_start as usize;
++		let rwe = right_win_end as usize;
++		if lws > n_usz || rws > n_usz || rwe > n_usz || rwe < rws || rws < lws {
++			try!(Err(AudioReadError::AudioBadFormat));
++		}
++	}
++
+ 	/*println!("n={} prev_win_flag={:?} left_win_(start={}, end={}, n={}) right_win(start={}, end={})",
+@@ -1018,7 +1018,13 @@
+ 		for (prev_chan, chan) in prev_data.into_iter().zip(audio_spectri.iter_mut()) {
+ 			let plen = prev_chan.len();
+ 			let left_win_start = left_win_start as usize;
+ 			let right_win_start = right_win_start as usize;
+ 			let right_win_end = right_win_end as usize;
+ 
++			let chan_len = n as usize;
++			match left_win_start.checked_add(plen) {
++				Some(end_ix) if end_ix <= chan_len => {}
++				_ => try!(Err(AudioReadError::AudioBadFormat)),
++			}
++
+ 			// Then do the actual overlap_add

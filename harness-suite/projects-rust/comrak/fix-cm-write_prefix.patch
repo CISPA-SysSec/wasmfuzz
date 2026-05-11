@@ -1,0 +1,16 @@
+diff --git a/src/cm.rs b/src/cm.rs
+index e4acde2..92aaa46 100644
+--- a/src/cm.rs
++++ b/src/cm.rs
+@@ -180,8 +180,9 @@ impl<'a, 'o, 'c, 'w> CommonMarkFormatter<'a, 'o, 'c, 'w> {
+             self.wrap_buffer.push_str(&self.prefix);
+         }
+         self.window.clear();
+-        self.window
+-            .extend_from_slice(&self.prefix.as_bytes()[self.prefix.len() - 2..]);
++        let pb = self.prefix.as_bytes();
++        let start = pb.len().saturating_sub(2);
++        self.window.extend_from_slice(&pb[start..]);
+         Ok(())
+     }
+ 

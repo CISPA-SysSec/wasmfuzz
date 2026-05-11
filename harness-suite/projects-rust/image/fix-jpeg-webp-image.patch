@@ -1,0 +1,95 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index bd1b20cc..3fcc63b9 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -147,3 +147,7 @@ harness = false
+ # TODO: remove when shipping the next major release after 0.25
+ [package.metadata.cargo-semver-checks.lints]
+ enum_discriminants_undefined_non_unit_variant = { level = "warn" }
++
++[patch.crates-io]
++zune-jpeg = { path = "../zune-jpeg" }
++image-webp = { path = "../image-webp" }
+diff --git a/fuzz/fuzzers/fuzzer_script_webp.rs b/fuzz/fuzzers/fuzzer_script_webp.rs
+index 4ba62ba0..7470f6f9 100644
+--- a/fuzz/fuzzers/fuzzer_script_webp.rs
++++ b/fuzz/fuzzers/fuzzer_script_webp.rs
+@@ -1,7 +1,19 @@
+ #![no_main]
+ #[macro_use] extern crate libfuzzer_sys;
+ extern crate image;
++use image::ImageDecoder;
++use std::io::Cursor;
+ 
+ fuzz_target!(|data: &[u8]| {
+-    let _ = image::load_from_memory_with_format(data, image::ImageFormat::WebP);
++    let decoder = match image::codecs::webp::WebPDecoder::new(Cursor::new(data)) {
++        Ok(decoder) => decoder,
++        Err(_) => return,
++    };
++
++    if decoder.total_bytes() > 256 * 1024 * 1024 {
++        return;
++    }
++
++    let mut buf = vec![0; decoder.total_bytes() as usize];
++    let _ = decoder.read_image(&mut buf);
+ });
+diff --git a/src/codecs/webp/decoder.rs b/src/codecs/webp/decoder.rs
+index d49835ee..e0c151cb 100644
+--- a/src/codecs/webp/decoder.rs
++++ b/src/codecs/webp/decoder.rs
+@@ -3,7 +3,8 @@ use std::io::{BufRead, Read, Seek};
+ use image_webp::LoopCount;
+ 
+ use crate::buffer::ConvertBuffer;
+-use crate::error::{DecodingError, ImageError, ImageResult};
++use crate::error::{DecodingError, ImageError, ImageResult, LimitError, LimitErrorKind};
++use crate::Limits;
+ use crate::metadata::Orientation;
+ use crate::{
+     AnimationDecoder, ColorType, Delay, Frame, Frames, ImageDecoder, ImageFormat, RgbImage, Rgba,
+@@ -65,6 +66,18 @@ impl<R: BufRead + Seek> ImageDecoder for WebPDecoder<R> {
+         (*self).read_image(buf)
+     }
+ 
++    fn set_limits(&mut self, limits: Limits) -> ImageResult<()> {
++        limits.check_support(&crate::LimitSupport::default())?;
++        let (width, height) = self.dimensions();
++        limits.check_dimensions(width, height)?;
++        let cap = limits
++            .max_alloc
++            .map(|m| usize::try_from(m).unwrap_or(usize::MAX))
++            .unwrap_or(usize::MAX);
++        self.inner.set_memory_limit(cap);
++        Ok(())
++    }
++
+     fn icc_profile(&mut self) -> ImageResult<Option<Vec<u8>>> {
+         self.inner
+             .icc_profile()
+@@ -160,6 +173,9 @@ impl ImageError {
+     fn from_webp_decode(e: image_webp::DecodingError) -> Self {
+         match e {
+             image_webp::DecodingError::IoError(e) => ImageError::IoError(e),
++            image_webp::DecodingError::MemoryLimitExceeded => {
++                ImageError::Limits(LimitError::from_kind(LimitErrorKind::InsufficientMemory))
++            }
+             _ => ImageError::Decoding(DecodingError::new(ImageFormat::WebP.into(), e)),
+         }
+     }
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index d31ed4a5..72d8f937 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -17,6 +17,10 @@ version = "0.4"
+ # Prevent this from interfering with workspaces
+ [workspace]
+ members = ["."]
++
++[patch.crates-io]
++zune-jpeg = { path = "../../zune-jpeg" }
++image-webp = { path = "../../image-webp" }
+ 
+ [[bin]]
+ name = "fuzzer_script_guess"

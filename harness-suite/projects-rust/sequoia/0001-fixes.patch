@@ -1,27 +1,130 @@
+diff --git a/buffered-reader/src/lib.rs b/buffered-reader/src/lib.rs
+index a583f4d..4edbecd 100644
+--- a/buffered-reader/src/lib.rs
++++ b/buffered-reader/src/lib.rs
+@@ -822,12 +822,14 @@ pub trait BufferedReader<C> : io::Read + fmt::Debug + fmt::Display + Send + Sync
+     /// [`BufferedReader`] implementations may optimize this to avoid a
+     /// copy by directly returning the internal buffer.
+     fn steal(&mut self, amount: usize) -> Result<Vec<u8>, std::io::Error> {
+-        let mut data = self.data_consume_hard(amount)?;
+-        assert!(data.len() >= amount);
+-        if data.len() > amount {
+-            data = &data[..amount];
++        let data = self.data_consume_hard(amount)?;
++        if data.len() < amount {
++            return Err(Error::new(
++                ErrorKind::UnexpectedEof,
++                "short read in BufferedReader::steal",
++            ));
+         }
+-        Ok(data.to_vec())
++        Ok(data[..amount].to_vec())
+     }
+ 
+     /// Like [`BufferedReader::steal`], but instead of stealing a fixed number of
+diff --git a/buffered-reader/src/limitor.rs b/buffered-reader/src/limitor.rs
+index a700ae7..44effcf 100644
+--- a/buffered-reader/src/limitor.rs
++++ b/buffered-reader/src/limitor.rs
+@@ -88,17 +88,20 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Sync + Send> BufferedReader<C> for Li
+         assert!(amount as u64 <= self.limit);
+         self.limit -= amount as u64;
+         let data = self.reader.consume(amount);
+-        &data[..cmp::min(self.limit + amount as u64, data.len() as u64) as usize]
++        assert!(
++            data.len() >= amount,
++            "inner reader must return at least `amount` bytes from consume"
++        );
++        &data[..amount]
+     }
+ 
+     fn data_consume(&mut self, amount: usize) -> Result<&[u8], io::Error> {
+         let amount = cmp::min(amount as u64, self.limit) as usize;
+         let result = self.reader.data_consume(amount);
+         if let Ok(buffer) = result {
+-            let amount = cmp::min(amount, buffer.len());
+-            self.limit -= amount as u64;
+-            return Ok(&buffer[
+-                ..cmp::min(buffer.len() as u64, self.limit + amount as u64) as usize]);
++            let consumed = cmp::min(amount, buffer.len());
++            self.limit -= consumed as u64;
++            return Ok(&buffer[..consumed]);
+         }
+         result
+     }
+@@ -109,10 +112,12 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Sync + Send> BufferedReader<C> for Li
+         }
+         let result = self.reader.data_consume_hard(amount);
+         if let Ok(buffer) = result {
+-            let amount = cmp::min(amount, buffer.len());
++            assert!(
++                buffer.len() >= amount,
++                "inner reader must return at least `amount` bytes from data_consume_hard"
++            );
+             self.limit -= amount as u64;
+-            return Ok(&buffer[
+-                ..cmp::min(buffer.len() as u64, self.limit + amount as u64) as usize]);
++            return Ok(&buffer[..amount]);
+         }
+         result
+     }
 diff --git a/openpgp/fuzz/fuzz_targets/cert_from_bytes.rs b/openpgp/fuzz/fuzz_targets/cert_from_bytes.rs
-index 905095d..f901040 100644
+index 905095d..00aa6e2 100644
 --- a/openpgp/fuzz/fuzz_targets/cert_from_bytes.rs
 +++ b/openpgp/fuzz/fuzz_targets/cert_from_bytes.rs
+@@ -1,6 +1,6 @@
+ #![no_main]
+ 
+-use libfuzzer_sys::{Corpus, fuzz_target};
++use libfuzzer_sys::fuzz_target;
+ 
+ use sequoia_openpgp as openpgp;
+ use openpgp::{
 @@ -8,9 +8,14 @@ use openpgp::{
      parse::Parse,
  };
  
+-fuzz_target!(|data: &[u8]| -> Corpus {
 +fuzz_target!(|data: &[u8]| {
 +    let _ = Cert::from_bytes(data);
 +});
 +/*
- fuzz_target!(|data: &[u8]| -> Corpus {
++fuzz_target!(|data: &[u8]| -> libfuzzer_sys::Corpus {
      match Cert::from_bytes(data) {
-         Ok(_) => Corpus::Keep,
-         Err(_) => Corpus::Reject,
+-        Ok(_) => Corpus::Keep,
+-        Err(_) => Corpus::Reject,
++        Ok(_) => libfuzzer_sys::Corpus::Keep,
++        Err(_) => libfuzzer_sys::Corpus::Reject,
      }
  });
 +*/
 diff --git a/openpgp/src/parse.rs b/openpgp/src/parse.rs
-index 6a8a1df..ed07026 100644
+index ae775a7..e9974bf 100644
 --- a/openpgp/src/parse.rs
 +++ b/openpgp/src/parse.rs
-@@ -1768,7 +1768,7 @@ impl Subpacket {
+@@ -1763,8 +1763,19 @@ impl SubpacketArea {
+             t!("Subpacket::parse(_, {}, {:?}) => {:?}",
+                limit, hash_algo, r);
+             let p = r?;
+-            assert!(limit >= p.length.len() + p.length.serialized_len());
+-            limit -= p.length.len() + p.length.serialized_len();
++            let slen = p.length.serialized_len();
++            let plen = p.length.len() as usize;
++            let Some(used) = slen.checked_add(plen) else {
++                return Err(Error::MalformedPacket(
++                    "Subpacket length overflow".into())
++                    .into());
++            };
++            if limit < used {
++                return Err(Error::MalformedPacket(
++                    "Subpacket extends beyond the end of the subpacket area".into())
++                    .into());
++            }
++            limit -= used;
+             packets.push(p);
+         }
+         assert!(limit == 0);
+@@ -1783,7 +1794,7 @@ impl Subpacket {
          php.field("subpacket length", length.serialized_len());
          let len = length.len() as usize;
  
@@ -30,3 +133,18 @@ index 6a8a1df..ed07026 100644
              return Err(Error::MalformedPacket(
                  "Subpacket extends beyond the end of the subpacket area".into())
                         .into());
+diff --git a/openpgp/src/parse/hashed_reader.rs b/openpgp/src/parse/hashed_reader.rs
+index 36e813f..ce59086 100644
+--- a/openpgp/src/parse/hashed_reader.rs
++++ b/openpgp/src/parse/hashed_reader.rs
+@@ -456,9 +456,7 @@ impl<R: BufferedReader<Cookie>>
+ 
+         self.cookie_set(state);
+ 
+-        let result = self.reader.data_consume(amount);
+-        assert!(result.is_ok());
+-        result
++        self.reader.data_consume_hard(amount)
+     }
+ 
+     fn get_mut(&mut self) -> Option<&mut dyn BufferedReader<Cookie>> {

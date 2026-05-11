@@ -1,0 +1,188 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wasm fuzz harness <harness@local>
+Date: Sat, 10 May 2026 00:00:00 +0000
+Subject: [PATCH 3/3] avoid RawVec capacity overflow on 32-bit wasm
+
+- VQ lookup: checked_mul for element count and for count * size_of::<f32>().
+- Codebook multiplicands: reject cap * size_of::<u32>() overflow.
+- Huffman desc_prog: precompute exact preorder u32 count (avoids `with_capacity(cnt)`).
+- Audio residue decode: checked_mul for channel * block intermediate vectors.
+
+---
+ src/audio.rs        | 28 ++++++++++++++++++++++++----
+ src/header.rs       | 25 ++++++++++++++++---------
+ src/huffman_tree.rs | 25 +++++++++++++++++++++++---
+ 3 files changed, 68 insertions(+), 10 deletions(-)
+
+diff --git a/src/header.rs b/src/header.rs
+index f8689a7..b2c8e9a 100644
+--- a/src/header.rs
++++ b/src/header.rs
+@@ -501,9 +501,15 @@ fn lookup_vec_val_decode(lup :&CodebookVqLookup, codebook_entries :u32, codebook
+ /// Returns `codebook_entries` many vectors,
+ /// each being `codebook_dimensions` scalars wide),
+ /// all stored in one Vec.
+-fn lookup_vec_val_decode(lup :&CodebookVqLookup, codebook_entries :u32, codebook_dimensions :u16) -> Vec<f32> {
+-	let mut value_vectors = Vec::with_capacity(
+-		codebook_entries as usize * codebook_dimensions as usize);
++fn lookup_vec_val_decode(lup :&CodebookVqLookup, codebook_entries :u32, codebook_dimensions :u16) -> Result<Vec<f32>, HeaderReadError> {
++	let cap = match (codebook_entries as usize).checked_mul(codebook_dimensions as usize) {
++		Some(c) => c,
++		None => return Err(HeaderReadError::BufferNotAddressable),
++	};
++	if cap.checked_mul(std::mem::size_of::<f32>()).is_none() {
++		return Err(HeaderReadError::BufferNotAddressable);
++	}
++	let mut value_vectors = Vec::with_capacity(cap);
+ 	if lup.codebook_lookup_type == 1 {
+ 		let codebook_lookup_values = lup.codebook_multiplicands.len();
+ 		for lookup_offset in 0 .. codebook_entries {
+@@ -536,7 +542,7 @@ fn lookup_vec_val_decode(lup :&CodebookVqLookup, codebook_entries :u32, codebook
+ 			}
+ 		}
+ 	}
+-	return value_vectors;
++	return Ok(value_vectors);
+ }
+ 
+ 
+@@ -750,8 +756,11 @@ fn read_codebook(rdr :&mut BitpackCursor) -> Result<Codebook, HeaderReadError> {
+ 		} else {
+ 			codebook_entries as u64 * codebook_dimensions as u64
+ 		};
+-		let mut codebook_multiplicands = Vec::with_capacity(
+-			convert_to_usize!(codebook_lookup_values, u64));
++		let multiplicands_cap = convert_to_usize!(codebook_lookup_values, u64);
++		if multiplicands_cap.checked_mul(std::mem::size_of::<u32>()).is_none() {
++			try!(Err(HeaderReadError::BufferNotAddressable));
++		}
++		let mut codebook_multiplicands = Vec::with_capacity(multiplicands_cap);
+ 		for _ in 0 .. codebook_lookup_values {
+ 			codebook_multiplicands.push(try!(rdr.read_dyn_u32(codebook_value_bits)));
+ 		}
+@@ -763,10 +772,11 @@ fn read_codebook(rdr :&mut BitpackCursor) -> Result<Codebook, HeaderReadError> {
+ 			codebook_multiplicands,
+ 		})
+ 	};
+-	let codebook_vq_lookup_vec = codebook_lookup.as_ref().map(|lup| {
+-		lookup_vec_val_decode(lup,
+-			codebook_entries, codebook_dimensions)
+-	});
++	let codebook_vq_lookup_vec = match codebook_lookup.as_ref() {
++		Some(lup) => Some(try!(lookup_vec_val_decode(lup,
++			codebook_entries, codebook_dimensions))),
++		None => None,
++	};
+ 
+ 	return Ok(Codebook {
+ 		codebook_dimensions,
+diff --git a/src/huffman_tree.rs b/src/huffman_tree.rs
+index 72eca0b..509752e 100644
+--- a/src/huffman_tree.rs
++++ b/src/huffman_tree.rs
+@@ -220,13 +220,34 @@
+ 			try!(Err(HuffmanError::Underpopulated)); /* Underpopulated */
+ 		}
+ 
++		fn desc_prog_u32_count(tree :&HuffTree) -> Option<usize> {
++			let has_children = tree.l.is_some() || tree.r.is_some();
++			let mut n = 1usize;
++			if has_children {
++				n = n.checked_add(2)?;
++				n = n.checked_add(desc_prog_u32_count(tree.l.as_ref().unwrap())?)?;
++				n = n.checked_add(desc_prog_u32_count(tree.r.as_ref().unwrap())?)?;
++			}
++			Some(n)
++		}
++
+ 		// Second step: generate the actual desc_prog
+ 		// by pre_order traversal of the tree.
+ 		//
+ 		// The general advantage of this approach over one with only the simple tree
+ 		// is better cache locality and less memory requirements (at least after the
+ 		// setup with the simple tree).
+-		let mut desc_prog = Vec::with_capacity(cnt);
++		//
++		// `cnt` only counts used codewords; the packed `desc_prog` is one u32 per
++		// visited node plus two placeholder slots for each internal node. Starting
++		// from `cnt` is far too small and forces `Vec` growth; on wasm32, doubling
++		// the capacity can overflow `capacity * size_of::<u32>()` in `RawVec`.
++		let max_u32_elems = (isize::MAX as usize) / std::mem::size_of::<u32>();
++		let desc_cap = match desc_prog_u32_count(&simple_tree) {
++			Some(c) if c <= max_u32_elems => c,
++			_ => return Err(HuffmanError::Overspecified),
++		};
++		let mut desc_prog = Vec::with_capacity(desc_cap);
+ 		fn traverse(tree :& HuffTree, desc_prog :&mut Vec<u32>) -> u32 {
+ 			let cur_pos = desc_prog.len() as u32;
+ 			let has_children = tree.l.is_some() || tree.r.is_some();
+
+diff --git a/src/audio.rs b/src/audio.rs
+index d5dc143..a36b6fa 100644
+--- a/src/audio.rs
++++ b/src/audio.rs
+@@ -637,7 +637,14 @@ fn residue_packet_decode_inner(rdr :&mut BitpackCursor, cur_blocksize :u16,
+ 	let residue_classbok_ht = &cur_codebook.codebook_huffman_tree;
+ 
+ 	// Allocate and zero all vectors that will be returned
+-	let mut vectors = vec![0.; ch * actual_size];
++	let vec_float_len = match ch.checked_mul(actual_size) {
++		Some(l) => l,
++		None => return Err(()),
++	};
++	if vec_float_len.checked_mul(std::mem::size_of::<f32>()).is_none() {
++		return Err(());
++	}
++	let mut vectors = vec![0.; vec_float_len];
+ 
+ 	if n_to_read == 0 {
+ 		// No residue to decode
+@@ -659,7 +666,14 @@ fn residue_packet_decode_inner(rdr :&mut BitpackCursor, cur_blocksize :u16,
+ 			})
+ 		}
+ 		let cl_stride :usize = partitions_to_read + classwords_per_codeword;
+-		let mut classifications = vec![0; ch as usize * cl_stride];
++		let classif_len = match ch.checked_mul(cl_stride) {
++			Some(l) => l,
++			None => return Err(()),
++		};
++		if classif_len.checked_mul(std::mem::size_of::<u32>()).is_none() {
++			return Err(());
++		}
++		let mut classifications = vec![0u32; classif_len];
+ 		for pass in 0 .. 8 {
+ 			let mut partition_count = 0;
+ 			while partition_count < partitions_to_read {
+@@ -736,7 +750,14 @@ fn residue_packet_decode(rdr :&mut BitpackCursor, cur_blocksize :u16,
+ 		if !to_decode_found {
+ 			// Don't attempt to decode, but return vectors,
+ 			// as required per spec only residue 2 has this.
+-			return Ok(vec![0.; ch * vec_size]);
++			let vz = match ch.checked_mul(vec_size) {
++				Some(l) => l,
++				None => return Err(()),
++			};
++			if vz.checked_mul(std::mem::size_of::<f32>()).is_none() {
++				return Err(());
++			}
++			return Ok(vec![0.; vz]);
+ 		} else {
+ 			// Construct a do_not_decode flag array
+ 			let c_do_not_decode_flag = [false];
+@@ -746,7 +767,14 @@ fn residue_packet_decode(rdr :&mut BitpackCursor, cur_blocksize :u16,
+ 				resid, codebooks));
+ 
+ 			// Post decode step
+-			let mut vectors_deinterleaved = Vec::with_capacity(ch * vec_size);
++			let de_cap = match ch.checked_mul(vec_size) {
++				Some(l) => l,
++				None => return Err(()),
++			};
++			if de_cap.checked_mul(std::mem::size_of::<f32>()).is_none() {
++				return Err(());
++			}
++			let mut vectors_deinterleaved = Vec::with_capacity(de_cap);
+ 			for j in 0 .. ch {
+ 				let iter = vectors.chunks(ch).map(|chunk| chunk[j]);
+ 				vectors_deinterleaved.extend(iter);
+

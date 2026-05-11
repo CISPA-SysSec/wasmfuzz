@@ -1,0 +1,175 @@
+diff --git a/jxl/fuzz/fuzz_targets/decode_header.rs b/jxl/fuzz/fuzz_targets/decode_header.rs
+index 0f56728..6f1b4c2 100644
+--- a/jxl/fuzz/fuzz_targets/decode_header.rs
++++ b/jxl/fuzz/fuzz_targets/decode_header.rs
+@@ -10,7 +10,9 @@ use libfuzzer_sys::fuzz_target;
+ fuzz_target!(|data: &[u8]| {
+     // Note: cargo-fuzz doesn't support |mut data: &[u8]| here.
+     let mut data = data;
+-    let decoder_options = JxlDecoderOptions::default();
++    let mut decoder_options = JxlDecoderOptions::default();
++    decoder_options.sample_limit = Some(1 << 22);
++    decoder_options.scan_frames_only = true;
+     let initialized_decoder = JxlDecoder::<states::Initialized>::new(decoder_options);
+     let _ = initialized_decoder.process(&mut data);
+ });
+diff --git a/jxl/src/api/inner/codestream_parser/non_section.rs b/jxl/src/api/inner/codestream_parser/non_section.rs
+index cc35fae..732394a 100644
+--- a/jxl/src/api/inner/codestream_parser/non_section.rs
++++ b/jxl/src/api/inner/codestream_parser/non_section.rs
+@@ -231,12 +231,25 @@ impl CodestreamParser {
+                 frame_header.size(),
+                 frame_header.num_extra_channels as usize,
+             )?;
++            let (gw, gh) = frame_header.size_groups();
++            let ng = gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
++            const MAX_GRID_CELLS: usize = 1 << 22;
++            if ng > MAX_GRID_CELLS {
++                return Err(Error::ImageDimensionTooLarge(ng as u64));
++            }
++            if let Some(limit) = decode_options.sample_limit {
++                let (pw, ph) = frame_header.size_padded();
++                check_size_limit(Some(limit), (pw, ph), frame_header.num_extra_channels as usize)?;
++                if ng > limit {
++                    return Err(Error::ImageDimensionTooLarge(ng as u64));
++                }
++            }
+ 
+             // Initialize storage buffers for available sections.
+             self.lf_global_section = None;
+             self.lf_sections.clear();
+             self.hf_global_section = None;
+-            self.hf_sections = (0..frame_header.num_groups())
++            self.hf_sections = (0..ng)
+                 .map(|_| (0..frame_header.passes.num_passes).map(|_| None).collect())
+                 .collect();
+             self.candidate_hf_sections.clear();
+@@ -325,32 +338,36 @@ impl CodestreamParser {
+         self.ready_section_data = 0;
+ 
+         // Move data from the pre-section buffer into the sections.
+-        for buf in self.sections.iter_mut() {
+-            if self.non_section_buf.is_empty() {
+-                break;
++        if !decode_options.scan_frames_only {
++            for buf in self.sections.iter_mut() {
++                if self.non_section_buf.is_empty() {
++                    break;
++                }
++                let mut data = Vec::new();
++                data.try_reserve_exact(buf.len)?;
++                data.resize(buf.len, 0);
++                buf.data = data;
++                self.ready_section_data += self
++                    .non_section_buf
++                    .take(&mut [IoSliceMut::new(&mut buf.data)]);
+             }
+-            let mut data = Vec::new();
+-            data.try_reserve_exact(buf.len)?;
+-            data.resize(buf.len, 0);
+-            buf.data = data;
+-            self.ready_section_data += self
+-                .non_section_buf
+-                .take(&mut [IoSliceMut::new(&mut buf.data)]);
+         }
+ 
+         self.section_state =
+             SectionState::new(frame.header().num_lf_groups(), frame.header().num_groups());
+ 
+-        frame.prepare_render_pipeline(
+-            self.pixel_format.as_ref().unwrap(),
+-            decode_options.cms.as_deref(),
+-            self.embedded_color_profile
+-                .as_ref()
+-                .expect("embedded_color_profile should be set before pipeline preparation"),
+-            self.output_color_profile
+-                .as_ref()
+-                .expect("output_color_profile should be set before pipeline preparation"),
+-        )?;
++        if !decode_options.scan_frames_only {
++            frame.prepare_render_pipeline(
++                self.pixel_format.as_ref().unwrap(),
++                decode_options.cms.as_deref(),
++                self.embedded_color_profile
++                    .as_ref()
++                    .expect("embedded_color_profile should be set before pipeline preparation"),
++                self.output_color_profile
++                    .as_ref()
++                    .expect("output_color_profile should be set before pipeline preparation"),
++            )?;
++        }
+ 
+         self.frame = Some(frame);
+ 
+diff --git a/jxl/src/api/inner/process.rs b/jxl/src/api/inner/process.rs
+index 2870225..cb09e44 100644
+--- a/jxl/src/api/inner/process.rs
++++ b/jxl/src/api/inner/process.rs
+@@ -111,7 +111,10 @@ impl SmallBuffer {
+ 
+     pub(super) fn enlarge(&mut self) {
+         // Note: we need a *4 here because doubling the buffer size might still not allow refill() to make progress.
+-        self.buf.resize(self.buf.len() * 4, 0);
++        const MAX_BUF: usize = 16 * 1024 * 1024;
++        let next = self.buf.len().saturating_mul(4);
++        let new_len = next.min(MAX_BUF).max(self.buf.len());
++        self.buf.resize(new_len, 0);
+     }
+ 
+     pub(super) fn can_read_more(&self) -> bool {
+diff --git a/jxl/src/frame/decode.rs b/jxl/src/frame/decode.rs
+index 82d091e..51ea9d2 100644
+--- a/jxl/src/frame/decode.rs
++++ b/jxl/src/frame/decode.rs
+@@ -156,6 +156,8 @@ impl Frame {
+         toc: Toc,
+         mut decoder_state: DecoderState,
+     ) -> Result<Self> {
++        let (gw, gh) = frame_header.size_groups();
++        let num_groups = gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
+         if frame_header.is_visible() {
+             decoder_state.visible_frame_index += 1;
+             decoder_state.nonvisible_frame_index = 0;
+@@ -243,8 +245,8 @@ impl Frame {
+         Ok(Self {
+             #[cfg(test)]
+             use_simple_pipeline: decoder_state.use_simple_pipeline,
+-            last_rendered_pass: vec![None; frame_header.num_groups()],
+-            incomplete_groups: frame_header.num_groups(),
++            last_rendered_pass: vec![None; num_groups],
++            incomplete_groups: num_groups,
+             header: frame_header,
+             color_channels,
+             toc,
+diff --git a/jxl/src/frame/group.rs b/jxl/src/frame/group.rs
+index 26f0e8f..86eb153 100644
+--- a/jxl/src/frame/group.rs
++++ b/jxl/src/frame/group.rs
+@@ -223,7 +223,10 @@ fn dequant_and_transform_to_pixels<D: Simd>(
+         {
+             let xs = covered_blocks_x(transform_type) as usize;
+             let ys = covered_blocks_y(transform_type) as usize;
+-            let rect = lf_rects.as_ref().unwrap()[c];
++            let rect = lf_rects
++                .as_ref()
++                .ok_or(Error::SectionTooShort)?
++                [c];
+             for (y, lf) in lf.chunks_exact_mut(xs).enumerate().take(ys) {
+                 lf.copy_from_slice(&rect.row(y)[0..xs]);
+             }
+diff --git a/jxl/src/api/inner/box_parser.rs b/jxl/src/api/inner/box_parser.rs
+index fce0f7f..020443f 100644
+--- a/jxl/src/api/inner/box_parser.rs
++++ b/jxl/src/api/inner/box_parser.rs
+@@ -360,7 +360,10 @@ impl BoxParser {
+                                     if self.ooo_jxlp.buffered.contains_key(&idx) {
+                                         return Err(Error::InvalidBox);
+                                     }
+-                                    if content_len == u64::MAX {
++                                    const MAX_BUFFERED_OOO_JXLP: u64 = 16 * 1024 * 1024;
++                                    if content_len == u64::MAX
++                                        || content_len > MAX_BUFFERED_OOO_JXLP
++                                    {
+                                         return Err(Error::InvalidBox);
+                                     }
+                                     self.state = ParseState::BufferingOooJxlp {

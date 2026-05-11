@@ -1,0 +1,52 @@
+diff --git a/src/codecs/bmp/decoder.rs b/src/codecs/bmp/decoder.rs
+index 32ada00..691be7b 100644
+--- a/src/codecs/bmp/decoder.rs
++++ b/src/codecs/bmp/decoder.rs
+@@ -597,5 +597,9 @@
+     /// read_image_data was called before read_metadata completed
+     MetadataNotRead,
+     /// Corrupt RLE data
+     CorruptRleData,
++    /// V5 header declares an embedded ICC profile larger than we will load
++    IccProfileTooLarge(u32),
++    /// ICC profile offset/size do not fit in the input stream
++    IccProfileOutOfRange,
+ }
+@@ -640,4 +644,10 @@
+             DecoderError::MetadataNotRead => {
+                 f.write_str("read_image_data called before read_metadata completed")
+             }
++            DecoderError::IccProfileTooLarge(sz) => {
++                f.write_fmt(format_args!("Embedded ICC profile size ({sz}) is too large"))
++            }
++            DecoderError::IccProfileOutOfRange => f.write_str(
++                "Embedded ICC profile offset/size extend past end of BMP stream",
++            ),
+         }
+@@ -1468,8 +1468,26 @@
+     /// Read ICC profile data from the file.
+     fn read_icc_profile(&mut self, icc: &ParsedIccProfile) -> ImageResult<()> {
++        // Real embedded profiles are small (typically < 4 MiB). Reject absurd sizes so
++        // adversarial headers cannot force multi-gigabyte allocations before we know
++        // the stream can supply the bytes.
++        const MAX_ICC_PROFILE_BYTES: u64 = 32 * 1024 * 1024;
++        let profile_len = u64::from(icc.profile_size);
++        if profile_len > MAX_ICC_PROFILE_BYTES {
++            return Err(DecoderError::IccProfileTooLarge(icc.profile_size).into());
++        }
++
++        let stream_len = self.reader.seek(SeekFrom::End(0))?;
++        let end = icc
++            .profile_offset
++            .checked_add(profile_len)
++            .ok_or(DecoderError::IccProfileOutOfRange)?;
++        if icc.profile_offset > stream_len || end > stream_len {
++            return Err(DecoderError::IccProfileOutOfRange.into());
++        }
++
+         self.reader.seek(SeekFrom::Start(icc.profile_offset))?;
+         let mut profile_data = vec![0u8; icc.profile_size as usize];
+         self.reader.read_exact(&mut profile_data)?;
+         self.icc_profile = Some(profile_data);
+         Ok(())
+     }
