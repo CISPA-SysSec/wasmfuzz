@@ -1,8 +1,17 @@
 diff --git a/fuzz/hashtable.c b/fuzz/hashtable.c
-index 9e9519b865..cfc0f80177 100644
+index 9e9519b865..51e0a35b24 100644
 --- a/fuzz/hashtable.c
 +++ b/fuzz/hashtable.c
-@@ -133,11 +133,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+@@ -120,7 +120,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+     uint8_t op_flags;
+     uint16_t keyval;
+     int rc;
+-    int rc_prediction = 1;
++    int rc_prediction;
+     size_t i;
+     FUZZER_VALUE *valptr, *lval;
+     FUZZER_KEY key;
+@@ -133,17 +133,16 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
       * 1 byte to detect the operation to perform, 2 bytes
       * for the lookup key, and 8 bytes of value
       */
@@ -15,7 +24,16 @@ index 9e9519b865..cfc0f80177 100644
      /*
       * parse out our operation flags and key
       */
-@@ -323,15 +319,6 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+     op_flags = buf[0];
+     memcpy(&keyval, &buf[1], sizeof(uint16_t));
+ 
++    /* Reset per-operation expectation state. */
++    rc_prediction = 1;
++
+     /*
+      * Initialize our key
+      */
+@@ -323,15 +322,6 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
          break;
  
      case OP_FLUSH:
@@ -31,7 +49,7 @@ index 9e9519b865..cfc0f80177 100644
          /*
           * lock the table
           */
-@@ -383,6 +370,10 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+@@ -383,6 +373,10 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
          return -1;
      }
  

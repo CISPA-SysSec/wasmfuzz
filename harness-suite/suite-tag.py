@@ -234,49 +234,6 @@ tag_fuzzbench(
 )
 
 
-# Their harness builds on global mutable state to reach coverage. We patch the
-# harness to do multiple iterations but something's not quite right apparently.
-tag_manually(
-    "openssl-hashtable.wasm",
-    "945cc69f5448b9da2a0ae8ac1e55efa45a442d12",
-    Tag.CRASHING,
-    Tag.BUGGY_PORT,
-)
-
-# Patched upstream pin + harness-suite fix-harness-crashes.patch: bounded Pratt/binary RHS depth,
-# nested `{` dict/set recovery, formatter idempotency fuzz uses 400-col line width, 16MB WASM stack.
-tag_manually(
-    "ruff-ruff_parse_simple.wasm",
-    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
-    Tag.BUGGY_PORT,
-    Tag.SUITE_BUGBENCH,
-)
-tag_manually(
-    "ruff-ruff_parse_idempotency.wasm",
-    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
-    Tag.BUGGY_PORT,
-    Tag.SUITE_BUGBENCH,
-)
-tag_manually(
-    "ruff-ruff_formatter_idempotency.wasm",
-    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
-    Tag.BUGGY_PORT,
-    Tag.SUITE_BUGBENCH,
-)
-tag_manually(
-    "ruff-ruff_fix_validity.wasm",
-    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
-    Tag.BUGGY_PORT,
-    Tag.SUITE_BUGBENCH,
-)
-
-tag_manually(
-    "ruff-ruff_formatter_validity.wasm",
-    "a16e82b1324459e9707a1d349527a0a3ccfebe37",
-    Tag.SUITE_BUGBENCH,
-)
-
-
 # The native port of rustc-demangle is missing updates
 tag_manually(
     "rustc-demangle-native_c.wasm",
@@ -284,10 +241,6 @@ tag_manually(
     Tag.CRASHING,
     Tag.BUGGY_PROJECT,
 )
-
-
-# NULL-deref in ARMT_Convert
-tag_manually("lzma-7z.wasm", "d25e63d8f6b8186d04146cb19405bc5ad565412e", Tag.CRASHING)
 
 
 PROJS = {"libpng", "freetype2", "jsoncpp"}
@@ -360,7 +313,7 @@ for harness in interesting:
         print(f"[WARN] harness {harness} is not in the suite ({tags[harness + ".wasm"] = })")
 
 lod = [
-    "claxon-decode_full", "expat-xml_parsebuffer_UTF-8", "firefox-fuzz_target_qcms",
+    "expat-xml_parsebuffer_UTF-8", "firefox-fuzz_target_qcms",
     "fontations-fuzz_skrifa_outline", "freetype2-ftfuzzer", "goblin-parse",
     "graphite-font", "image-script_png", "image-script_jpeg", "image-script_tiff",
     "image-script_ico", "image-script_webp", "image-script_guess",
@@ -372,7 +325,9 @@ lod = [
     "quick-xml-fuzz_target_1", "sqlite-ossfuzz", "stb-png_read", "symphonia-decode_any",
     "vorbis-decode", "woff2-convert_woff2ttf",
     "x509-parser-certreq", "x509-parser-crl", "x509-parser-x509_parse",
-    "zip2-zip2-read", "zune-image-zune-jpeg-decode_incremental",
+    "zune-image-zune-jpeg-decode_incremental",
+    # TODO: these seem saturated in both lod and no-lod?
+    # "claxon-decode_full", "zip2-zip2-read"
 ]
 for x in lod:
     if x + ".wasm" not in tags:

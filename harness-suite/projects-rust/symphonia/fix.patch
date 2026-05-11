@@ -265,6 +265,29 @@ index a3c4a68..4e108c8 100644
                  HandlerType::Other(hdlr)
              }
          };
+diff --git a/symphonia-metadata/src/ape.rs b/symphonia-metadata/src/ape.rs
+index 6f17161..653dc99 100644
+--- a/symphonia-metadata/src/ape.rs
++++ b/symphonia-metadata/src/ape.rs
+@@ -161,6 +161,8 @@ const APEV1_METADATA_INFO: MetadataInfo =
+     MetadataInfo { metadata: METADATA_ID_APEV1, short_name: "apev1", long_name: "APEv1" };
+ const APEV2_METADATA_INFO: MetadataInfo =
+     MetadataInfo { metadata: METADATA_ID_APEV2, short_name: "apev2", long_name: "APEv2" };
++/// Upper bound for one APE item payload to avoid hostile huge allocations.
++const MAX_APE_ITEM_VALUE_BYTES: usize = 32 * 1024 * 1024;
+ 
+ /// The APE tag version.
+ #[derive(PartialEq, Eq)]
+@@ -251,6 +253,9 @@ impl ApeItem {
+     fn read<B: ReadBytes>(reader: &mut B, header: &ApeHeader) -> Result<ApeItem> {
+         // The length of the value in bytes.
+         let len = reader.read_u32()? as usize;
++        if len > MAX_APE_ITEM_VALUE_BYTES {
++            return decode_error("ape: item value length exceeds limit");
++        }
+ 
+         // Read flags.
+         let flags = match header.version {
 diff --git a/symphonia-metadata/src/embedded/flac.rs b/symphonia-metadata/src/embedded/flac.rs
 index e075197..bf727be 100644
 --- a/symphonia-metadata/src/embedded/flac.rs
@@ -317,8 +340,98 @@ index e075197..bf727be 100644
  
      // Read the image data.
      let data = reader.read_boxed_slice_exact(data_len)?;
+diff --git a/symphonia-metadata/src/embedded/vorbis.rs b/symphonia-metadata/src/embedded/vorbis.rs
+index ab3126b..bf78cdf 100644
+--- a/symphonia-metadata/src/embedded/vorbis.rs
++++ b/symphonia-metadata/src/embedded/vorbis.rs
+@@ -34,6 +34,11 @@ pub const VORBIS_COMMENT_METADATA_INFO: MetadataInfo = MetadataInfo {
+     long_name: "Vorbis Comment",
+ };
+ 
++/// Upper bound for one Vorbis vendor/comment string payload allocation.
++const MAX_VORBIS_COMMENT_BYTES: usize = 32 * 1024 * 1024;
++/// Upper bound for declared Vorbis comment entries.
++const MAX_VORBIS_COMMENT_ENTRIES: usize = 1_000_000;
++
+ lazy_static! {
+     static ref VORBIS_COMMENT_MAP: RawTagParserMap = {
+         let mut m: RawTagParserMap = HashMap::new();
+@@ -372,26 +377,33 @@ pub fn read_vorbis_comment<B: ReadBytes>(
+     side_data: &mut Vec<MetadataSideData>,
+ ) -> Result<()> {
+     // Read the vendor string length in bytes.
+-    let vendor_len = reader.read_u32()?;
++    let vendor_len = reader.read_u32()? as usize;
++    if vendor_len > MAX_VORBIS_COMMENT_BYTES {
++        return decode_error("meta (vorbis): vendor string length exceeds limit");
++    }
+ 
+     // Ignore the vendor string.
+-    reader.ignore_bytes(u64::from(vendor_len))?;
++    reader.ignore_bytes(vendor_len as u64)?;
+ 
+     // Map of chapter number to a vector of chapter information.
+     let mut chapters: BTreeMap<u32, Vec<ChapterInfo>> = Default::default();
+ 
+     // Read the number of comments.
+     let num_comments = reader.read_u32()? as usize;
++    if num_comments > MAX_VORBIS_COMMENT_ENTRIES {
++        return decode_error("meta (vorbis): comment count exceeds limit");
++    }
+ 
+     // Read each comment.
+     for _ in 0..num_comments {
+         // Read the comment string length in bytes.
+-        let comment_length = reader.read_u32()?;
+-
+-        // TODO: Apply a limit.
++        let comment_length = reader.read_u32()? as usize;
++        if comment_length > MAX_VORBIS_COMMENT_BYTES {
++            return decode_error("meta (vorbis): comment length exceeds limit");
++        }
+ 
+         // Read the comment string.
+-        let mut comment_data = vec![0; comment_length as usize];
++        let mut comment_data = vec![0; comment_length];
+         reader.read_buf_exact(&mut comment_data)?;
+ 
+         // Parse the Vorbis comment and handle the parsed output.
+diff --git a/symphonia-metadata/src/id3v2/frames.rs b/symphonia-metadata/src/id3v2/frames.rs
+index e26d57d..bf463c2 100644
+--- a/symphonia-metadata/src/id3v2/frames.rs
++++ b/symphonia-metadata/src/id3v2/frames.rs
+@@ -27,6 +27,9 @@ mod readers;
+ 
+ use readers::*;
+ 
++/// Upper bound for one ID3v2 frame body allocation.
++const MAX_ID3V2_FRAME_DATA_BYTES: u32 = 32 * 1024 * 1024;
++
+ // The following is a list of all standardized ID3v2.x frames for all ID3v2 major versions and their
+ // implementation status ("S" column) in Symphonia.
+ //
+@@ -537,6 +540,9 @@ pub fn read_id3v2p3_frame<B: ReadBytes>(reader: &mut B) -> Result<FrameResult> {
+ 
+     // The size of the frame's body.
+     let data_size = size - flag_data_size;
++    if data_size > MAX_ID3V2_FRAME_DATA_BYTES {
++        return decode_error("id3v2: frame body size exceeds limit");
++    }
+ 
+     // If compression is enabled, read the decompressed size of the frame.
+     let _decompressed_size = if is_compressed { Some(reader.read_be_u32()?) } else { None };
+@@ -642,6 +648,9 @@ pub fn read_id3v2p4_frame<B: ReadBytes + FiniteStream>(reader: &mut B) -> Result
+ 
+     // The size of the frame's body.
+     let data_size = size - flag_data_size;
++    if data_size > MAX_ID3V2_FRAME_DATA_BYTES {
++        return decode_error("id3v2: frame body size exceeds limit");
++    }
+ 
+     // Frame group identifier byte. Used to group a set of frames. The frame group will be added as
+     // a sub-field to all produced tags.
 diff --git a/symphonia/fuzz/fuzz_targets/decode_any.rs b/symphonia/fuzz/fuzz_targets/decode_any.rs
-index 0534d69..d9de293 100644
+index 0534d69..715f356 100644
 --- a/symphonia/fuzz/fuzz_targets/decode_any.rs
 +++ b/symphonia/fuzz/fuzz_targets/decode_any.rs
 @@ -5,8 +5,8 @@ use symphonia::core::formats::{FormatOptions, TrackType};

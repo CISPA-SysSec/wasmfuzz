@@ -1,0 +1,15 @@
+diff --git a/sdk/C/Bra.c b/sdk/C/Bra.c
+index b57c9de..d2d5ecf 100644
+--- a/sdk/C/Bra.c
++++ b/sdk/C/Bra.c
+@@ -66,6 +66,10 @@ SizeT ARMT_Convert(Byte *data, SizeT size, UInt32 ip, int encoding)
+   Byte *p;
+   const Byte *lim;
+   size &= ~(size_t)1;
++  if (size < 4) {
++    return 0;
++  }
++
+   p = data;
+   lim = data + size - 4;
+ 

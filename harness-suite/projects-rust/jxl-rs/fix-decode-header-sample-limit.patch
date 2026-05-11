@@ -13,8 +13,55 @@ index 0f56728..6f1b4c2 100644
      let initialized_decoder = JxlDecoder::<states::Initialized>::new(decoder_options);
      let _ = initialized_decoder.process(&mut data);
  });
+diff --git a/jxl/fuzz/fuzz_targets/decode.rs b/jxl/fuzz/fuzz_targets/decode.rs
+index e2966b4..442c79d 100644
+--- a/jxl/fuzz/fuzz_targets/decode.rs
++++ b/jxl/fuzz/fuzz_targets/decode.rs
+@@ -38,12 +38,24 @@ fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
+         let decoder_with_frame_info = as_complete(decoder_with_image_info.process(&mut data))?;
+         let frame_header = decoder_with_frame_info.frame_header();
+         let frame_size = frame_header.size;
++        let frame_pixels = frame_size.0.checked_mul(frame_size.1).ok_or(())?;
++        const MAX_FRAME_PIXELS: usize = 1 << 22;
++        if frame_pixels >= MAX_FRAME_PIXELS {
++            return Err(());
++        }
++
++        let row_samples = frame_size.0.checked_mul(samples_per_pixel).ok_or(())?;
++        let output_samples = row_samples.checked_mul(frame_size.1).ok_or(())?;
++        const MAX_OUTPUT_SAMPLES: usize = 1 << 22;
++        if output_samples >= MAX_OUTPUT_SAMPLES {
++            return Err(());
++        }
+ 
+         let mut outputs =
+-            vec![Image::<f32>::new((frame_size.0 * samples_per_pixel, frame_size.1)).unwrap()];
++            vec![Image::<f32>::new((row_samples, frame_size.1)).map_err(|_| ())?];
+ 
+         for _ in 0..extra_channels {
+-            outputs.push(Image::<f32>::new(frame_size).unwrap());
++            outputs.push(Image::<f32>::new(frame_size).map_err(|_| ())?);
+         }
+ 
+         let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
+diff --git a/jxl/src/api/inner/box_parser.rs b/jxl/src/api/inner/box_parser.rs
+index 6471b92..c1bab95 100644
+--- a/jxl/src/api/inner/box_parser.rs
++++ b/jxl/src/api/inner/box_parser.rs
+@@ -360,7 +360,10 @@ impl BoxParser {
+                                     if self.ooo_jxlp.buffered.contains_key(&idx) {
+                                         return Err(Error::InvalidBox);
+                                     }
+-                                    if content_len == u64::MAX {
++                                    const MAX_BUFFERED_OOO_JXLP: u64 = 16 * 1024 * 1024;
++                                    if content_len == u64::MAX
++                                        || content_len > MAX_BUFFERED_OOO_JXLP
++                                    {
+                                         return Err(Error::InvalidBox);
+                                     }
+                                     self.state = ParseState::BufferingOooJxlp {
 diff --git a/jxl/src/api/inner/codestream_parser/non_section.rs b/jxl/src/api/inner/codestream_parser/non_section.rs
-index cc35fae..732394a 100644
+index cc35fae..3e10767 100644
 --- a/jxl/src/api/inner/codestream_parser/non_section.rs
 +++ b/jxl/src/api/inner/codestream_parser/non_section.rs
 @@ -231,12 +231,25 @@ impl CodestreamParser {
@@ -24,13 +71,13 @@ index cc35fae..732394a 100644
 +            let (gw, gh) = frame_header.size_groups();
 +            let ng = gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
 +            const MAX_GRID_CELLS: usize = 1 << 22;
-+            if ng > MAX_GRID_CELLS {
++            if ng >= MAX_GRID_CELLS {
 +                return Err(Error::ImageDimensionTooLarge(ng as u64));
 +            }
 +            if let Some(limit) = decode_options.sample_limit {
-+                let (pw, ph) = frame_header.size_padded();
++                let (pw, ph) = frame_header.size_padded_upsampled();
 +                check_size_limit(Some(limit), (pw, ph), frame_header.num_extra_channels as usize)?;
-+                if ng > limit {
++                if ng >= limit {
 +                    return Err(Error::ImageDimensionTooLarge(ng as u64));
 +                }
 +            }
@@ -44,7 +91,58 @@ index cc35fae..732394a 100644
                  .map(|_| (0..frame_header.passes.num_passes).map(|_| None).collect())
                  .collect();
              self.candidate_hf_sections.clear();
-@@ -325,32 +338,36 @@ impl CodestreamParser {
+@@ -251,8 +264,28 @@ impl CodestreamParser {
+             let mut br = BitReader::new(&self.non_section_buf);
+             br.skip_bits(self.non_section_bit_offset as usize)?;
+             if self.toc_parser.is_none() {
+-                let num_toc_entries = self.frame_header.as_ref().unwrap().num_toc_entries();
+-                self.toc_parser = Some(IncrementalTocReader::new(num_toc_entries as u32, &mut br)?);
++                let fh = self.frame_header.as_ref().unwrap();
++                let (gw, gh) = fh.size_groups();
++                let ng = gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
++                let (lw, lh) = fh.size_lf_groups();
++                let nl = lw.checked_mul(lh).ok_or(Error::SizeOverflow)?;
++                let np = fh.passes.num_passes as usize;
++                let num_toc_entries = if ng == 1 && np == 1 {
++                    1usize
++                } else {
++                    ng.checked_mul(np)
++                        .and_then(|x| nl.checked_add(x))
++                        .and_then(|x| 2usize.checked_add(x))
++                        .ok_or(Error::SizeOverflow)?
++                };
++                const MAX_TOC_ENTRIES_USIZE: usize = 1 << 22;
++                if num_toc_entries > MAX_TOC_ENTRIES_USIZE {
++                    return Err(Error::ImageDimensionTooLarge(num_toc_entries as u64));
++                }
++                self.toc_parser = Some(IncrementalTocReader::new(
++                    num_toc_entries as u32,
++                    &mut br,
++                )?);
+             }
+ 
+             let toc_parser = self.toc_parser.as_mut().unwrap();
+@@ -292,6 +325,19 @@ impl CodestreamParser {
+             self.toc_parser.take().unwrap().finalize()
+         };
+ 
++        const MAX_TOTAL_SECTION_BYTES: usize = 64 * 1024 * 1024;
++        let max_section_bytes = decode_options
++            .sample_limit
++            .map(|limit| limit.saturating_mul(8))
++            .unwrap_or(MAX_TOTAL_SECTION_BYTES)
++            .min(MAX_TOTAL_SECTION_BYTES);
++        let total_section_bytes = toc.entries.iter().try_fold(0usize, |acc, &entry| {
++            acc.checked_add(entry as usize).ok_or(Error::SizeOverflow)
++        })?;
++        if total_section_bytes > max_section_bytes {
++            return Err(Error::ImageDimensionTooLarge(total_section_bytes as u64));
++        }
++
+         let mut frame = Frame::from_header_and_toc(
+             self.frame_header.take().unwrap(),
+             toc,
+@@ -325,32 +358,36 @@ impl CodestreamParser {
          self.ready_section_data = 0;
  
          // Move data from the pre-section buffer into the sections.
@@ -118,7 +216,7 @@ index 2870225..cb09e44 100644
  
      pub(super) fn can_read_more(&self) -> bool {
 diff --git a/jxl/src/frame/decode.rs b/jxl/src/frame/decode.rs
-index 82d091e..51ea9d2 100644
+index 82d091e..93dbe79 100644
 --- a/jxl/src/frame/decode.rs
 +++ b/jxl/src/frame/decode.rs
 @@ -156,6 +156,8 @@ impl Frame {
@@ -130,6 +228,24 @@ index 82d091e..51ea9d2 100644
          if frame_header.is_visible() {
              decoder_state.visible_frame_index += 1;
              decoder_state.nonvisible_frame_index = 0;
+@@ -211,7 +213,7 @@ impl Frame {
+             let image_size = &decoder_state.file_header.size;
+             let image_size = (image_size.xsize() as usize, image_size.ysize() as usize);
+             let sz = if frame_header.save_before_ct {
+-                frame_header.size_upsampled()
++                frame_header.size()
+             } else {
+                 image_size
+             };
+@@ -229,7 +231,7 @@ impl Frame {
+         let lf_frame_data = if frame_header.lf_level != 0 {
+             Some(
+                 (0..3)
+-                    .map(|_| Image::new(frame_header.size_upsampled()))
++                    .map(|_| Image::new(frame_header.size()))
+                     .collect::<Result<Vec<_>, _>>()?
+                     .try_into()
+                     .unwrap(),
 @@ -243,8 +245,8 @@ impl Frame {
          Ok(Self {
              #[cfg(test)]
@@ -141,11 +257,21 @@ index 82d091e..51ea9d2 100644
              header: frame_header,
              color_channels,
              toc,
+@@ -337,7 +339,8 @@ impl Frame {
+ 
+             if self.header.has_splines() {
+                 info!("decoding splines");
+-                let s = Splines::read(br, self.header.width * self.header.height)?;
++                let spline_area = self.header.size().0.saturating_mul(self.header.size().1);
++                let s = Splines::read(br, u32::try_from(spline_area).unwrap_or(u32::MAX))?;
+                 *self.splines.borrow_mut() = s;
+             }
+ 
 diff --git a/jxl/src/frame/group.rs b/jxl/src/frame/group.rs
-index 26f0e8f..86eb153 100644
+index b7d8021..952eeea 100644
 --- a/jxl/src/frame/group.rs
 +++ b/jxl/src/frame/group.rs
-@@ -223,7 +223,10 @@ fn dequant_and_transform_to_pixels<D: Simd>(
+@@ -223,7 +223,10 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
          {
              let xs = covered_blocks_x(transform_type) as usize;
              let ys = covered_blocks_y(transform_type) as usize;
@@ -157,19 +283,72 @@ index 26f0e8f..86eb153 100644
              for (y, lf) in lf.chunks_exact_mut(xs).enumerate().take(ys) {
                  lf.copy_from_slice(&rect.row(y)[0..xs]);
              }
-diff --git a/jxl/src/api/inner/box_parser.rs b/jxl/src/api/inner/box_parser.rs
-index fce0f7f..020443f 100644
---- a/jxl/src/api/inner/box_parser.rs
-+++ b/jxl/src/api/inner/box_parser.rs
-@@ -360,7 +360,10 @@ impl BoxParser {
-                                     if self.ooo_jxlp.buffered.contains_key(&idx) {
-                                         return Err(Error::InvalidBox);
-                                     }
--                                    if content_len == u64::MAX {
-+                                    const MAX_BUFFERED_OOO_JXLP: u64 = 16 * 1024 * 1024;
-+                                    if content_len == u64::MAX
-+                                        || content_len > MAX_BUFFERED_OOO_JXLP
-+                                    {
-                                         return Err(Error::InvalidBox);
-                                     }
-                                     self.state = ParseState::BufferingOooJxlp {
+diff --git a/jxl/src/headers/permutation.rs b/jxl/src/headers/permutation.rs
+index c189c0b..c14e0cd 100644
+--- a/jxl/src/headers/permutation.rs
++++ b/jxl/src/headers/permutation.rs
+@@ -39,12 +39,17 @@ impl Permutation {
+         })
+     }
+ 
++    #[inline(never)]
+     fn decode_inner(
+         size: u32,
+         skip: u32,
+         end: u32,
+         mut read: impl FnMut(usize) -> Result<u32>,
+     ) -> Result<Self> {
++        const MAX_PERM: u32 = 1 << 22;
++        if size > MAX_PERM {
++            return Err(Error::ImageDimensionTooLarge(size as u64));
++        }
+         if end > size - skip {
+             return Err(Error::InvalidPermutationSize { size, skip, end });
+         }
+diff --git a/jxl/src/headers/toc.rs b/jxl/src/headers/toc.rs
+index eecbe8e..6d30c5f 100644
+--- a/jxl/src/headers/toc.rs
++++ b/jxl/src/headers/toc.rs
+@@ -43,6 +43,10 @@ pub struct IncrementalTocReader {
+ 
+ impl IncrementalTocReader {
+     pub fn new(num_entries: u32, br: &mut BitReader) -> Result<Self> {
++        const MAX_TOC_ENTRIES: u32 = 1 << 22;
++        if num_entries > MAX_TOC_ENTRIES {
++            return Err(Error::ImageDimensionTooLarge(num_entries as u64));
++        }
+         let permuted = bool::read_unconditional(&(), br, &Empty {})?;
+         let mut entries = Vec::new();
+         entries.try_reserve(num_entries as usize)?;
+diff --git a/jxl/src/frame/render.rs b/jxl/src/frame/render.rs
+index d20d693..edd57df 100644
+--- a/jxl/src/frame/render.rs
++++ b/jxl/src/frame/render.rs
+@@ -23,7 +23,7 @@ use crate::headers::frame_header::FrameType;
+ use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
+ use crate::image::Image;
+ use crate::image::Rect;
+-use crate::util::AtomicRefCell;
++use crate::util::{AtomicRefCell, ShiftRightCeil};
+ use std::sync::Arc;
+ 
+ #[cfg(test)]
+@@ -360,6 +360,18 @@ impl Frame {
+         let num_channels = frame_header.num_extra_channels as usize + 3;
+         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
+         let metadata = &decoder_state.file_header.image_metadata;
++        // Match `RenderPipelineBuilder::new_with_chunk_size`: pipeline allocates
++        // O(group_chan_complete.len()) structures; bound before constructing the builder.
++        const MAX_RENDER_PIPELINE_GRID_CELLS: usize = 1 << 22;
++        let downsampling_shift = frame_header.upsampling.ilog2() as usize;
++        let log_group_size = frame_header.log_group_dim() + downsampling_shift;
++        let (uw, uh) = frame_header.size_upsampled();
++        let gw = uw.shrc(log_group_size);
++        let gh = uh.shrc(log_group_size);
++        let grid_cells = gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
++        if grid_cells >= MAX_RENDER_PIPELINE_GRID_CELLS {
++            return Err(Error::ImageDimensionTooLarge(grid_cells as u64));
++        }
+         let mut pipeline = RenderPipelineBuilder::<T>::new(
+             num_channels + num_temp_channels,
+             frame_header.size_upsampled(),
