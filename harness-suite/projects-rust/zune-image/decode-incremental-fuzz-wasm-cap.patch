@@ -1,0 +1,30 @@
+diff --git a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs b/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
+--- a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
++++ b/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
+@@ -123,7 +123,16 @@ fuzz_target!(|data: &[u8]| {
+     // we only require that the incremental path doesn't panic and reaches
+     // a terminal state.
+     let mut oneshot = JpegDecoder::new(ZCursor::new(payload));
+-    let oneshot_pixels = oneshot.decode().ok();
++    // Mirror the size cap used for the incremental path so adversarial inputs
++    // claiming hundreds of MB of pixels cannot OOM the WASM guest before we
++    // reach the incremental code under test.
++    if oneshot.decode_headers().is_err() {
++        return;
++    }
++    let oneshot_pixels = match oneshot.output_buffer_size() {
++        Some(s) if s <= 8 * 1024 * 1024 => oneshot.decode().ok(),
++        _ => return,
++    };
+     let oneshot_icc = oneshot.icc_profile();
+
+     // Drive the incremental path on the same decoder instance.
+@@ -149,7 +157,7 @@ fuzz_target!(|data: &[u8]| {
+             Ok(()) => {
+                 headers_done = true;
+                 let size = match decoder.output_buffer_size() {
+-                    Some(s) if s <= 64 * 1024 * 1024 => s,
++                    Some(s) if s <= 8 * 1024 * 1024 => s,
+                     _ => return // refuse implausibly large allocations
+                 };
+                 out = vec![0_u8; size];

@@ -203,6 +203,24 @@ diff --git a/jxl/src/api/inner/process.rs b/jxl/src/api/inner/process.rs
 index 2870225..cb09e44 100644
 --- a/jxl/src/api/inner/process.rs
 +++ b/jxl/src/api/inner/process.rs
+@@ -31,15 +31,15 @@ impl SmallBuffer {
+     ) -> Result<usize> {
+         let mut total = 0;
+         loop {
+-            if self.range.start >= self.buf.len() / 2 {
++            if self.range.start != 0 && self.range.start.saturating_mul(2) >= self.buf.len() {
+                 let start = self.range.start;
+                 let len = self.range.len();
+                 let (pre, post) = self.buf.split_at_mut(start);
+                 pre[0..len].copy_from_slice(&post[0..len]);
+                 self.range.start -= start;
+                 self.range.end -= start;
+             }
+-            if self.range.len() >= self.buf.len() / 2 {
++            if self.range.len().saturating_mul(2) >= self.buf.len() {
+                 break;
+             }
+             let stop = if let Some(max) = max {
 @@ -111,7 +111,10 @@ impl SmallBuffer {
  
      pub(super) fn enlarge(&mut self) {
@@ -352,3 +370,25 @@ index d20d693..edd57df 100644
          let mut pipeline = RenderPipelineBuilder::<T>::new(
              num_channels + num_temp_channels,
              frame_header.size_upsampled(),
+
+diff --git a/jxl/src/api/inner/codestream_parser/mod.rs b/jxl/src/api/inner/codestream_parser/mod.rs
+index dd650c3..a992cd0 100644
+--- a/jxl/src/api/inner/codestream_parser/mod.rs
++++ b/jxl/src/api/inner/codestream_parser/mod.rs
+@@ -461,10 +461,12 @@ impl CodestreamParser {
+                         }
+                         let len = buf.data.len();
+                         if len > ready {
+-                            let readable = (available_codestream + ready).min(len);
+-                            section_buffers.push(IoSliceMut::new(&mut buf.data[ready..readable]));
+-                            available_codestream =
+-                                available_codestream.saturating_sub(readable - ready);
++                            let end = (available_codestream + ready).min(len);
++                            if end > ready {
++                                section_buffers.push(IoSliceMut::new(&mut buf.data[ready..end]));
++                                available_codestream =
++                                    available_codestream.saturating_sub(end - ready);
++                            }
+                             if available_codestream == 0 {
+                                 break;
+                             }

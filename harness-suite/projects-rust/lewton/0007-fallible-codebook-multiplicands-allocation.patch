@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wasm fuzz harness <harness@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH 7/7] make codebook multiplicands allocation fallible
+
+Avoid abort-on-OOM in wasm32 when malformed setup headers request
+very large codebook multiplicand arrays.
+
+---
+ src/header.rs | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/header.rs b/src/header.rs
+--- a/src/header.rs
++++ b/src/header.rs
+@@ -762,7 +762,10 @@ fn read_codebook(rdr :&mut BitpackCursor) -> Result<Codebook, HeaderReadError> {
+ 		if multiplicands_cap > max_u32_elems {
+ 			try!(Err(HeaderReadError::BufferNotAddressable));
+ 		}
+-		let mut codebook_multiplicands = Vec::with_capacity(multiplicands_cap);
++		let mut codebook_multiplicands = Vec::new();
++		if codebook_multiplicands.try_reserve_exact(multiplicands_cap).is_err() {
++			try!(Err(HeaderReadError::BufferNotAddressable));
++		}
+ 		for _ in 0 .. codebook_lookup_values {
+ 			codebook_multiplicands.push(try!(rdr.read_dyn_u32(codebook_value_bits)));
+ 		}
+-- 
+2.46.0
+

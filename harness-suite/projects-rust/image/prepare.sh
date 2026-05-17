@@ -12,4 +12,10 @@ patch -d "$PROJECT/zune-jpeg" -p1 <"$PROJECT/zune-jpeg-mcu-scratch.patch"
 patch -d "$PROJECT/image-webp" -p1 <"$PROJECT/image-webp-lossless-temp-limit.patch"
 rm -f "$PROJECT/zune-jpeg.crate" "$PROJECT/image-webp.crate"
 
+curl -fsSL -o "$PROJECT/png.crate" https://static.crates.io/crates/png/0.18.1/download
+mkdir -p "$PROJECT/png"
+tar -xzf "$PROJECT/png.crate" -C "$PROJECT/png" --strip-components=1
+patch -d "$PROJECT/png" -p1 <"$PROJECT/fix-png-palette-partial.patch"
+rm -f "$PROJECT/png.crate"
+
 git -C "$PROJECT/repo" apply "$PROJECT/fix-jpeg-webp-image.patch"

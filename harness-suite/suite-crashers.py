@@ -17,6 +17,7 @@ parser.add_argument("--ooms-dir", default="./ooms")
 parser.add_argument("--timeouts-dir", default="./timeouts")
 parser.add_argument("--tags", default="./tags.csv")
 parser.add_argument("--only-target", default=None)
+parser.add_argument("--skip-target", default=None)
 parser.add_argument("--mode", default="crash")
 
 args = parser.parse_args()
@@ -37,6 +38,12 @@ assert all(x.exists() for x in [harness_dir, mode_path, tags_path])
 if not corpus_dir.exists():
     print("[!] corpus directory not found, can't cross-check")
 
+def should_skip(harness):
+    if args.only_target is not None and args.only_target not in harness:
+        return True
+    if args.skip_target is not None and args.skip_target in harness:
+        return True
+    return False
 
 def check_reproduces(harness_path, crash_path, mode="crash"):
     print(f"[*] reproducing {crash_path} ...")
@@ -84,7 +91,7 @@ def check_harness(harness_path):
 
 
 for harness_path in harness_paths:
-    if args.only_target is not None and args.only_target not in harness_path.name:
+    if should_skip(harness_path.name):
         continue
     check_harness(harness_path)
 
@@ -93,17 +100,17 @@ if mode == "crash":
     with open(tags_path) as f:
         for row in csv.DictReader(f):
             harness = Path(row["harness"]).name
-            if args.only_target is not None and args.only_target not in harness:
+            if should_skip(harness):
                 continue
             tagged_crash = row["crashing"] and bool(int(row["crashing"]))
             if tagged_crash != (harness in verified):
                 mismatches.add(harness)
 
 for input_path in mode_path.glob("*.bin"):
-    if args.only_target is not None and args.only_target not in input_path.stem:
-        continue
     harness = input_path.stem
     harness_path = harness_dir / f"{harness}.wasm"
+    if should_skip(harness):
+        continue
     if not harness_path.exists():
         print(f"[!] {harness}: Missing harness!")
 
@@ -113,7 +120,7 @@ print(f"{len(mismatches)} mismatches found" + ".:"[bool(mismatches)])
 with open(tags_path) as f:
     for row in csv.DictReader(f):
         harness = Path(row["harness"])
-        if args.only_target is not None and args.only_target not in harness.name:
+        if should_skip(harness.name):
             continue
         input_path = mode_path / f"{harness.stem}.bin"
         tagged_crash = row["crashing"] and bool(int(row["crashing"]))

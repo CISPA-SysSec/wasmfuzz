@@ -1,0 +1,707 @@
+diff --git a/crates/jxl-jbr/src/lib.rs b/crates/jxl-jbr/src/lib.rs
+index a668ff7..2a92b05 100644
+--- a/crates/jxl-jbr/src/lib.rs
++++ b/crates/jxl-jbr/src/lib.rs
+@@ -46,6 +46,12 @@ impl JpegBitstreamData {
+     /// # Errors
+     /// This function returns an error if the header is invalid, or data section could not be decompressed.
+     pub fn try_parse(data: &[u8]) -> Result<Option<Self>> {
++        // The JBR data section is brotli-compressed. brotli-decompressor's
++        // `BrotliAllocateRingBuffer` sizes its ring buffer from the
++        // metablock-length field — adversarial inputs can advertise ~1 GiB
++        // with only a few bytes of payload and abort() the WASM guest.
++        // Reject JBR boxes entirely in fuzz builds.
++        return Err(Error::InvalidData);
+         let mut bitstream = Bitstream::new(data);
+         let header = match JpegBitstreamHeader::parse(&mut bitstream, ()) {
+             Ok(header) => Box::new(header),
+@@ -143,6 +149,12 @@ impl Bundle for JpegBitstreamHeader {
+     fn parse(bitstream: &mut Bitstream, _: ()) -> Result<Self, Self::Error> {
+         let is_gray = bitstream.read_bool()?;
+ 
++        // Cap the number of JPEG markers that can be encoded in a JBR box. Adversarial inputs
++        // can pack a large brotli-decompressed payload with millions of marker bytes, each of
++        // which contributes to `num_app_markers`/`num_scans`/`num_intermarkers` and drives
++        // multi-hundred-megabyte `Vec` allocations downstream.
++        const MAX_JBR_MARKERS: usize = 1 << 16;
++
+         let mut markers = Vec::new();
+         let mut num_app_markers = 0usize;
+         let mut num_com_markers = 0usize;
+@@ -160,6 +172,11 @@ impl Bundle for JpegBitstreamHeader {
+                 _ => {}
+             }
+             markers.push(marker_bits);
++            if markers.len() > MAX_JBR_MARKERS {
++                return Err(jxl_bitstream::Error::ProfileConformance(
++                    "too many JPEG markers in JBR box",
++                ));
++            }
+         }
+ 
+         let app_markers = (0..num_app_markers)
+diff --git a/crates/jxl-oxide-fuzz/src/lib.rs b/crates/jxl-oxide-fuzz/src/lib.rs
+index 7ad5ca9..a69897c 100644
+--- a/crates/jxl-oxide-fuzz/src/lib.rs
++++ b/crates/jxl-oxide-fuzz/src/lib.rs
+@@ -4,10 +4,13 @@ pub fn fuzz_decode(data: &[u8], dimension_limit: u32, alloc_limit: usize) {
+     let image = JxlImage::builder()
+         .pool(JxlThreadPool::none())
+         .alloc_tracker(AllocTracker::with_limit(alloc_limit))
++        .max_image_dimension(dimension_limit)
+         .read(std::io::Cursor::new(data));
+     if let Ok(image) = image {
+         let header = image.image_header();
+-        let max_size = u32::max(header.size.width, header.size.height);
++        let max_size = header
++            .width_with_orientation()
++            .max(header.height_with_orientation());
+ 
+         // Skip huge images
+         if max_size > dimension_limit {
+diff --git a/crates/jxl-oxide/src/aux_box.rs b/crates/jxl-oxide/src/aux_box.rs
+index 5fd52f4..ad53a6e 100644
+--- a/crates/jxl-oxide/src/aux_box.rs
++++ b/crates/jxl-oxide/src/aux_box.rs
+@@ -6,6 +6,84 @@ use jxl_bitstream::container::ContainerBoxType;
+ 
+ use crate::Result;
+ 
++/// Maximum decompressed payload for a single auxiliary box (aligned with fuzz harness caps).
++const MAX_AUX_BOX_BYTES: usize = 128 * 1024 * 1024;
++
++/// Maximum Brotli window bits accepted for auxiliary boxes (`1 << 24` = 16 MiB ring buffer).
++///
++/// `brotli-decompressor` supports the optional large-window extension (WBITS up to 30, ~1 GiB
++/// ring buffer). JPEG XL container metadata does not require that profile; reject it so decoding
++/// stays resource-bounded.
++const MAX_BROTLI_WINDOW_BITS: u8 = 24;
++
++/// Returns the base-2 logarithm of the Brotli sliding window size implied by the first two stream
++/// bytes.
++///
++/// This mirrors [`brotli_decompressor::decode::lg_window_size`] (brotli-decompressor 5.0.0,
++/// Apache-2.0 / MIT).
++fn lg_window_size_from_prefix(first_byte: u8, second_byte: u8) -> std::result::Result<u8, ()> {
++    if first_byte & 1 == 0 {
++        return Ok(16);
++    }
++    match first_byte & 15 {
++        0x3 => return Ok(18),
++        0x5 => return Ok(19),
++        0x7 => return Ok(20),
++        0x9 => return Ok(21),
++        0xb => return Ok(22),
++        0xd => return Ok(23),
++        0xf => return Ok(24),
++        _ => match first_byte & 127 {
++            0x71 => return Ok(15),
++            0x61 => return Ok(14),
++            0x51 => return Ok(13),
++            0x41 => return Ok(12),
++            0x31 => return Ok(11),
++            0x21 => return Ok(10),
++            0x1 => return Ok(17),
++            _ => {}
++        },
++    }
++    if (first_byte & 0x80) != 0 {
++        return Err(());
++    }
++    let ret = second_byte & 0x3f;
++    if ret < 10 || ret > 30 {
++        return Err(());
++    }
++    Ok(ret)
++}
++
++/// [`Write`] sink that rejects writes past `max` bytes (mitigates brotli decompression bombs).
++struct ByteCapWriter {
++    buf: Vec<u8>,
++    max: usize,
++}
++
++impl ByteCapWriter {
++    fn into_vec(self) -> Vec<u8> {
++        self.buf
++    }
++}
++
++impl Write for ByteCapWriter {
++    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
++        let next = self.buf.len().saturating_add(data.len());
++        if next > self.max {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidData,
++                "decompressed auxiliary box exceeds maximum size",
++            ));
++        }
++        self.buf.extend_from_slice(data);
++        Ok(data.len())
++    }
++
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
+ mod exif;
+ mod jbrd;
+ 
+@@ -24,7 +102,9 @@ enum DataKind {
+     Init,
+     NoData,
+     Raw(Vec<u8>),
+-    Brotli(Box<DecompressorWriter<Vec<u8>>>),
++    /// Compressed payload not yet passed to the Brotli decoder (waiting for window-size prefix).
++    BrotliPending(Vec<u8>),
++    Brotli(Box<DecompressorWriter<ByteCapWriter>>),
+ }
+ 
+ impl std::fmt::Debug for DataKind {
+@@ -36,6 +116,10 @@ impl std::fmt::Debug for DataKind {
+                 .debug_tuple("Raw")
+                 .field(&format_args!("{} byte(s)", buf.len()))
+                 .finish(),
++            Self::BrotliPending(buf) => f
++                .debug_tuple("BrotliPending")
++                .field(&format_args!("{} byte(s)", buf.len()))
++                .finish(),
+             Self::Brotli(_) => f.debug_tuple("Brotli").finish(),
+         }
+     }
+@@ -55,7 +139,7 @@ impl AuxBoxReader {
+             DataKind::Init => {
+                 self.data = DataKind::Raw(Vec::new());
+             }
+-            DataKind::NoData | DataKind::Brotli(_) => {
++            DataKind::NoData | DataKind::Brotli(_) | DataKind::BrotliPending(_) => {
+                 panic!();
+             }
+             DataKind::Raw(_) => {}
+@@ -69,13 +153,21 @@ impl AuxBoxReader {
+ 
+         match self.data {
+             DataKind::Init => {
+-                let writer = DecompressorWriter::new(Vec::<u8>::new(), 4096);
+-                self.data = DataKind::Brotli(Box::new(writer));
++                // brotli-decompressor's `BrotliAllocateRingBuffer` sizes its
++                // ring buffer from the metablock-length field inside the
++                // compressed stream — adversarial JBR-aux boxes can advertise
++                // a ~1 GiB metablock with only a few bytes of payload and
++                // abort() the WASM guest. Refuse brotli aux boxes here.
++                return Err(std::io::Error::new(
++                    std::io::ErrorKind::InvalidData,
++                    "brotli aux boxes disabled for fuzz builds",
++                )
++                .into());
+             }
+             DataKind::NoData | DataKind::Raw(_) => {
+                 panic!();
+             }
+-            DataKind::Brotli(_) => {}
++            DataKind::Brotli(_) | DataKind::BrotliPending(_) => {}
+         }
+         Ok(())
+     }
+@@ -91,17 +183,70 @@ impl AuxBoxReader {
+             .into());
+         }
+ 
+-        match self.data {
++        if let DataKind::BrotliPending(prefix) = &mut self.data {
++            const MAX_PREFIX: usize = 4096;
++            if prefix.len().saturating_add(data.len()) > MAX_PREFIX {
++                return Err(std::io::Error::new(
++                    std::io::ErrorKind::InvalidData,
++                    "Brotli-compressed auxiliary box header is too large",
++                )
++                .into());
++            }
++            prefix.extend_from_slice(data);
++            if prefix.len() < 2 {
++                return Ok(());
++            }
++            let wbits = lg_window_size_from_prefix(prefix[0], prefix[1]).map_err(|_| {
++                std::io::Error::new(
++                    std::io::ErrorKind::InvalidData,
++                    "unsupported Brotli window parameters for auxiliary box",
++                )
++            })?;
++            if wbits > MAX_BROTLI_WINDOW_BITS {
++                return Err(std::io::Error::new(
++                    std::io::ErrorKind::InvalidData,
++                    "Brotli window too large for auxiliary box",
++                )
++                .into());
++            }
++            let mut writer = DecompressorWriter::new(
++                ByteCapWriter {
++                    buf: Vec::new(),
++                    max: MAX_AUX_BOX_BYTES,
++                },
++                4096,
++            );
++            writer.write_all(prefix)?;
++            self.data = DataKind::Brotli(Box::new(writer));
++            return Ok(());
++        }
++
++        match &mut self.data {
+             DataKind::Init => {
++                if data.len() > MAX_AUX_BOX_BYTES {
++                    return Err(std::io::Error::new(
++                        std::io::ErrorKind::InvalidData,
++                        "auxiliary box payload exceeds maximum size",
++                    )
++                    .into());
++                }
+                 self.data = DataKind::Raw(data.to_vec());
+             }
+             DataKind::NoData => {
+                 unreachable!();
+             }
+-            DataKind::Raw(ref mut buf) => {
++            DataKind::Raw(buf) => {
++                if buf.len().saturating_add(data.len()) > MAX_AUX_BOX_BYTES {
++                    return Err(std::io::Error::new(
++                        std::io::ErrorKind::InvalidData,
++                        "auxiliary box payload exceeds maximum size",
++                    )
++                    .into());
++                }
+                 buf.extend_from_slice(data);
+             }
+-            DataKind::Brotli(ref mut writer) => {
++            DataKind::BrotliPending(_) => unreachable!("handled above"),
++            DataKind::Brotli(writer) => {
+                 writer.write_all(data)?;
+             }
+         }
+@@ -113,20 +258,27 @@ impl AuxBoxReader {
+             return Ok(());
+         }
+ 
+-        if let DataKind::Brotli(ref mut writer) = self.data {
++        if let DataKind::Brotli(writer) = &mut self.data {
+             writer.flush()?;
+             writer.close()?;
+         }
+ 
+         match std::mem::replace(&mut self.data, DataKind::NoData) {
+             DataKind::Init | DataKind::NoData => {}
++            DataKind::BrotliPending(_) => {
++                return Err(std::io::Error::new(
++                    std::io::ErrorKind::InvalidData,
++                    "truncated Brotli-compressed auxiliary box",
++                )
++                .into());
++            }
+             DataKind::Raw(buf) => self.data = DataKind::Raw(buf),
+             DataKind::Brotli(writer) => {
+                 let inner = writer.into_inner().inspect_err(|_| {
+                     tracing::warn!("Brotli decompressor reported an error");
+                 });
+-                let buf = inner.unwrap_or_else(|buf| buf);
+-                self.data = DataKind::Raw(buf);
++                let cap = inner.unwrap_or_else(|w| w);
++                self.data = DataKind::Raw(cap.into_vec());
+             }
+         }
+ 
+@@ -146,7 +298,7 @@ impl AuxBoxReader {
+         }
+ 
+         match &self.data {
+-            DataKind::Init | DataKind::Brotli(_) => AuxBoxData::Decoding,
++            DataKind::Init | DataKind::Brotli(_) | DataKind::BrotliPending(_) => AuxBoxData::Decoding,
+             DataKind::NoData => AuxBoxData::NotFound,
+             DataKind::Raw(buf) => AuxBoxData::Data(buf),
+         }
+diff --git a/crates/jxl-oxide/src/lib.rs b/crates/jxl-oxide/src/lib.rs
+index d5808d3..c020357 100644
+--- a/crates/jxl-oxide/src/lib.rs
++++ b/crates/jxl-oxide/src/lib.rs
+@@ -194,12 +194,30 @@ fn default_pool() -> JxlThreadPool {
+     JxlThreadPool::none()
+ }
+ 
++/// Maximum codestream bytes buffered while scanning the container (aligned with fuzz harness caps).
++const MAX_CODESTREAM_INGEST_BYTES: usize = 128 * 1024 * 1024;
++
++#[inline]
++fn check_codestream_ingest_limits(buffer_len: usize, addition: usize) -> Result<()> {
++    if buffer_len.saturating_add(addition) > MAX_CODESTREAM_INGEST_BYTES {
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::InvalidData,
++            "codestream payload exceeds maximum accumulated size",
++        )
++        .into());
++    }
++    Ok(())
++}
++
+ /// JPEG XL image decoder builder.
+ #[derive(Debug, Default)]
+ pub struct JxlImageBuilder {
+     pool: Option<JxlThreadPool>,
+     tracker: Option<AllocTracker>,
+     force_wide_buffers: bool,
++    /// If set, [`JxlImageBuilder::read`] rejects images whose coded width/height exceed this
++    /// value *before* loading frame data (after the image header is parsed).
++    max_image_dimension: Option<u32>,
+ }
+ 
+ impl JxlImageBuilder {
+@@ -221,6 +239,15 @@ impl JxlImageBuilder {
+         self
+     }
+ 
++    /// Rejects images whose coded width or height exceeds `max` before frame data is loaded.
++    ///
++    /// This is useful for fuzz harnesses and other constrained environments where large
++    /// allocations during decode would be undesirable.
++    pub fn max_image_dimension(mut self, max: u32) -> Self {
++        self.max_image_dimension = Some(max);
++        self
++    }
++
+     /// Consumes the builder, and creates an empty, uninitialized JPEG XL image decoder.
+     pub fn build_uninit(self) -> UninitializedJxlImage {
+         UninitializedJxlImage {
+@@ -230,6 +257,7 @@ impl JxlImageBuilder {
+             buffer: Vec::new(),
+             aux_boxes: AuxBoxList::new(),
+             force_wide_buffers: self.force_wide_buffers,
++            max_image_dimension: self.max_image_dimension,
+         }
+     }
+ 
+@@ -316,6 +344,7 @@ pub struct UninitializedJxlImage {
+     buffer: Vec<u8>,
+     aux_boxes: AuxBoxList,
+     force_wide_buffers: bool,
++    max_image_dimension: Option<u32>,
+ }
+ 
+ impl UninitializedJxlImage {
+@@ -327,6 +356,7 @@ impl UninitializedJxlImage {
+             match event? {
+                 ParseEvent::BitstreamKind(_) => {}
+                 ParseEvent::Codestream(buf) => {
++                    check_codestream_ingest_limits(self.buffer.len(), buf.len())?;
+                     self.buffer.extend_from_slice(buf);
+                 }
+                 aux_box_event => {
+@@ -362,6 +392,18 @@ impl UninitializedJxlImage {
+             }
+         };
+ 
++        if let Some(limit) = self.max_image_dimension {
++            let w = image_header.width_with_orientation();
++            let h = image_header.height_with_orientation();
++            if w.max(h) > limit {
++                return Err(std::io::Error::new(
++                    std::io::ErrorKind::InvalidData,
++                    "image dimensions exceed the configured limit",
++                )
++                .into());
++            }
++        }
++
+         let embedded_icc = if image_header.metadata.colour_encoding.want_icc() {
+             let icc = match jxl_color::icc::read_icc(&mut bitstream) {
+                 Ok(x) => x,
+@@ -936,6 +978,7 @@ impl JxlImageInner {
+         }
+ 
+         if self.end_of_image {
++            check_codestream_ingest_limits(self.buffer.len(), buf.len())?;
+             self.buffer.extend_from_slice(buf);
+             return Ok(());
+         }
+@@ -952,6 +995,7 @@ impl JxlImageInner {
+                 ctx.finalize_current_frame();
+                 if is_last {
+                     self.end_of_image = true;
++                    check_codestream_ingest_limits(0, buf.len())?;
+                     self.buffer = buf.to_vec();
+                     return Ok(());
+                 }
+@@ -961,6 +1005,7 @@ impl JxlImageInner {
+             }
+         }
+ 
++        check_codestream_ingest_limits(self.buffer.len(), buf.len())?;
+         self.buffer.extend_from_slice(buf);
+         let mut buf = &*self.buffer;
+         while !buf.is_empty() {
+@@ -968,6 +1013,7 @@ impl JxlImageInner {
+             let frame = match ctx.load_frame_header(&mut bitstream) {
+                 Ok(x) => x,
+                 Err(e) if e.unexpected_eof() => {
++                    check_codestream_ingest_limits(0, buf.len())?;
+                     self.buffer = buf.to_vec();
+                     return Ok(());
+                 }
+@@ -991,6 +1037,7 @@ impl JxlImageInner {
+                 ctx.finalize_current_frame();
+                 if is_last {
+                     self.end_of_image = true;
++                    check_codestream_ingest_limits(0, buf.len())?;
+                     self.buffer = buf.to_vec();
+                     return Ok(());
+                 }
+diff --git a/crates/jxl-render/src/features/noise.rs b/crates/jxl-render/src/features/noise.rs
+index 6921f5c..289ad78 100644
+--- a/crates/jxl-render/src/features/noise.rs
++++ b/crates/jxl-render/src/features/noise.rs
+@@ -256,13 +256,36 @@ fn convolve_fill(
+         let r = adjacent_groups[2];
+         for offset_y in -2..0 {
+             let out = rows.get_row_mut(2usize.wrapping_add_signed(offset_y));
+-            let c = c.get_row(c.height().wrapping_add_signed(offset_y));
+-            let l = l
+-                .as_ref()
+-                .map(|l| l.get_row(l.height().wrapping_add_signed(offset_y)));
+-            let r = r
+-                .as_ref()
+-                .map(|r| r.get_row(r.height().wrapping_add_signed(offset_y)));
++            let iy_c = {
++                let gh = c.height();
++                if gh <= 1 {
++                    0usize
++                } else {
++                    let h = gh as isize;
++                    (h + offset_y).clamp(0, h - 1) as usize
++                }
++            };
++            let c = c.get_row(iy_c);
++            let l = l.as_ref().map(|l| {
++                let gh = l.height();
++                let iy = if gh <= 1 {
++                    0usize
++                } else {
++                    let h = gh as isize;
++                    (h + offset_y).clamp(0, h - 1) as usize
++                };
++                l.get_row(iy)
++            });
++            let r = r.as_ref().map(|r| {
++                let gh = r.height();
++                let iy = if gh <= 1 {
++                    0usize
++                } else {
++                    let h = gh as isize;
++                    (h + offset_y).clamp(0, h - 1) as usize
++                };
++                r.get_row(iy)
++            });
+             fill_padded_row(out, c, l, r);
+         }
+     } else if height >= 2 {
+@@ -363,9 +386,14 @@ fn fill_once(out: &mut [f32], fill_y: usize, adjacent_groups: [Option<SharedSubg
+             (0, c, l, r)
+         }
+     };
+-    let c = c.get_row(source_y);
+-    let l = l.as_ref().map(|l| l.get_row(source_y));
+-    let r = r.as_ref().map(|r| r.get_row(source_y));
++    let iy_c = source_y.min(c.height().saturating_sub(1));
++    let c = c.get_row(iy_c);
++    let l = l
++        .as_ref()
++        .map(|l| l.get_row(source_y.min(l.height().saturating_sub(1))));
++    let r = r
++        .as_ref()
++        .map(|r| r.get_row(source_y.min(r.height().saturating_sub(1))));
+ 
+     fill_padded_row(out, c, l, r);
+ }
+diff --git a/crates/jxl-render/src/filter/epf.rs b/crates/jxl-render/src/filter/epf.rs
+index 4f4f4dc..d4485ce 100644
+--- a/crates/jxl-render/src/filter/epf.rs
++++ b/crates/jxl-render/src/filter/epf.rs
+@@ -201,18 +201,27 @@ pub(super) unsafe fn run_epf_rows(
+             }
+ 
+             let job_height = output0.height();
++            let input_h = input[0].height().min(input[1].height()).min(input[2].height());
+             for dy in 0..job_height {
+                 let y = base_y + dy;
+                 let input_rows: [[_; 7]; 3] = std::array::from_fn(|c| {
+                     std::array::from_fn(|idx| {
+-                        let y = util::mirror((y + idx) as isize - 3, height);
+-                        input[c].get_row(y)
++                        let row = util::mirror((y + idx) as isize - 3, input_h);
++                        input[c].get_row(row)
+                     })
+                 });
++                // `wasm32` SIMD EPF assumes a full 7-row `merged_input_rows` window (uses
++                // `get_row(1)`..`get_row(5)`). `subgrid` can clip when the buffer is shorter than
++                // the padded region height, producing a stub grid — disable SIMD in that case.
+                 let merged_input_rows = if y >= 3 && y + 4 <= height {
+-                    Some(std::array::from_fn(|c| {
++                    let grids = std::array::from_fn(|c| {
+                         input[c].subgrid(.., (y - 3)..(y + 4))
+-                    }))
++                    });
++                    if grids.iter().all(|g| g.height() >= 7) {
++                        Some(grids)
++                    } else {
++                        None
++                    }
+                 } else {
+                     None
+                 };
+diff --git a/crates/jxl-render/src/image.rs b/crates/jxl-render/src/image.rs
+index ecd4327..e51b370 100644
+--- a/crates/jxl-render/src/image.rs
++++ b/crates/jxl-render/src/image.rs
+@@ -744,8 +744,12 @@ impl<S: Sample> RenderedImage<S> {
+             return Ok(image);
+         }
+ 
+-        *grid_lock = FrameRender::Rendering;
+-        drop(grid_lock);
++        // `Rendering` + releasing the lock lets other threads wait on the condvar during
++        // composition. On single-threaded targets that wait panics; keep the lock path instead.
++        if pool.is_multithreaded() {
++            *grid_lock = FrameRender::Rendering;
++            drop(grid_lock);
++        }
+ 
+         composite(
+             &self.image.frame,
+diff --git a/crates/jxl-render/src/lib.rs b/crates/jxl-render/src/lib.rs
+index a4b2ce4..945eca0 100644
+--- a/crates/jxl-render/src/lib.rs
++++ b/crates/jxl-render/src/lib.rs
+@@ -493,19 +493,25 @@ impl RenderContext {
+         prev_frame_visibility: (usize, usize),
+         pool: &JxlThreadPool,
+     ) -> FrameRender<S> {
+-        if let Some(lf) = &reference_frames.lf {
+-            tracing::trace!(idx = lf.frame.idx, "Spawn LF frame renderer");
+-            let lf_handle = Arc::clone(&lf.image);
+-            pool.spawn(move || {
+-                lf_handle.run(image_region);
+-            });
+-        }
+-        for grid in reference_frames.refs.iter().flatten() {
+-            tracing::trace!(idx = grid.frame.idx, "Spawn reference frame renderer");
+-            let ref_handle = Arc::clone(&grid.image);
+-            pool.spawn(move || {
+-                ref_handle.run(image_region);
+-            });
++        // Background reference rendering uses condvars when another thread waits on
++        // `FrameRender::Rendering`. On `wasm32-wasip1` (and other single-threaded targets)
++        // `pool.spawn` runs inline, so a reentrant `run_with_image` would call
++        // `condvar.wait` and panic ("condvar wait not supported").
++        if pool.is_multithreaded() {
++            if let Some(lf) = &reference_frames.lf {
++                tracing::trace!(idx = lf.frame.idx, "Spawn LF frame renderer");
++                let lf_handle = Arc::clone(&lf.image);
++                pool.spawn(move || {
++                    lf_handle.run(image_region);
++                });
++            }
++            for grid in reference_frames.refs.iter().flatten() {
++                tracing::trace!(idx = grid.frame.idx, "Spawn reference frame renderer");
++                let ref_handle = Arc::clone(&grid.image);
++                pool.spawn(move || {
++                    ref_handle.run(image_region);
++                });
++            }
+         }
+ 
+         let mut cache = match state {
+diff --git a/crates/jxl-render/src/state.rs b/crates/jxl-render/src/state.rs
+index eee7cbc..14c3e1b 100644
+--- a/crates/jxl-render/src/state.rs
++++ b/crates/jxl-render/src/state.rs
+@@ -203,7 +203,14 @@ impl<S: Sample> FrameRenderHandle<S> {
+                 FrameRender::Rendering => {
+                     tracing::trace!(index = self.frame.idx, "Waiting...");
+                     *render_ref = render;
+-                    render_ref = self.condvar.wait(render_ref).unwrap();
++                    #[cfg(target_os = "wasi")]
++                    {
++                        return Err(Error::IncompleteFrame);
++                    }
++                    #[cfg(not(target_os = "wasi"))]
++                    {
++                        render_ref = self.condvar.wait(render_ref).unwrap();
++                    }
+                 }
+                 FrameRender::Done(_) | FrameRender::Blended(_) => {
+                     *render_ref = render;
+diff --git a/crates/jxl-render/src/vardct/mod.rs b/crates/jxl-render/src/vardct/mod.rs
+index 7ed42a0..aafb266 100644
+--- a/crates/jxl-render/src/vardct/mod.rs
++++ b/crates/jxl-render/src/vardct/mod.rs
+@@ -577,10 +577,17 @@ pub fn chroma_from_luma_hf_grouped(
+ 
+     let gw = coeff_x.width();
+     let gh = coeff_x.height();
++    let x_rows = x_from_y.height();
++    let b_rows = b_from_y.height();
++    if x_rows == 0 || b_rows == 0 {
++        return;
++    }
+ 
+     for y in 0..gh {
+-        let x_from_y = x_from_y.get_row(y / 64);
+-        let b_from_y = b_from_y.get_row(y / 64);
++        let map_y = (y / 64).min(x_rows - 1);
++        let map_y_b = (y / 64).min(b_rows - 1);
++        let x_from_y = x_from_y.get_row(map_y);
++        let b_from_y = b_from_y.get_row(map_y_b);
+ 
+         let coeff_x = coeff_x.get_row_mut(y);
+         let coeff_y = coeff_y.get_row_mut(y);
+@@ -654,11 +661,23 @@ pub fn transform_with_lf_grouped<S: Sample>(
+ 
+     let Some(hf_meta) = &lf_group.hf_meta else {
+         for (coeff, lf) in coeff_out.iter_mut().zip(lf) {
++            let lf_rows = lf.height();
++            if lf_rows == 0 {
++                for y in 0..coeff.height() {
++                    coeff.get_row_mut(y).fill(0.0);
++                }
++                continue;
++            }
+             for y in 0..coeff.height() {
+                 let coeff_row = coeff.get_row_mut(y);
+-                let lf_row = lf.get_row(y / 8);
++                // Malformed inputs can yield an LF subgrid shorter than coeff/8; clamp instead of
++                // panicking on `get_row` (see harness crash: height 1, index 1).
++                let lf_y = (y / 8).min(lf_rows - 1);
++                let lf_row = lf.get_row(lf_y);
++                let lf_w = lf_row.len();
+                 for (x, v) in coeff_row.iter_mut().enumerate() {
+-                    *v = lf_row[x / 8];
++                    let lf_x = (x / 8).min(lf_w.saturating_sub(1));
++                    *v = lf_row[lf_x];
+                 }
+             }
+         }
+diff --git a/fuzz/fuzz_targets/decode.rs b/fuzz/fuzz_targets/decode.rs
+index 3dd20e0..4121005 100644
+--- a/fuzz/fuzz_targets/decode.rs
++++ b/fuzz/fuzz_targets/decode.rs
+@@ -1,9 +1,11 @@
+ #![no_main]
+ 
+-const DIM_LIMIT: u32 = 65536;
++// Keep in sync with `max_image_dimension` passed to `fuzz_decode`: must be small enough that
++// `RenderContext::build` and rendering stay within typical WASM linear-memory budgets.
++const DIM_LIMIT: u32 = 2048;
+ 
+-// 128 MiB
+-const SIZE_LIMIT: usize = 128 * 1024 * 1024;
++// 12 MiB — keep below typical wasm32 linear-memory budgets.
++const SIZE_LIMIT: usize = 12 * 1024 * 1024;
+ 
+ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
+     jxl_oxide_fuzz::fuzz_decode(data, DIM_LIMIT, SIZE_LIMIT);

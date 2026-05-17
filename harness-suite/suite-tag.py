@@ -234,15 +234,6 @@ tag_fuzzbench(
 )
 
 
-# The native port of rustc-demangle is missing updates
-tag_manually(
-    "rustc-demangle-native_c.wasm",
-    "c5688cfec32d2bd00701836f12beb3560ee015b8",
-    Tag.CRASHING,
-    Tag.BUGGY_PROJECT,
-)
-
-
 PROJS = {"libpng", "freetype2", "jsoncpp"}
 for harness in harnesses:
     if any(harness.startswith(proj) for proj in PROJS):

@@ -20,9 +20,58 @@
          let width = usize::from(self.info.width);
          let padded_width = calculate_padded_width(width, self.info.sample_ratio);
  
+@@ -580,7 +591,11 @@
+                                 component.width_stride * c2 + c3
+                             };
+ 
+-                            let idct_pos = channel.get_mut(idct_position..).unwrap();
++                            let Some(idct_pos) = channel.get_mut(idct_position..) else {
++                                return Err(DecodeErrors::FormatStatic(
++                                    "IDCT output slice out of bounds",
++                                ));
++                            };
+ 
+                             if len <= 1 {
+                                 (self.idct_1x1_func)(tmp, idct_pos, component.width_stride);
+@@ -893,8 +893,13 @@
+                             * component.width_stride
+                             * component.sample_ratio.sample();
+ 
+-                        let last_bytes =
+-                            component.raw_coeff.rchunks_exact_mut(size).next().unwrap();
++                        let Some(last_bytes) =
++                            component.raw_coeff.rchunks_exact_mut(size).next()
++                        else {
++                            return Err(DecodeErrors::FormatStatic(
++                                "MCU row slice shorter than expected for vertical upsample",
++                            ));
++                        };
+ 
+                         component
+                             .first_row_upsample_dest
 --- a/src/mcu_prog.rs
 +++ b/src/mcu_prog.rs
-@@ -502,7 +502,18 @@
+@@ -98,7 +98,18 @@
+ 
+         mcu_width *= 64;
+ 
+-        for i in 0..self.input_colorspace.num_components() {
++        // `setup_component_params` reconciles colorspace vs SOF component count in most cases;
++        // still guard against pathological headers that declare more channels than SOF provides.
++        let n_comp = self
++            .input_colorspace
++            .num_components()
++            .min(self.components.len());
++        if n_comp == 0 {
++            return Err(DecodeErrors::FormatStatic(
++                "JPEG progressive frame has no components"
++            ));
++        }
++        for i in 0..n_comp {
+             let comp = &self.components[i];
+             let len = mcu_width * comp.vertical_sample * comp.horizontal_sample * mcu_height;
+ 
+@@ -502,7 +513,18 @@
  
          // Size of our output image(width*height)
          let is_hv = usize::from(self.is_interleaved);
@@ -64,3 +113,51 @@
  
  
      let mut t = [0];
+--- a/src/idct/scalar.rs
++++ b/src/idct/scalar.rs
+@@ -29,6 +29,14 @@
+ 
+ #[inline]
+ pub fn idct_int_1x1(in_vector: &mut [i32; 64], mut out_vector: &mut [i16], stride: usize) {
++    // `mcu` can pass an empty or too-short tail slice from `get_mut(idct_position..)`; skip writes
++    // rather than panicking (full IDCT already uses a temp-buffer fallback for short outputs).
++    let Some(min_out) = stride.checked_mul(7).and_then(|n| n.checked_add(8)) else {
++        return;
++    };
++    if out_vector.len() < min_out {
++        return;
++    }
+     let coeff = ((wa(wa(in_vector[0], 4), 1024) >> 3).clamp(0, 255)) as i16;
+ 
+     out_vector[..8].fill(coeff);
+--- a/src/worker.rs
++++ b/src/worker.rs
+@@ -416,7 +416,12 @@
+                 // get current row
+                 let row = &component.row[..];
+                 let row_up = &component.row_up[..];
+-                let row_down = &component.raw_coeff[0..stride];
++                let row_down = component
++                    .raw_coeff
++                    .get(0..stride)
++                    .ok_or_else(|| {
++                        DecodeErrors::FormatStatic("Invalid raw_coeff slice for upsample")
++                    })?;
+                 (component.up_sampler)(row, row_up, row_down, upsampler_scratch_space, dest);
+             }
+ 
+@@ -535,9 +540,11 @@
+                 PS(cae): I can't add the image to the repo as it is nsfw, but can send if required
+                 */
+                 let length = component.first_row_upsample_dest.len();
+-                component
+-                    .first_row_upsample_dest
+-                    .copy_from_slice(&dest_coeff.rchunks_exact(length).next().unwrap());
++                if length > 0 {
++                    if let Some(last_row) = dest_coeff.rchunks_exact(length).next() {
++                        component.first_row_upsample_dest.copy_from_slice(last_row);
++                    }
++                }
+             }
+             // up-sample each row
+             for (single_row, output_stride) in raw_coeff

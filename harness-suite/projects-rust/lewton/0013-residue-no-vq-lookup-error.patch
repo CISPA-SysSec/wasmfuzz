@@ -1,0 +1,17 @@
+diff --git a/src/audio.rs b/src/audio.rs
+index a0c9c3f..0a18f68 100644
+--- a/src/audio.rs
++++ b/src/audio.rs
+@@ -727,9 +727,9 @@ fn residue_packet_decode_inner(rdr :&mut BitpackCursor, cur_blocksize :u16,
+ 								Err(err) => {
+ 									use ::header::HuffmanVqReadErr::*;
+ 									match err {
+-										EndOfPacket => break 'pseudo_return,
+-										NoVqLookupForCodebook =>
+-											panic!("Codebook must have a value mapping"),
++                                        EndOfPacket => break 'pseudo_return,
++                                        // Hostile streams can still reference non-VQ codebooks.
++                                        NoVqLookupForCodebook => return Err(()),
+ 									}
+ 								},
+ 							}

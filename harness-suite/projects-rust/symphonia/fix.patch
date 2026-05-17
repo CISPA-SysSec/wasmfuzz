@@ -431,17 +431,299 @@ index e26d57d..bf463c2 100644
      // Frame group identifier byte. Used to group a set of frames. The frame group will be added as
      // a sub-field to all produced tags.
 diff --git a/symphonia/fuzz/fuzz_targets/decode_any.rs b/symphonia/fuzz/fuzz_targets/decode_any.rs
-index 0534d69..715f356 100644
+index 0534d69..0bf5169 100644
 --- a/symphonia/fuzz/fuzz_targets/decode_any.rs
 +++ b/symphonia/fuzz/fuzz_targets/decode_any.rs
-@@ -5,8 +5,8 @@ use symphonia::core::formats::{FormatOptions, TrackType};
+@@ -5,8 +5,11 @@ use symphonia::core::formats::{FormatOptions, TrackType};
  use symphonia::core::io::MediaSourceStream;
  use symphonia::core::meta::MetadataOptions;
  
 -fuzz_target!(|data: Vec<u8>| {
 -    let data = std::io::Cursor::new(data);
 +fuzz_target!(|data: &[u8]| {
++    if data.len() > 512 * 1024 {
++        return;
++    }
 +    let data = std::io::Cursor::new(data.to_vec());
  
      let source = MediaSourceStream::new(Box::new(data), Default::default());
+ 
+@@ -32,8 +35,32 @@ fuzz_target!(|data: Vec<u8>| {
+                 return;
+             };
+ 
++            let mut audio_params = (*audio_codec_params).clone();
++            let max_frames_per_packet: u64 = if cfg!(target_pointer_width = "32") {
++                4_096
++            } else {
++                65_536
++            };
++
++            #[cfg(target_pointer_width = "32")]
++            if let Some(ref ch) = audio_params.channels {
++                if ch.count() > 16 {
++                    return;
++                }
++            }
++
++            match audio_params.max_frames_per_packet {
++                Some(m) if m > max_frames_per_packet => {
++                    audio_params.max_frames_per_packet = Some(max_frames_per_packet);
++                }
++                None => {
++                    audio_params.max_frames_per_packet = Some(max_frames_per_packet);
++                }
++                _ => {}
++            }
++
+             let mut decoder = match symphonia::default::get_codecs()
+-                .make_audio_decoder(&audio_codec_params, &Default::default())
++                .make_audio_decoder(&audio_params, &Default::default())
+             {
+                 Ok(d) => d,
+                 Err(_) => return,
+
+diff --git a/symphonia-bundle-flac/src/parser.rs b/symphonia-bundle-flac/src/parser.rs
+index 45aca71..23cffd7 100644
+--- a/symphonia-bundle-flac/src/parser.rs
++++ b/symphonia-bundle-flac/src/parser.rs
+@@ -138,10 +138,10 @@ impl Fragment {
+     }
+ 
+     /// Parse the frame header from the fragment.
+-    fn parse_header(&self) -> FrameHeader {
++    fn parse_header(&self) -> Result<FrameHeader> {
+         let mut reader = BufReader::new(&self.data);
+-        let sync = reader.read_be_u16().unwrap();
+-        read_frame_header(&mut reader, sync).unwrap()
++        let sync = reader.read_be_u16().map_err(Error::from)?;
++        read_frame_header(&mut reader, sync)
+     }
+ }
+ 
+@@ -226,10 +226,11 @@ impl PacketBuilder {
+         self.frags.push(frag);
+     }
+ 
+-    fn try_build(&mut self, stream_info: &StreamInfo, frag: Fragment) -> Option<ParsedPacket> {
++    fn try_build(&mut self, stream_info: &StreamInfo, frag: Fragment) -> Result<Option<ParsedPacket>> {
+         let (header, data) = if frag.crc_match {
+             // The fragment has a CRC that matches the expected CRC.
+-            (frag.parse_header(), frag.data)
++            let header = frag.parse_header()?;
++            (header, frag.data)
+         }
+         else {
+             // The fragment does not have a CRC that matches the expected CRC.
+@@ -256,13 +257,14 @@ impl PacketBuilder {
+ 
+                 data.extend_from_slice(&frag.data);
+ 
+-                (self.frags[i].parse_header(), data.into_boxed_slice())
++                let header = self.frags[i].parse_header()?;
++                (header, data.into_boxed_slice())
+             }
+             else {
+                 // A range of fragments has not been found that forms a packet.
+                 self.push_fragment(frag);
+ 
+-                return None;
++                return Ok(None);
+             }
+         };
+ 
+@@ -273,7 +275,7 @@ impl PacketBuilder {
+ 
+         self.last_header = Some(header);
+ 
+-        Some(ParsedPacket { buf: data, sync })
++        Ok(Some(ParsedPacket { buf: data, sync }))
+     }
+ 
+     fn reset(&mut self) {
+@@ -494,8 +496,9 @@ impl PacketParser {
+                 None => return Ok(None),
+             };
+ 
+-            if let Some(packet) = self.builder.try_build(&self.info, fragment) {
+-                break packet;
++            match self.builder.try_build(&self.info, fragment)? {
++                Some(packet) => break packet,
++                None => {}
+             }
+         };
+
+diff --git a/symphonia-format-riff/src/wave/chunks.rs b/symphonia-format-riff/src/wave/chunks.rs
+--- a/symphonia-format-riff/src/wave/chunks.rs
++++ b/symphonia-format-riff/src/wave/chunks.rs
+@@ -593,13 +593,17 @@
+ pub struct InfoChunk {
+     pub tag: [u8; 4],
+     pub buf: Box<[u8]>,
+ }
+ 
+ impl ParseChunk for InfoChunk {
+     fn parse<B: ReadBytes>(reader: &mut B, tag: [u8; 4], len: u32) -> Result<InfoChunk> {
+-        // TODO: Apply limit.
++        // Hard cap: malicious INFO sub-chunks must not force multi-gigabyte allocations.
++        const MAX_RIFF_INFO_CHUNK_BYTES: u32 = 32 * 1024 * 1024;
++        if len > MAX_RIFF_INFO_CHUNK_BYTES {
++            return decode_error("wav: info chunk length exceeds limit");
++        }
+         let buf = reader.read_boxed_slice_exact(len as usize)?;
+         Ok(InfoChunk { tag, buf })
+     }
+ }
+ 
+diff --git a/symphonia-format-riff/src/aiff/chunks.rs b/symphonia-format-riff/src/aiff/chunks.rs
+--- a/symphonia-format-riff/src/aiff/chunks.rs
++++ b/symphonia-format-riff/src/aiff/chunks.rs
+@@ -432,6 +432,10 @@ pub struct TextChunk {
+ 
+ impl ParseChunk for TextChunk {
+     fn parse<B: ReadBytes>(reader: &mut B, tag: [u8; 4], len: u32) -> Result<Self> {
++        // wasm32 cannot allocate > isize::MAX (~2 GiB) without aborting on capacity overflow.
++        if len > 16 * 1024 * 1024 {
++            return decode_error("aiff: text chunk too large");
++        }
+         let text = reader.read_boxed_slice_exact(len as usize)?;
+ 
+         let value = Arc::new(decode_string(&text));
+
+diff --git a/symphonia-format-riff/src/aiff/chunks.rs b/symphonia-format-riff/src/aiff/chunks.rs
+--- a/symphonia-format-riff/src/aiff/chunks.rs
++++ b/symphonia-format-riff/src/aiff/chunks.rs
+@@ -372,6 +372,10 @@ impl ParseChunk for AppSpecificChunk {
+ impl ParseChunk for AppSpecificChunk {
+     fn parse<B: ReadBytes>(reader: &mut B, _tag: [u8; 4], len: u32) -> Result<Self> {
+         let start_pos = reader.pos();
++        // `APPL` payload length is attacker-controlled; cap before allocating remainder.
++        if len > 16 * 1024 * 1024 {
++            return decode_error("aiff: app-specific chunk too large");
++        }
+ 
+         // The application signature.
+         let signature = reader.read_quad_bytes()?;
+
+diff --git a/symphonia-format-mkv/src/ebml.rs b/symphonia-format-mkv/src/ebml.rs
+index dd368ff..d07fbdd 100644
+--- a/symphonia-format-mkv/src/ebml.rs
++++ b/symphonia-format-mkv/src/ebml.rs
+@@ -60,6 +60,18 @@ impl From<std::io::Error> for EbmlError {
+ 
+ pub type Result<T> = std::result::Result<T, EbmlError>;
+ 
++
++/// Hard cap on EBML string/binary element payload size (hostile `data_size` on wasm32).
++const MAX_EBML_ELEMENT_BYTES: usize = 32 * 1024 * 1024;
++
++fn check_ebml_element_size(size: usize) -> Result<()> {
++    if size > MAX_EBML_ELEMENT_BYTES {
++        Err(EbmlError::ElementError("mkv: element data size exceeds limit"))
++    } else {
++        Ok(())
++    }
++}
++
+ /// A super-trait of `ReadBytes` and `SeekBuffered` that all readers of `EbmlIterator` must
+ /// implement.
+ pub(crate) trait ReadEbml: ReadBytes + SeekBuffered {}
+@@ -792,6 +804,7 @@ impl<R: ReadEbml, S: EbmlSchema> EbmlIterator<R, S> {
+                     match size {
+                         0 => Ok(None),
+                         _ => {
++                            check_ebml_element_size(size)?;
+                             let data = self.reader.read_boxed_slice_exact(size)?;
+                             self.discard_current();
+                             let bytes = data.split(|b| *b == 0).next().unwrap_or(&data);
+@@ -830,6 +843,7 @@ impl<R: ReadEbml, S: EbmlSchema> EbmlIterator<R, S> {
+                 EbmlDataType::Master => Err(EbmlError::ExpectedNonMasterElement),
+                 EbmlDataType::Binary => {
+                     let size = element.data_size.ok_or(EbmlError::UnknownElementDataSize)? as usize;
++                    check_ebml_element_size(size)?;
+                     let data = self.reader.read_boxed_slice_exact(size)?;
+                     self.discard_current();
+                     Ok(data)
+diff --git a/symphonia-codec-aac/src/aac/ics/mod.rs b/symphonia-codec-aac/src/aac/ics/mod.rs
+index 95e1f97..5bb828a 100644
+--- a/symphonia-codec-aac/src/aac/ics/mod.rs
++++ b/symphonia-codec-aac/src/aac/ics/mod.rs
+@@ -243,6 +243,10 @@ impl Ics {
+             let mut l = 0;
+ 
+             while k < self.info.max_sfb {
++                if l >= MAX_SFBS {
++                    return decode_error("aac: too many section bands");
++                }
++
+                 self.sect_cb[g][l] = bs.read_bits_leq32(4)? as u8;
+                 self.sect_len[g][l] = 0;
+ 
+@@ -260,6 +264,10 @@ impl Ics {
+                     }
+                 }
+ 
++                if self.sect_len[g][l] == 0 {
++                    return decode_error("aac: invalid zero-length section");
++                }
++
+                 validate!(k + self.sect_len[g][l] <= self.info.max_sfb);
+ 
+                 for sfb in k..k + self.sect_len[g][l] {
+diff --git a/symphonia-core/src/io/scoped_stream.rs b/symphonia-core/src/io/scoped_stream.rs
+index 6da24fd..9e85e05 100644
+--- a/symphonia-core/src/io/scoped_stream.rs
++++ b/symphonia-core/src/io/scoped_stream.rs
+@@ -27,7 +27,24 @@ impl<B: ReadBytes> ScopedStream<B> {
+     /// Instantiates a new `ScopedStream` with an upper limit on the number of bytes that can be
+     /// read from the inner source.
+     pub fn new(inner: B, len: u64) -> Self {
+-        ScopedStream { start: inner.pos(), inner, len, read: 0 }
++        let start = inner.pos();
++        // Hostile or inconsistent callers may pass a `len` that wraps `start + len`.
++        let len = match start.checked_add(len) {
++            Some(_) => len,
++            None => u64::MAX - start,
++        };
++        ScopedStream { start, inner, len, read: 0 }
++    }
++
++    #[inline]
++    fn scope_bounds(&self) -> (u64, u64) {
++        let end = self.start.saturating_add(self.len);
++        if end >= self.start {
++            (self.start, end)
++        }
++        else {
++            (self.start, self.start)
++        }
+     }
+ 
+     /// Returns an immutable reference to the inner stream.
+@@ -177,7 +194,8 @@ impl<B: ReadBytes + SeekBuffered> SeekBuffered for ScopedStream<B> {
+     #[inline(always)]
+     fn seek_buffered(&mut self, pos: u64) -> u64 {
+         // Clamp the seekable position to within the bounds of the ScopedStream.
+-        self.inner.seek_buffered(pos.clamp(self.start, self.start + self.len))
++        let (lo, hi) = self.scope_bounds();
++        self.inner.seek_buffered(pos.clamp(lo, hi))
+     }
+ 
+     #[inline(always)]
+diff --git a/symphonia-format-ogg/src/physical.rs b/symphonia-format-ogg/src/physical.rs
+index ee76005..60a57fc 100644
+--- a/symphonia-format-ogg/src/physical.rs
++++ b/symphonia-format-ogg/src/physical.rs
+@@ -147,7 +147,11 @@ fn scan_stream_end(
+     streams: &mut BTreeMap<u32, LogicalStream>,
+     byte_range_end: u64,
+ ) -> Option<u64> {
+-    let scoped_len = byte_range_end - reader.pos();
++    let pos = reader.pos();
++    if pos >= byte_range_end {
++        return None;
++    }
++    let scoped_len = byte_range_end - pos;
+ 
+     let mut scoped_reader = ScopedStream::new(reader, scoped_len);
  

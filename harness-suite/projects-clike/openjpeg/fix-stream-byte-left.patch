@@ -1,0 +1,134 @@
+diff --git a/src/lib/openjp2/cio.c b/src/lib/openjp2/cio.c
+index 4fde9fe..435948a 100644
+--- a/src/lib/openjp2/cio.c
++++ b/src/lib/openjp2/cio.c
+@@ -499,7 +499,7 @@ OPJ_OFF_T opj_stream_read_skip(opj_stream_private_t * p_stream,
+         /* Check if we are going beyond the end of file. Most skip_fn do not */
+         /* check that, but we must be careful not to advance m_byte_offset */
+         /* beyond m_user_data_length, otherwise */
+-        /* opj_stream_get_number_byte_left() will assert. */
++        /* opj_stream_get_number_byte_left() will return -1. */
+         if ((OPJ_UINT64)(p_stream->m_byte_offset + l_skip_nb_bytes + p_size) >
+                 p_stream->m_user_data_length) {
+             opj_event_msg(p_event_mgr, EVT_INFO, "Stream reached its end !\n");
+@@ -583,8 +583,10 @@ OPJ_OFF_T opj_stream_tell(const opj_stream_private_t * p_stream)
+ 
+ OPJ_OFF_T opj_stream_get_number_byte_left(const opj_stream_private_t * p_stream)
+ {
+-    assert(p_stream->m_byte_offset >= 0);
+-    assert(p_stream->m_user_data_length >= (OPJ_UINT64)p_stream->m_byte_offset);
++    if (p_stream->m_byte_offset < 0 ||
++            p_stream->m_user_data_length < (OPJ_UINT64)p_stream->m_byte_offset) {
++        return (OPJ_OFF_T) - 1;
++    }
+     return p_stream->m_user_data_length ?
+            (OPJ_OFF_T)(p_stream->m_user_data_length) - p_stream->m_byte_offset :
+            0;
+diff --git a/src/lib/openjp2/cio.h b/src/lib/openjp2/cio.h
+index 7caee30..94e4d97 100644
+--- a/src/lib/openjp2/cio.h
++++ b/src/lib/openjp2/cio.h
+@@ -320,7 +320,8 @@ OPJ_OFF_T opj_stream_tell(const opj_stream_private_t * p_stream);
+  *
+  * @param       p_stream    the stream to get the information from.
+  *
+- * @return      Number of bytes left before the end of the stream.
++ * @return      Number of bytes left before the end of the stream, or -1 if the
++ *              stream position is inconsistent (e.g. read past end).
+  */
+ OPJ_OFF_T opj_stream_get_number_byte_left(const opj_stream_private_t *
+         p_stream);
+diff --git a/src/lib/openjp2/j2k.c b/src/lib/openjp2/j2k.c
+index ad76aca..38231f6 100644
+--- a/src/lib/openjp2/j2k.c
++++ b/src/lib/openjp2/j2k.c
+@@ -4995,12 +4995,18 @@ static OPJ_BOOL opj_j2k_read_sod(opj_j2k_t *p_j2k,
+     l_tcp = &(p_j2k->m_cp.tcps[p_j2k->m_current_tile_number]);
+ 
+     if (p_j2k->m_specific_param.m_decoder.m_last_tile_part) {
++        OPJ_OFF_T l_bytes_left = opj_stream_get_number_byte_left(p_stream);
++        if (l_bytes_left < 2) {
++            opj_event_msg(p_manager, EVT_ERROR,
++                          "Not enough bytes left in stream for tile part\n");
++            return OPJ_FALSE;
++        }
+         /* opj_stream_get_number_byte_left returns OPJ_OFF_T
+         // but we are in the last tile part,
+         // so its result will fit on OPJ_UINT32 unless we find
+         // a file with a single tile part of more than 4 GB...*/
+         p_j2k->m_specific_param.m_decoder.m_sot_length = (OPJ_UINT32)(
+-                    opj_stream_get_number_byte_left(p_stream) - 2);
++                    l_bytes_left - 2);
+     } else {
+         /* Check to avoid pass the limit of OPJ_UINT32 */
+         if (p_j2k->m_specific_param.m_decoder.m_sot_length >= 2) {
+@@ -9768,7 +9774,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
+         /* Try to read until the Start Of Data is detected */
+         while (l_current_marker != J2K_MS_SOD) {
+ 
+-            if (opj_stream_get_number_byte_left(p_stream) == 0) {
++            if (opj_stream_get_number_byte_left(p_stream) <= 0) {
+                 p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_NEOC;
+                 break;
+             }
+@@ -9792,7 +9798,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
+ 
+             /* cf. https://code.google.com/p/openjpeg/issues/detail?id=226 */
+             if (l_current_marker == 0x8080 &&
+-                    opj_stream_get_number_byte_left(p_stream) == 0) {
++                    opj_stream_get_number_byte_left(p_stream) <= 0) {
+                 p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_NEOC;
+                 break;
+             }
+@@ -9903,7 +9909,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
+                                &l_current_marker, 2);
+             }
+         }
+-        if (opj_stream_get_number_byte_left(p_stream) == 0
++        if (opj_stream_get_number_byte_left(p_stream) <= 0
+                 && p_j2k->m_specific_param.m_decoder.m_state == J2K_STATE_NEOC) {
+             break;
+         }
+@@ -10180,7 +10186,7 @@ OPJ_BOOL opj_j2k_decode_tile(opj_j2k_t * p_j2k,
+     p_j2k->m_specific_param.m_decoder.m_can_decode = 0;
+     p_j2k->m_specific_param.m_decoder.m_state &= (~(OPJ_UINT32)J2K_STATE_DATA);
+ 
+-    if (opj_stream_get_number_byte_left(p_stream) == 0
++    if (opj_stream_get_number_byte_left(p_stream) <= 0
+             && p_j2k->m_specific_param.m_decoder.m_state == J2K_STATE_NEOC) {
+         return OPJ_TRUE;
+     }
+@@ -10197,7 +10203,7 @@ OPJ_BOOL opj_j2k_decode_tile(opj_j2k_t * p_j2k,
+             p_j2k->m_current_tile_number = 0;
+             p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_EOC;
+         } else if (l_current_marker != J2K_MS_SOT) {
+-            if (opj_stream_get_number_byte_left(p_stream) == 0) {
++            if (opj_stream_get_number_byte_left(p_stream) <= 0) {
+                 p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_NEOC;
+                 opj_event_msg(p_manager, EVT_WARNING, "Stream does not end with EOC\n");
+                 return OPJ_TRUE;
+@@ -12123,7 +12129,7 @@ static OPJ_BOOL opj_j2k_decode_tiles(opj_j2k_t *p_j2k,
+         opj_event_msg(p_manager, EVT_INFO,
+                       "Image data has been updated with tile %d.\n\n", l_current_tile_no + 1);
+ 
+-        if (opj_stream_get_number_byte_left(p_stream) == 0
++        if (opj_stream_get_number_byte_left(p_stream) <= 0
+                 && p_j2k->m_specific_param.m_decoder.m_state == J2K_STATE_NEOC) {
+             break;
+         }
+diff --git a/src/lib/openjp2/jp2.c b/src/lib/openjp2/jp2.c
+index 3d16d10..83405a4 100644
+--- a/src/lib/openjp2/jp2.c
++++ b/src/lib/openjp2/jp2.c
+@@ -496,6 +496,11 @@ static OPJ_BOOL opj_jp2_read_boxhdr(opj_jp2_box_t *box,
+ 
+     if (box->length == 0) { /* last box */
+         const OPJ_OFF_T bleft = opj_stream_get_number_byte_left(cio);
++        if (bleft < 0) {
++            opj_event_msg(p_manager, EVT_ERROR,
++                          "Stream position inconsistent while reading JP2 box\n");
++            return OPJ_FALSE;
++        }
+         if (bleft > (OPJ_OFF_T)(0xFFFFFFFFU - 8U)) {
+             opj_event_msg(p_manager, EVT_ERROR,
+                           "Cannot handle box sizes higher than 2^32\n");

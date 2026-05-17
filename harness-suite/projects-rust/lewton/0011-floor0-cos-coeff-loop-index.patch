@@ -1,0 +1,26 @@
+diff --git a/src/audio.rs b/src/audio.rs
+index 8b41b32..a1c3e4f 100644
+--- a/src/audio.rs
++++ b/src/audio.rs
+@@ -187,10 +187,18 @@ fn floor_zero_compute_curve(cos_coefficients :&[f32], amplitude :u64,
+ 		let p_upper_border = p_upper_border.min(max_j.saturating_sub(1));
+ 		let q_upper_border = q_upper_border.min(max_j.saturating_sub(1));
+ 		for j in 0 .. p_upper_border + 1 {
+-			let pm = cos_coefficients[2 * j + 1] - cos_omega;
++			let idx = 2 * j + 1;
++			if idx >= cos_coefficients.len() {
++				break;
++			}
++			let pm = cos_coefficients[idx] - cos_omega;
+ 			p *= 4.0 * pm * pm;
+ 		}
+ 		for j in 0 .. q_upper_border + 1 {
+-			let qm = cos_coefficients[2 * j] - cos_omega;
++			let idx = 2 * j;
++			if idx >= cos_coefficients.len() {
++				break;
++			}
++			let qm = cos_coefficients[idx] - cos_omega;
+ 			q *= 4.0 * qm * qm;
+ 		}
+ 

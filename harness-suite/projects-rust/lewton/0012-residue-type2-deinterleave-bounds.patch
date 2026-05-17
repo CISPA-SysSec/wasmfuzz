@@ -1,0 +1,23 @@
+diff --git a/src/audio.rs b/src/audio.rs
+--- a/src/audio.rs
++++ b/src/audio.rs
+@@ -789,10 +789,18 @@
+ 			if de_cap.checked_mul(std::mem::size_of::<f32>()).is_none() {
+ 				return Err(());
+ 			}
++			if vectors.len() != de_cap {
++				return Err(());
++			}
+ 			let mut vectors_deinterleaved = Vec::with_capacity(de_cap);
+ 			for j in 0 .. ch {
+-				let iter = vectors.chunks(ch).map(|chunk| chunk[j]);
++				let iter = vectors
++					.chunks(ch)
++					.filter_map(|chunk| chunk.get(j).copied());
+ 				vectors_deinterleaved.extend(iter);
+ 			}
++			if vectors_deinterleaved.len() != de_cap {
++				return Err(());
++			}
+ 			return Ok(vectors_deinterleaved);
+ 		}

@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wasm fuzz harness <harness@local>
+Date: Tue, 12 May 2026 00:00:00 +0000
+Subject: [PATCH 8/8] cap flat VQ lookup table and use fallible reserve
+
+u24 codebook entries and u16 dimensions can multiply to a cap that still
+passes isize::MAX/size_of::<f32>() checks yet allocates ~1.7GB for
+value_vectors. Reject pathological sizes and use try_reserve_exact so
+wasm32 guests return HeaderReadError instead of allocator abort.
+
+---
+ src/header.rs | 10 +++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/header.rs b/src/header.rs
+--- a/src/header.rs
++++ b/src/header.rs
+@@ -510,7 +510,16 @@ fn lookup_vec_val_decode(lup :&CodebookVqLookup, codebook_entries :u32, codebook
+ 	if cap > max_f32_elems {
+ 		return Err(HeaderReadError::BufferNotAddressable);
+ 	}
+-	let mut value_vectors = Vec::with_capacity(cap);
++	// u24×u16 can still imply multi-gigabyte flat tables; reject pathological
++	// sizes so constrained guests fail decoding instead of OOM/panic.
++	const MAX_VQ_LOOKUP_FLOATS: usize = 16 * 1024 * 1024;
++	if cap > MAX_VQ_LOOKUP_FLOATS {
++		return Err(HeaderReadError::BufferNotAddressable);
++	}
++	let mut value_vectors = Vec::new();
++	if value_vectors.try_reserve_exact(cap).is_err() {
++		return Err(HeaderReadError::BufferNotAddressable);
++	}
+ 	if lup.codebook_lookup_type == 1 {
+ 		let codebook_lookup_values = lup.codebook_multiplicands.len();
+ 		for lookup_offset in 0 .. codebook_entries {
+
+-- 
+2.46.0

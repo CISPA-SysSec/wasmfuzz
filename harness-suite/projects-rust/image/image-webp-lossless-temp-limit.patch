@@ -19,3 +19,27 @@
                  decoder.decode_frame(self.width, self.height, false, &mut data)?;
                  for (rgba_val, chunk) in data.chunks_exact(4).zip(buf.chunks_exact_mut(3)) {
                      chunk.copy_from_slice(&rgba_val[..3]);
+@@ -836,6 +846,11 @@
+                 }
+ 
+                 let frame = Vp8Decoder::decode_frame((&mut self.r).take(next_chunk_size))?;
++                if u32::from(frame.width) != frame_width
++                    || u32::from(frame.height) != frame_height
++                {
++                    return Err(DecodingError::InconsistentImageSizes);
++                }
+ 
+                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                 frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
+--- a/src/huffman.rs
++++ b/src/huffman.rs
+@@ -113,6 +113,9 @@
+                 };
+ 
+                 let code = usize::from(code);
++                if node_index >= tree.len() {
++                    return Err(DecodingError::HuffmanError);
++                }
+                 for depth in (0..length - table_bits).rev() {
+                     let node = tree[node_index];
+ 

@@ -10,6 +10,7 @@ index bd1b20cc..3fcc63b9 100644
 +[patch.crates-io]
 +zune-jpeg = { path = "../zune-jpeg" }
 +image-webp = { path = "../image-webp" }
++png = { path = "../png" }
 diff --git a/fuzz/fuzzers/fuzzer_script_webp.rs b/fuzz/fuzzers/fuzzer_script_webp.rs
 index 4ba62ba0..7470f6f9 100644
 --- a/fuzz/fuzzers/fuzzer_script_webp.rs
@@ -29,6 +30,56 @@ index 4ba62ba0..7470f6f9 100644
 +    };
 +
 +    if decoder.total_bytes() > 256 * 1024 * 1024 {
++        return;
++    }
++
++    let mut buf = vec![0; decoder.total_bytes() as usize];
++    let _ = decoder.read_image(&mut buf);
+ });
+diff --git a/fuzz/fuzzers/fuzzer_script_png.rs b/fuzz/fuzzers/fuzzer_script_png.rs
+index 4d93609f..9f7ee515 100644
+--- a/fuzz/fuzzers/fuzzer_script_png.rs
++++ b/fuzz/fuzzers/fuzzer_script_png.rs
+@@ -1,7 +1,19 @@
+ #![no_main]
+ #[macro_use] extern crate libfuzzer_sys;
+ extern crate image;
++use image::ImageDecoder;
++use std::io::Cursor;
+ 
+ fuzz_target!(|data: &[u8]| {
+-    let _ = image::load_from_memory_with_format(data, image::ImageFormat::Png);
++    let decoder = match image::codecs::png::PngDecoder::new(Cursor::new(data)) {
++        Ok(decoder) => decoder,
++        Err(_) => return,
++    };
++
++    if decoder.total_bytes() > 256 * 1024 * 1024 {
++        return;
++    }
++
++    let mut buf = vec![0; decoder.total_bytes() as usize];
++    let _ = decoder.read_image(&mut buf);
+ });
+diff --git a/fuzz/fuzzers/fuzzer_script_jpeg.rs b/fuzz/fuzzers/fuzzer_script_jpeg.rs
+index 600f9a1..73449a1 100644
+--- a/fuzz/fuzzers/fuzzer_script_jpeg.rs
++++ b/fuzz/fuzzers/fuzzer_script_jpeg.rs
+@@ -1,7 +1,19 @@
+ #![no_main]
+ #[macro_use] extern crate libfuzzer_sys;
+ extern crate image;
++use image::ImageDecoder;
++use std::io::Cursor;
+ 
+ fuzz_target!(|data: &[u8]| {
+-    let _ = image::load_from_memory_with_format(data, image::ImageFormat::Jpeg);
++    let decoder = match image::codecs::jpeg::JpegDecoder::new(Cursor::new(data)) {
++        Ok(decoder) => decoder,
++        Err(_) => return,
++    };
++
++    if decoder.total_bytes() > 32 * 1024 * 1024 {
 +        return;
 +    }
 +
@@ -82,7 +133,7 @@ diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
 index d31ed4a5..72d8f937 100644
 --- a/fuzz/Cargo.toml
 +++ b/fuzz/Cargo.toml
-@@ -17,6 +17,10 @@ version = "0.4"
+@@ -17,6 +17,11 @@ version = "0.4"
  # Prevent this from interfering with workspaces
  [workspace]
  members = ["."]
@@ -90,6 +141,31 @@ index d31ed4a5..72d8f937 100644
 +[patch.crates-io]
 +zune-jpeg = { path = "../../zune-jpeg" }
 +image-webp = { path = "../../image-webp" }
++png = { path = "../../png" }
  
  [[bin]]
  name = "fuzzer_script_guess"
+diff --git a/fuzz/fuzzers/fuzzer_script_guess.rs b/fuzz/fuzzers/fuzzer_script_guess.rs
+index 7f8fbf5..72c7291 100644
+--- a/fuzz/fuzzers/fuzzer_script_guess.rs
++++ b/fuzz/fuzzers/fuzzer_script_guess.rs
+@@ -2,6 +2,18 @@
+ #[macro_use] extern crate libfuzzer_sys;
+ extern crate image;
+ 
++use image::{ImageReader, Limits};
++use std::io::Cursor;
++
+ fuzz_target!(|data: &[u8]| {
+-    let _ = image::load_from_memory(data);
++    let mut reader = match ImageReader::new(Cursor::new(data)).with_guessed_format() {
++        Ok(r) => r,
++        Err(_) => return,
++    };
++    let mut limits = Limits::default();
++    limits.max_alloc = Some(16 * 1024 * 1024);
++    limits.max_image_width = Some(8192);
++    limits.max_image_height = Some(8192);
++    reader.limits(limits);
++    let _ = reader.decode();
+ });

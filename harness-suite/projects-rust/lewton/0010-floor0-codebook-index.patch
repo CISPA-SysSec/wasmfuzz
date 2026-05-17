@@ -1,0 +1,16 @@
+diff --git a/src/audio.rs b/src/audio.rs
+--- a/src/audio.rs
++++ b/src/audio.rs
+@@ -125,7 +125,11 @@ fn floor_zero_decode(rdr :&mut BitpackCursor, codebooks :&[Codebook],
+ 		Some(codebook_idx) => {
+ 			let mut coefficients = Vec::with_capacity(fl.floor0_order as usize);
+ 			let mut last = 0.0;
+-			let codebook = &codebooks[*codebook_idx as usize];
++			let cb_i = *codebook_idx as usize;
++			if cb_i >= codebooks.len() {
++				return Err(FloorSpecialCase::PacketUndecodable);
++			}
++			let codebook = &codebooks[cb_i];
+ 			loop {
+ 				let mut last_new = last;
+ 				let temp_vector = try!(rdr.read_huffman_vq(codebook));
