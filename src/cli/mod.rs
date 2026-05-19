@@ -9,6 +9,7 @@ use std::{
 
 use crate::{
     fuzzer::opts::{FlagBool, InstrumentationOpts},
+    instrumentation::EdgeCoveragePass,
     ir::ModuleSpec,
     jit::{
         DebugTrace, FeedbackOptions, JitFuzzingSession, Stats, TracingOptions, module::TrapKind,
@@ -183,6 +184,14 @@ pub(crate) enum Subcommand {
         program: PathBuf,
         corpus: PathBuf,
         file: Option<String>,
+    },
+    #[clap(hide = true)]
+    CovDelta {
+        program: PathBuf,
+        #[clap(short, long)]
+        a: Vec<PathBuf>,
+        #[clap(short, long)]
+        b: Vec<PathBuf>,
     },
 }
 
@@ -896,6 +905,49 @@ pub(crate) fn main() {
                     println!("[{}:{}] {}", file, line, res.inputs[*inp]);
                 }
             }
+        }
+        Subcommand::CovDelta { program, a, b } => {
+            fn flatten_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+                let mut inputs = Vec::new();
+                for path in paths {
+                    if path.is_dir() {
+                        for entry in std::fs::read_dir(path).unwrap() {
+                            let entry = entry.unwrap();
+                            let path = entry.path();
+                            inputs.push(path);
+                        }
+                    } else {
+                        inputs.push(path.clone());
+                    }
+                }
+                inputs.sort();
+                inputs
+            }
+            let mut sess = JitFuzzingSession::builder(parse_program(&program))
+                .feedback(FeedbackOptions::minimal_code_coverage())
+                .build();
+            let mut covs = Vec::new();
+            for set in [a, b] {
+                let set = flatten_paths(&set);
+                let mut stats = Stats::default();
+                sess.reset_pass_coverage();
+                sess.initialize(&mut stats);
+                println!("Running {} inputs ...", set.len());
+                for (i, path) in set.iter().enumerate() {
+                    print!("[{i}/{}]\r", set.len());
+                    let input = std::fs::read(path).unwrap();
+                    let _ = sess.run(&input, &mut stats);
+                }
+                covs.push(sess.get_pass::<EdgeCoveragePass>().coverage.entries.clone());
+            }
+            println!("Edge Coverage Stats:");
+            println!("A: {}", covs[0].count_ones());
+            println!("B: {}", covs[1].count_ones());
+            println!("A n B: {}", covs[0].count_ones() & covs[1].count_ones());
+            println!("A u B: {}", covs[0].count_ones() | covs[1].count_ones());
+            println!("A - B: {}", covs[0].count_ones() & !covs[1].count_ones());
+            println!("B - A: {}", covs[1].count_ones() & !covs[0].count_ones());
+            println!("A ^ B: {}", covs[0].count_ones() ^ covs[1].count_ones());
         }
     }
 }
