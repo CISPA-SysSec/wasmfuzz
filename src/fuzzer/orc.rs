@@ -49,7 +49,8 @@ pub(crate) struct CliOpts {
     pub expire_corpus_after: Duration,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
 pub(crate) enum Experiment {
     UseBusInputs,
     SwarmFocusEdge,
@@ -63,37 +64,127 @@ pub(crate) enum Experiment {
     LodGenerateOnly,
     LodNoLevelSwitching,
     LodCmplog,
-}
-impl std::str::FromStr for Experiment {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "use-bus-inputs" => Self::UseBusInputs,
-            "snapshot" => Self::Snapshot,
-            "swarm-focus-edge" => Self::SwarmFocusEdge,
-            "only-edge-coverage" => Self::OnlyEdgeCoverage,
-            "pass-ablation" => Self::PassAblation,
-            "lod" => Self::Lod,
-            "lod-disable" => Self::LodDisable,
-            "lod-dummy-only" => Self::LodDummyOnly,
-            "lod-generate-only" => Self::LodGenerateOnly,
-            "lod-no-level-switching" => Self::LodNoLevelSwitching,
-            "lod-cmplog" => Self::LodCmplog,
-            _ => return Err("unknown Experiment".to_owned()),
-        })
-    }
+    LodCmplogFresh,
+    LodHavocStack,
+    LodTypeClassBias,
+    LodSwitchHot,
+    LodBigCorpus,
+    LodReservoirCorpus,
+    /// Archival alias for last-best `Lod` config
+    LodOld,
+    /// Current best config
+    LodBest,
+    LodBiggerCorpus,
+    LodNoSizePressure,
+    LodFifoCorpus,
+    LodStackGeomLight,
+    LodByteHeavy,
+    LodLowEntropy,
 }
 impl Experiment {
     pub fn is_lod(&self) -> bool {
-        matches!(
+        format!("{self:?}").starts_with("Lod")
+    }
+
+    pub fn lod_config_for(exp: Option<Experiment>) -> lod::fast::EngineConfig {
+        exp.map(Experiment::lod_config).unwrap_or_default()
+    }
+
+    fn lod_config(self) -> lod::fast::EngineConfig {
+        use lod::fast::{EngineConfig, EntropyMode, Eviction, NodeBias, StackProfile};
+        let mut cfg = EngineConfig::default();
+        // Experiments layer on top of the current best-known config.
+        if !matches!(
             self,
+            Experiment::Lod | Experiment::LodOld | Experiment::LodDisable
+        ) {
+            cfg.corpus.cap_per_type = 256;
+            // TODO: enable cmplog here?
+        }
+        match self {
+            Experiment::LodNoLevelSwitching => {
+                cfg.lod_switch_inv = 0;
+            }
+            Experiment::LodSwitchHot => {
+                cfg.lod_switch_inv = 3;
+            }
+            Experiment::LodHavocStack => {
+                cfg.mutation.stack = StackProfile::HAVOC;
+            }
+            Experiment::LodTypeClassBias => {
+                cfg.mutation.node_bias = NodeBias::default_type_class();
+            }
+            Experiment::LodBigCorpus => {
+                cfg.corpus.cap_per_type = 256;
+            }
+            Experiment::LodReservoirCorpus => {
+                cfg.corpus.eviction = Eviction::Reservoir;
+            }
+            Experiment::LodOld => {
+                // archival alias: holds the last "best" config.
+            }
+            Experiment::LodBest => {
+                // best base already applied above; no extra knob.
+            }
+            Experiment::LodBiggerCorpus => {
+                cfg.corpus.cap_per_type = 1024;
+            }
+            Experiment::LodNoSizePressure => {
+                cfg.mutation.size_pressure.enabled = false;
+            }
+            Experiment::LodFifoCorpus => {
+                cfg.corpus.eviction = Eviction::Fifo;
+            }
+            Experiment::LodStackGeomLight => {
+                cfg.mutation.stack = StackProfile::Geometric { p: 0.3, max: 4 };
+            }
+            Experiment::LodByteHeavy => {
+                let w = &mut cfg.mutation.weights;
+                w.byte_mutate = 4.0;
+                w.byte_splice = 4.0;
+                w.byte_resize = 4.0;
+                w.bit_flip_bytes = 4.0;
+                w.bit_flip_byte_arr = 6.0;
+                w.interesting_bytes = 2.0;
+                w.interesting_byte_arr = 2.0;
+            }
+            Experiment::LodCmplog => {
+                // I2S weight is already nonzero by default; we just keep best
+                // as the base. The host (`worker.rs`) gates whether the
+                // CmplogSource is actually threaded through `MutationInputs`,
+                // so other variants stay opted-out.
+            }
+            Experiment::LodCmplogFresh => {
+                // Same plumbing as `LodCmplog` (worker threads the same
+                // `CmplogSource`); additionally turn on the cmplog-seeded
+                // path inside `Fresh::fresh`. 0.25 matches the rate sketched
+                // in the previous campaign's "Future: cmplog during
+                // generation" follow-up.
+                cfg.mutation.cmplog_fresh_prob = 0.25;
+            }
+            Experiment::LodLowEntropy => {
+                // Swap the byte-length entropy metric for the zero-biased
+                // structural one. No mutation knob change — pure corpus-
+                // management signal experiment.
+                cfg.entropy_mode = EntropyMode::LowEntropy;
+            }
+
             Experiment::Lod
-                | Experiment::LodDisable
-                | Experiment::LodDummyOnly
-                | Experiment::LodGenerateOnly
-                | Experiment::LodCmplog
-                | Experiment::LodNoLevelSwitching
-        )
+            | Experiment::LodDisable
+            | Experiment::LodDummyOnly
+            | Experiment::LodGenerateOnly => {
+                // no knobs, see worker.rs
+            }
+
+            Experiment::UseBusInputs
+            | Experiment::Snapshot
+            | Experiment::SwarmFocusEdge
+            | Experiment::OnlyEdgeCoverage
+            | Experiment::PassAblation => {
+                // non-lod experiments
+            }
+        }
+        cfg
     }
 }
 

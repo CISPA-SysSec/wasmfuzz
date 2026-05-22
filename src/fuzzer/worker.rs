@@ -76,7 +76,7 @@ impl Worker {
 
         let mut schedule = WorkerSchedule::new(&opts);
 
-        let lod_engine;
+        let mut lod_engine;
 
         let sess = match orc {
             Some(ref handle) => {
@@ -84,6 +84,9 @@ impl Worker {
                 eprintln!("got config: {config:#?}");
                 schedule.timeout = Some(config.timeout);
                 lod_engine = config.lod.as_deref().map(lod::make_engine);
+                if let Some(engine) = lod_engine.as_mut() {
+                    engine.apply_config(&super::orc::Experiment::lod_config_for(experiment));
+                }
                 JitFuzzingSession::builder(mod_spec.clone())
                     .passes_generator(Arc::new(config.passes))
                     .tracing(TracingOptions {
@@ -97,6 +100,9 @@ impl Worker {
             }
             None => {
                 lod_engine = opts.g.lod.as_deref().map(lod::make_engine);
+                if let Some(engine) = lod_engine.as_mut() {
+                    engine.apply_config(&super::orc::Experiment::lod_config_for(experiment));
+                }
                 JitFuzzingSession::builder(mod_spec.clone())
                     .feedback(opts.i.to_feedback_opts())
                     .tracing(TracingOptions {
@@ -462,26 +468,25 @@ impl Worker {
             if let Some(mut engine) = self.lod_engine.take() {
                 tracy_full::zone!("lod: fuzz loop");
                 let mut lod_buf = Vec::new();
-                for _ in 0..64 {
+                for _ in 0..A_FEW_EXECS / 4 {
                     let corp_count = self.corpus.count();
+                    let mut cmplog_snapshot: Option<super::i2s_patches::CmplogStore> = None;
                     if corp_count > 0 {
                         let corpus_idx = self.rand.below(corp_count.try_into().unwrap());
                         let corpus_idx = self.corpus.nth(corpus_idx);
                         let mut testcase = self.corpus.get(corpus_idx)?.borrow_mut();
 
-                        if matches!(self.experiment, Some(super::orc::Experiment::LodCmplog)) {
-                            use super::i2s_patches::{CmpLog, CmplogStore};
+                        if matches!(
+                            self.experiment,
+                            Some(
+                                super::orc::Experiment::LodCmplog
+                                    | super::orc::Experiment::LodCmplogFresh
+                            )
+                        ) {
+                            use super::i2s_patches::CmplogStore;
                             if let Ok(i2s_metadata) = testcase.metadata::<CmplogStore>() {
-                                let c = engine.corpus_mut();
-                                c.clear_cmplog();
-                                for cmp in i2s_metadata.iter() {
-                                    match cmp {
-                                        CmpLog::Memcmp(a, b) => c.add_cmplog(&a, &b),
-                                        CmpLog::U16(a, b) => c.add_cmplog_u64(a as u64, b as u64),
-                                        CmpLog::U32(a, b) => c.add_cmplog_u64(a as u64, b as u64),
-                                        CmpLog::U64(a, b) => c.add_cmplog_u64(a, b),
-                                    };
-                                }
+                                tracy_full::zone!("lod: cmplog snapshot");
+                                cmplog_snapshot = Some(i2s_metadata.clone());
                             }
                         }
 
@@ -489,8 +494,11 @@ impl Worker {
                         let bytes = input.as_ref().to_vec();
                         engine.set_input(&bytes);
                     }
+                    let cmplog_ref: Option<&dyn lod::fast::CmplogSource> = cmplog_snapshot
+                        .as_ref()
+                        .map(|s| s as &dyn lod::fast::CmplogSource);
 
-                    for _ in 0..8 {
+                    for _ in 0..4 {
                         let start = Instant::now();
                         if matches!(
                             self.experiment,
@@ -500,16 +508,11 @@ impl Worker {
                             engine.generate(seed);
                         } else {
                             tracy_full::zone!("lod: mutate");
-                            // TODO: cmplog mutations
                             let seed = self.rand.next();
-                            if matches!(
-                                self.experiment,
-                                Some(super::orc::Experiment::LodNoLevelSwitching)
-                            ) {
-                                engine.mutate_no_level_switching(seed);
-                            } else {
-                                engine.mutate(seed);
-                            }
+                            engine.mutate(&lod::fast::MutationInputs {
+                                seed,
+                                cmplog: cmplog_ref,
+                            });
                         }
                         {
                             tracy_full::zone!("lod: serialize");
@@ -597,6 +600,7 @@ impl Worker {
                     self.stats.exhaustive_execs += 1;
                     det.next(input.as_mut());
                     if true {
+                        // FIXME: why do we disable exhaustive here? add experiment?
                         continue;
                     }
                     self.schedule.step();

@@ -189,6 +189,13 @@ pub(crate) enum Subcommand {
         #[clap(short, long)]
         output: Option<PathBuf>,
     },
+    /// Per-LOD-level edge coverage breakdown
+    #[clap(hide = true)]
+    LodCorpusEdges {
+        grammar: String,
+        program: PathBuf,
+        corpus: PathBuf,
+    },
 }
 
 fn parse_program(path: &Path) -> Arc<ModuleSpec> {
@@ -1039,6 +1046,177 @@ pub(crate) fn main() {
                     writeln!(out, "- {}", program).unwrap();
                 }
             }
+        }
+        Subcommand::LodCorpusEdges {
+            grammar,
+            program,
+            corpus,
+        } => {
+            use crate::instrumentation::EdgeCoveragePass;
+            use std::collections::HashMap;
+
+            let mod_spec = parse_program(&program);
+            let mod_filename = mod_spec.filename.clone();
+            let input_paths = gather_inputs_paths(&Some(corpus), &[], true);
+
+            let engine = lod::make_engine(&grammar);
+
+            // Topologically order root variants from lowest to highest using the
+            // grammar's `lower_graph_edges` (each edge is `(higher, lower)`).
+            // NB: Tree-shaped graphs are unsupported for now.
+            let edges = engine.lower_graph_edges();
+            let mut down: HashMap<&'static str, &'static str> = HashMap::new();
+            let mut up: HashMap<&'static str, &'static str> = HashMap::new();
+            let mut nodes: BTreeSet<&'static str> = BTreeSet::new();
+            for (hi, lo) in &edges {
+                nodes.insert(hi);
+                nodes.insert(lo);
+                assert!(
+                    down.insert(hi, lo).is_none(),
+                    "non-linear LOD graph (variant {hi:?} has multiple down edges); \
+                     tree-shaped orderings are not yet supported"
+                );
+                assert!(
+                    up.insert(lo, hi).is_none(),
+                    "non-linear LOD graph (variant {lo:?} has multiple up edges); \
+                     tree-shaped orderings are not yet supported"
+                );
+            }
+            let lowest_candidates: Vec<&'static str> = nodes
+                .iter()
+                .copied()
+                .filter(|n| !down.contains_key(n))
+                .collect();
+            assert_eq!(
+                lowest_candidates.len(),
+                1,
+                "expected exactly one lowest variant, got {lowest_candidates:?}"
+            );
+            let mut level_names: Vec<&'static str> = Vec::with_capacity(nodes.len());
+            level_names.push(lowest_candidates[0]);
+            while let Some(next) = up.get(level_names.last().unwrap()) {
+                level_names.push(next);
+            }
+            assert_eq!(
+                level_names.len(),
+                nodes.len(),
+                "LOD graph has disconnected components: ordered {level_names:?}, all {nodes:?}"
+            );
+
+            // Bucket each corpus entry by its root grammar variant.
+            let variant_index: HashMap<&'static str, usize> = level_names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (*n, i))
+                .collect();
+            let mut buckets: Vec<Vec<Vec<u8>>> = vec![Vec::new(); level_names.len()];
+            let mut skipped = 0usize;
+            for path in &input_paths {
+                let bytes = std::fs::read(path).unwrap();
+                let hits = engine.parse_exact_levels(&bytes);
+                if hits.is_empty() || !hits[0].is_root {
+                    eprintln!("skipping {path:?}: no root grammar hit");
+                    skipped += 1;
+                    continue;
+                }
+                let variant = hits[0].variant_name;
+                if let Some(&idx) = variant_index.get(variant) {
+                    buckets[idx].push(bytes);
+                } else {
+                    eprintln!(
+                        "skipping {path:?}: root variant {variant:?} not in lower-graph nodes"
+                    );
+                    skipped += 1;
+                }
+            }
+            // Manually add the dummy to its own level — the dummy bytes
+            // typically can't be lifted back via `parse_exact_levels`, so we
+            // place it directly into the bucket of its source variant. This
+            // ensures the highest LOD level always has at least the skeleton's
+            // coverage even when no real corpus input lands there.
+            let mut total_input_count = input_paths.len();
+            if let Some((dummy_variant, dummy_bytes)) = lod::get_dummy(&grammar) {
+                if let Some(&idx) = variant_index.get(dummy_variant) {
+                    buckets[idx].push(dummy_bytes);
+                    total_input_count += 1;
+                } else {
+                    eprintln!("skipping dummy: variant {dummy_variant:?} not in lower-graph nodes");
+                }
+            }
+            let display_names: Vec<String> = level_names.iter().map(|s| s.to_string()).collect();
+            let level_inputs: Vec<Vec<Vec<u8>>> = buckets;
+
+            let mut sess = JitFuzzingSession::builder(mod_spec)
+                .feedback(FeedbackOptions::minimal_code_coverage())
+                .build();
+
+            let mut covs: Vec<bitvec::boxed::BitBox> = Vec::with_capacity(level_inputs.len());
+            for (name, inputs) in display_names.iter().zip(&level_inputs) {
+                let mut stats = Stats::default();
+                sess.reset_pass_coverage();
+                sess.initialize(&mut stats);
+                eprintln!("Level {name}: running {} input(s) ...", inputs.len());
+                for input in inputs {
+                    let _ = sess.run(input, &mut stats);
+                }
+                covs.push(sess.get_pass::<EdgeCoveragePass>().coverage.saved.clone());
+            }
+
+            // Marginal coverage is "edges this level covers that none of the
+            // higher levels cover". We compute it by walking levels high → low,
+            // accumulating a `higher_union` bitset and diffing.
+            let mut marginals: Vec<usize> = vec![0; covs.len()];
+            let mut higher_union: bitvec::boxed::BitBox =
+                bitvec::bitvec![0; covs[0].len()].into_boxed_bitslice();
+            for i in (0..covs.len()).rev() {
+                let marginal = covs[i].clone() & !higher_union.clone();
+                marginals[i] = marginal.count_ones();
+                higher_union |= covs[i].clone();
+            }
+            let rows: Vec<(String, usize, usize, usize)> = display_names
+                .iter()
+                .zip(&level_inputs)
+                .zip(&covs)
+                .zip(&marginals)
+                .map(|(((name, inputs), cov), marginal)| {
+                    (name.clone(), inputs.len(), cov.count_ones(), *marginal)
+                })
+                .collect();
+
+            let name_w = rows
+                .iter()
+                .map(|r| r.0.len())
+                .chain(std::iter::once("level".len()))
+                .max()
+                .unwrap();
+            let total_edges = higher_union.count_ones();
+            let n_processed: usize = level_inputs.iter().map(|b| b.len()).sum();
+            println!(
+                "Per-LOD edge coverage on {} (grammar={}, {} input(s), {} skipped)",
+                mod_filename, grammar, total_input_count, skipped,
+            );
+            println!(
+                "{:<name_w$}  {:>7}  {:>7}  {:>10}  {:>10}",
+                "level", "inputs", "edges", "vs_higher", "%_of_total"
+            );
+            println!("{}", "-".repeat(name_w + 2 + 7 + 2 + 7 + 2 + 10 + 2 + 10));
+            for (name, n, edges, marginal) in &rows {
+                let percent = if total_edges > 0 {
+                    (*marginal as f64) / (total_edges as f64) * 100.0
+                } else {
+                    0.0
+                };
+                println!(
+                    "{:<name_w$}  {:>7}  {:>7}  {:>10}  {:>9.1}%",
+                    name, n, edges, marginal, percent,
+                );
+            }
+            println!("{}", "-".repeat(name_w + 2 + 7 + 2 + 7 + 2 + 10 + 2 + 10));
+
+            println!(
+                "{:<name_w$}  {:>7}  {:>7}  {:>10}  {:>9.1}%",
+                "union", n_processed, total_edges, total_edges, 100.0,
+            );
         }
     }
 }
