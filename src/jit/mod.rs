@@ -36,7 +36,7 @@ use self::{
     feedback::FeedbackContext, instance::ModuleInstance, module::TrapKind, vmcontext::VMContext,
 };
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub(crate) struct Stats {
     _start: Option<Instant>,
     pub reusable_stage_executions: usize,
@@ -55,6 +55,10 @@ pub(crate) struct Stats {
     pub wall_rehydrate_ns: u64,
     pub exhaustive_execs: usize,
     pub exhaustive_finds: usize,
+    pub lod_mutations: usize,
+    pub non_lod_mutations: usize,
+    pub lod_finds: usize,
+    pub non_lod_finds: usize,
 }
 
 impl Stats {
@@ -83,6 +87,10 @@ impl Stats {
             wall_rehydrate_ns,
             exhaustive_execs,
             exhaustive_finds,
+            lod_mutations,
+            non_lod_mutations,
+            lod_finds,
+            non_lod_finds,
             tracing_stage_executions,
         } = self;
 
@@ -126,6 +134,10 @@ impl Stats {
             ("finds_imported", finds_imported),
             ("exhaustive_execs", exhaustive_execs),
             ("exhaustive_finds", exhaustive_finds),
+            ("lod_mutations", lod_mutations),
+            ("non_lod_mutations", non_lod_mutations),
+            ("lod_finds", lod_finds),
+            ("non_lod_finds", non_lod_finds),
         ];
         for (key, val) in kv {
             let val = *val;
@@ -1084,11 +1096,19 @@ impl JitFuzzingSession {
             );
             let _ = std::fs::create_dir("/tmp/wasmfuzz-flight-recorder/");
             let _ = std::fs::write("/tmp/wasmfuzz-flight-recorder/last.bin", inp);
+            let inphash = md5::compute(inp);
+            let _ = std::fs::write(
+                format!("/tmp/wasmfuzz-flight-recorder/{inphash:x}.bin"),
+                inp,
+            );
             for (i, el) in self.reusable_exec_history.iter().enumerate() {
                 let _ = std::fs::write(
                     format!("/tmp/wasmfuzz-flight-recorder/input_{i:06}.bin"),
                     el,
                 );
+                let inphash = md5::compute(el);
+                let _ =
+                    std::fs::write(format!("/tmp/wasmfuzz-flight-recorder/{inphash:x}.bin"), el);
             }
         }
         res

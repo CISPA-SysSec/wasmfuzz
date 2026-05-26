@@ -58,32 +58,88 @@ pub(crate) enum Experiment {
     OnlyEdgeCoverage,
     PassAblation,
 
-    Lod,
+    /// Run with LOD options entirely disabled (raw libafl mutator only).
+    /// Useful as the "no-structured-mutation" anchor.
     LodDisable,
+    /// Seed the worker corpus with the LOD engine's dummy byte string and
+    /// nothing else; structure-only-seed A/B.
     LodDummyOnly,
+    /// Drive the LOD engine via `generate(seed)` only (no `mutate`); pure-
+    /// generation A/B against the default mutate-or-splice loop.
     LodGenerateOnly,
+    /// Disable LOD-tier switching (`lod_switch_inv = 0`). Stays at one tier
+    /// per run. Kept as a structural-A/B knob worth re-running periodically.
     LodNoLevelSwitching,
-    LodCmplog,
-    LodCmplogFresh,
-    LodHavocStack,
-    LodTypeClassBias,
-    LodSwitchHot,
-    LodBigCorpus,
-    LodReservoirCorpus,
-    /// Archival alias for last-best `Lod` config
+    /// Archival alias: previous `LodBest` (cmplog-fresh-best, default 30m
+    /// `expire_corpus_after`). Kept so we can replicate the pre-2026-05-26
+    /// baseline on demand for rollback-vs-promote confirming sweeps. Pre-
+    /// cmplog history is recoverable from `git log -p orc.rs`.
     LodOld,
-    /// Current best config
+    /// Current best config. As of 2026-05-26: cap_per_type=256 + cmplog-fresh
+    /// at 0.25 (LOD-side) + `expire_corpus_after=10m` (host-side, applied via
+    /// `apply_host_opts`). Everything except `LodOld` / `LodDisable` layers
+    /// on top.
     LodBest,
-    LodBiggerCorpus,
-    LodNoSizePressure,
-    LodFifoCorpus,
-    LodStackGeomLight,
-    LodByteHeavy,
-    LodLowEntropy,
+    /// Disable LibAFL's MOpt mutator on the interleaved byte-mutation branch
+    /// (`opts.x.mopt = false`). bdKp: +5.40 % mean (8 rank-1 wins); WrQ7:
+    /// -0.35 % (1 rank-1, two large-Â12 near-miss regressions) — target-mix
+    /// sensitive, kept for a third confirming pass on the post-promotion base.
+    LodNoMopt,
+    /// Looser corpus minimization: `--cmin-after-corpus-additions 20`
+    /// (default 5). bdKp: +2.92 % mean; WrQ7: +0.86 % — 2-for-2 marginal
+    /// positive, layered probe on the new best.
+    LodCminLoose,
+    /// Bracket-from-below probe on the 2026-05-26-promoted
+    /// `expire_corpus_after = 10m`: shorten to 5m. 7rtA's direct A/B
+    /// (lod-best 10m vs lod-old 30m) showed -2.44 % at 30m with one BH-
+    /// significant per-target loss; this probes whether the dial peaks at
+    /// 10m from the other side too (mirrors the cmplog_fresh_prob bracket
+    /// at 0.15 / 0.25 / 0.5).
+    LodFresherCorpus,
 }
 impl Experiment {
     pub fn is_lod(&self) -> bool {
         format!("{self:?}").starts_with("Lod")
+    }
+
+    /// True when the worker should snapshot per-testcase `CmplogStore` metadata
+    /// and thread it into `MutationInputs::cmplog`. After the 2026-05-23
+    /// rebaseline this is "everything that layers on `LodBest`" — derived
+    /// directly from the resulting `cmplog_fresh_prob`.
+    pub fn wants_cmplog(self) -> bool {
+        self.lod_config().mutation.cmplog_fresh_prob > 0.0
+    }
+
+    /// True when cross-worker bus imports should be enabled. LOD experiments
+    /// run with the bus off (see `fuzzer/mod.rs::fuzz`); only the dedicated
+    /// `UseBusInputs` probe opts in.
+    pub fn wants_bus(self) -> bool {
+        matches!(self, Experiment::UseBusInputs)
+    }
+
+    /// Apply host-side (non-LOD) knobs to `CliOpts` before the orchestrator
+    /// and workers spawn. Counterpart to `lod_config` for knobs that live
+    /// outside `EngineConfig` (libafl mutator stack, corpus eviction, etc.).
+    /// Called once from `fuzzer/mod.rs::fuzz`.
+    pub fn apply_host_opts(self, opts: &mut CliOpts) {
+        // Layered host-side base for current best (2026-05-26 promotion):
+        // `expire_corpus_after = 10m` on top of cmplog-fresh-best. Archival /
+        // disable variants opt out so they reproduce older behaviour.
+        if self.is_lod() && !matches!(self, Experiment::LodOld | Experiment::LodDisable) {
+            opts.expire_corpus_after = "10m".parse().unwrap();
+        }
+        match self {
+            Experiment::LodNoMopt => {
+                opts.x.mopt = false.into();
+            }
+            Experiment::LodCminLoose => {
+                opts.x.cmin_after_corpus_additions = 20;
+            }
+            Experiment::LodFresherCorpus => {
+                opts.expire_corpus_after = "5m".parse().unwrap();
+            }
+            _ => {}
+        }
     }
 
     pub fn lod_config_for(exp: Option<Experiment>) -> lod::fast::EngineConfig {
@@ -91,89 +147,34 @@ impl Experiment {
     }
 
     fn lod_config(self) -> lod::fast::EngineConfig {
-        use lod::fast::{EngineConfig, EntropyMode, Eviction, NodeBias, StackProfile};
+        use lod::fast::EngineConfig;
         let mut cfg = EngineConfig::default();
-        // Experiments layer on top of the current best-known config.
-        if !matches!(
-            self,
-            Experiment::Lod | Experiment::LodOld | Experiment::LodDisable
-        ) {
+        // Experiments layer on top of the current best-known config:
+        //   LOD-side:  cap_per_type = 256, cmplog_fresh_prob = 0.25.
+        //   host-side: expire_corpus_after = 10m (see `apply_host_opts`).
+        // `LodDisable` opts out so it reproduces raw-libafl behaviour. `LodOld`
+        // inherits the LOD-side base (previous baseline was also cmplog-fresh-
+        // best) and opts out only on the host-side 10m knob.
+        if !matches!(self, Experiment::LodDisable) {
             cfg.corpus.cap_per_type = 256;
-            // TODO: enable cmplog here?
+            cfg.mutation.cmplog_fresh_prob = 0.25;
         }
         match self {
             Experiment::LodNoLevelSwitching => {
                 cfg.lod_switch_inv = 0;
             }
-            Experiment::LodSwitchHot => {
-                cfg.lod_switch_inv = 3;
+            Experiment::LodOld
+            | Experiment::LodBest
+            | Experiment::LodNoMopt
+            | Experiment::LodCminLoose
+            | Experiment::LodFresherCorpus => {
+                // Pure host-knob layered probes / archival aliases; LOD config
+                // is the cmplog-fresh-best base from above.
             }
-            Experiment::LodHavocStack => {
-                cfg.mutation.stack = StackProfile::HAVOC;
-            }
-            Experiment::LodTypeClassBias => {
-                cfg.mutation.node_bias = NodeBias::default_type_class();
-            }
-            Experiment::LodBigCorpus => {
-                cfg.corpus.cap_per_type = 256;
-            }
-            Experiment::LodReservoirCorpus => {
-                cfg.corpus.eviction = Eviction::Reservoir;
-            }
-            Experiment::LodOld => {
-                // archival alias: holds the last "best" config.
-            }
-            Experiment::LodBest => {
-                // best base already applied above; no extra knob.
-            }
-            Experiment::LodBiggerCorpus => {
-                cfg.corpus.cap_per_type = 1024;
-            }
-            Experiment::LodNoSizePressure => {
-                cfg.mutation.size_pressure.enabled = false;
-            }
-            Experiment::LodFifoCorpus => {
-                cfg.corpus.eviction = Eviction::Fifo;
-            }
-            Experiment::LodStackGeomLight => {
-                cfg.mutation.stack = StackProfile::Geometric { p: 0.3, max: 4 };
-            }
-            Experiment::LodByteHeavy => {
-                let w = &mut cfg.mutation.weights;
-                w.byte_mutate = 4.0;
-                w.byte_splice = 4.0;
-                w.byte_resize = 4.0;
-                w.bit_flip_bytes = 4.0;
-                w.bit_flip_byte_arr = 6.0;
-                w.interesting_bytes = 2.0;
-                w.interesting_byte_arr = 2.0;
-            }
-            Experiment::LodCmplog => {
-                // I2S weight is already nonzero by default; we just keep best
-                // as the base. The host (`worker.rs`) gates whether the
-                // CmplogSource is actually threaded through `MutationInputs`,
-                // so other variants stay opted-out.
-            }
-            Experiment::LodCmplogFresh => {
-                // Same plumbing as `LodCmplog` (worker threads the same
-                // `CmplogSource`); additionally turn on the cmplog-seeded
-                // path inside `Fresh::fresh`. 0.25 matches the rate sketched
-                // in the previous campaign's "Future: cmplog during
-                // generation" follow-up.
-                cfg.mutation.cmplog_fresh_prob = 0.25;
-            }
-            Experiment::LodLowEntropy => {
-                // Swap the byte-length entropy metric for the zero-biased
-                // structural one. No mutation knob change — pure corpus-
-                // management signal experiment.
-                cfg.entropy_mode = EntropyMode::LowEntropy;
-            }
-
-            Experiment::Lod
-            | Experiment::LodDisable
+            Experiment::LodDisable
             | Experiment::LodDummyOnly
             | Experiment::LodGenerateOnly => {
-                // no knobs, see worker.rs
+                // no knobs, see worker.rs / orc.rs corpus seeding
             }
 
             Experiment::UseBusInputs
@@ -193,6 +194,7 @@ pub(crate) struct OrchestratorHandle {
     // pub Arc<Mutex<Orchestrator>>
     chan: mpsc::Sender<(OrcMessage, mpsc::SyncSender<OrcMessage>)>,
     corpus: Arc<RwLock<SharedCorpus>>,
+    metrics: Arc<super::metrics::Accumulator>,
 }
 
 enum OrcMessage {
@@ -213,13 +215,19 @@ impl OrchestratorHandle {
         let (tx, rx) = mpsc::channel::<(OrcMessage, mpsc::SyncSender<OrcMessage>)>();
         let corpus = SharedCorpus::new(&opts);
         let corpus_ = corpus.clone();
+        super::metrics::init_session();
+        let metrics = Arc::new(super::metrics::Accumulator::default());
 
+        let metrics_ = metrics.clone();
         let _thread_handle = std::thread::Builder::new()
             .stack_size(32 << 20) // TODO: look into why generated code doesn't probe the stack any more?
             .name("orchestrator".to_owned())
             .spawn(move || {
-                let mut orc = Orchestrator::new(module, opts, corpus_);
-                while let Ok((req, tx)) = rx.recv() {
+                let mut orc = Orchestrator::new(module, opts, corpus_, metrics_);
+                loop {
+                    let Ok((req, tx)) = rx.recv() else {
+                        break;
+                    };
                     let resp = match req {
                         OrcMessage::ReqSuggest => OrcMessage::RespSuggest(orc.suggest().into()),
                         OrcMessage::ReqShouldContinue => {
@@ -227,10 +235,24 @@ impl OrchestratorHandle {
                         }
                         OrcMessage::ReqReportFinds(finds) => {
                             let mut update_live_coverage = false;
+                            let total = finds.len();
+                            let mut saved = 0u64;
                             for input in finds {
-                                let res = orc.report_find(&input);
+                                let (res, wrote_to_disk) = orc.report_find(&input);
                                 update_live_coverage |=
                                     res.map(|x| x.novel_coverage).unwrap_or(false);
+                                saved += wrote_to_disk as u64;
+                            }
+                            if saved > 0 {
+                                let dir = orc
+                                    .opts
+                                    .g
+                                    .out_dir()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_else(|| "<unset>".into());
+                                eprintln!(
+                                    "report_finds: saved {saved}/{total} new inputs to {dir}"
+                                );
                             }
                             let mut corpus = orc.corpus.write().unwrap();
                             corpus.cull_and_update_weights();
@@ -239,6 +261,7 @@ impl OrchestratorHandle {
                                 orc.update_live_coverage();
                                 orc.frontier_bbs = orc.compute_frontier().into_iter().collect();
                             }
+                            orc.push_orc_edges_metrics();
                             OrcMessage::RespOk
                         }
                         OrcMessage::ReqShutdown => {
@@ -248,6 +271,7 @@ impl OrchestratorHandle {
                         OrcMessage::ReqLoadCorpus(corpus) => {
                             let _ = orc.load_corpus(&corpus);
                             orc.update_live_coverage();
+                            orc.push_orc_edges_metrics();
                             OrcMessage::RespOk
                         }
                         _ => OrcMessage::RespInvalid,
@@ -256,7 +280,11 @@ impl OrchestratorHandle {
                 }
             });
 
-        Self { chan: tx, corpus }
+        Self {
+            chan: tx,
+            corpus,
+            metrics,
+        }
     }
 
     fn req(&self, req: OrcMessage) -> OrcMessage {
@@ -292,6 +320,12 @@ impl OrchestratorHandle {
 
     pub fn fetch_corpus(&self) -> Vec<Arc<[u8]>> {
         self.corpus.read().unwrap().sample(&mut rand::rng())
+    }
+
+    /// Shared metrics accumulator workers merge their [`Stats`] deltas into
+    /// and periodically dump.
+    pub fn metrics(&self) -> Arc<super::metrics::Accumulator> {
+        self.metrics.clone()
     }
 
     pub fn load_corpus(&self, seed_corpus: Vec<Vec<u8>>) {
@@ -361,30 +395,33 @@ impl SharedCorpus {
         }
     }
 
-    fn insert(&mut self, input: &[u8], now: Instant) -> bool {
+    /// Returns `(newly_added, wrote_to_disk)`. `wrote_to_disk` is only ever
+    /// `true` when the input was newly added AND `disk_path` was set AND no
+    /// file of that hash already existed.
+    fn insert(&mut self, input: &[u8], now: Instant) -> (bool, bool) {
         if let Some(e) = self.entries.get_mut(input) {
             e.last_seen_used = now;
-            false
-        } else {
-            self.entries.insert(
-                input.to_vec().into_boxed_slice(),
-                Entry {
-                    input: input.to_vec().into_boxed_slice().into(),
-                    last_seen_used: now,
-                    weight: 1.0,
-                },
-            );
-
-            if let Some(disk_path) = self.disk_path.as_ref() {
-                let p = Self::get_inp_path(disk_path, input);
-                if !p.is_file() {
-                    let _ = std::fs::create_dir_all(disk_path);
-                    let _ = std::fs::write(&p, input);
-                    println!("saved {p:?}");
-                }
-            }
-            true
+            return (false, false);
         }
+        self.entries.insert(
+            input.to_vec().into_boxed_slice(),
+            Entry {
+                input: input.to_vec().into_boxed_slice().into(),
+                last_seen_used: now,
+                weight: 1.0,
+            },
+        );
+
+        let mut wrote_to_disk = false;
+        if let Some(disk_path) = self.disk_path.as_ref() {
+            let p = Self::get_inp_path(disk_path, input);
+            if !p.is_file() {
+                let _ = std::fs::create_dir_all(disk_path);
+                let _ = std::fs::write(&p, input);
+                wrote_to_disk = true;
+            }
+        }
+        (true, wrote_to_disk)
     }
 
     fn sample<R: RngCore>(&self, rng: &mut R) -> Vec<Arc<[u8]>> {
@@ -434,10 +471,16 @@ pub(crate) struct Orchestrator {
     config_epoch: usize,
     frontier_bbs: Vec<Location>,
     lod_options: Vec<&'static str>,
+    metrics: Arc<super::metrics::Accumulator>,
 }
 
 impl Orchestrator {
-    fn new(module: Arc<ModuleSpec>, opts: CliOpts, corpus: Arc<RwLock<SharedCorpus>>) -> Self {
+    fn new(
+        module: Arc<ModuleSpec>,
+        opts: CliOpts,
+        corpus: Arc<RwLock<SharedCorpus>>,
+        metrics: Arc<super::metrics::Accumulator>,
+    ) -> Self {
         let now = Instant::now();
         let mut codecov_sess = JitFuzzingSessionBuilder::new(module.clone())
             .feedback(FeedbackOptions {
@@ -487,7 +530,7 @@ impl Orchestrator {
             let mut corpus = corpus.write().unwrap();
             for option in lod_options.drain(..) {
                 if let Some(dummy_bytes) = lod::get_dummy_bytes(option) {
-                    corpus.insert(&dummy_bytes, Instant::now());
+                    let _ = corpus.insert(&dummy_bytes, Instant::now());
                 }
             }
         }
@@ -508,10 +551,18 @@ impl Orchestrator {
             config_epoch: 0,
             frontier_bbs: Vec::new(),
             lod_options,
+            metrics,
+        }
+    }
+
+    fn push_orc_edges_metrics(&self) {
+        if let Some(edges) = self.codecov_sess.get_edge_cov() {
+            self.metrics.update_orc_edges(edges);
         }
     }
 
     pub fn load_corpus(&mut self, inputs: &[Vec<u8>]) -> Result<(), ()> {
+        let mut saved = 0u64;
         for (i, input) in inputs.iter().enumerate() {
             if i > 16 && (i + 1).is_power_of_two() {
                 let edges = self.codecov_sess.get_edge_cov().unwrap_or(0);
@@ -522,7 +573,8 @@ impl Orchestrator {
                 );
             }
             // saves all inputs
-            let res = self.add_corpus(input);
+            let (res, wrote_to_disk) = self.add_corpus(input);
+            saved += wrote_to_disk as u64;
             if let Some(res) = res
                 && res.is_crash()
                 && !*self.opts.x.fuzz_through_crashes
@@ -533,17 +585,24 @@ impl Orchestrator {
         }
         if !inputs.is_empty() {
             let edges = self.codecov_sess.get_edge_cov().unwrap_or(0);
+            let saved_suffix = match self.opts.g.out_dir() {
+                Some(p) if saved > 0 => format!(", saved {saved} to {}", p.display()),
+                _ => String::new(),
+            };
             eprintln!(
-                "done loading: {} entries [edges: {edges:>5}] ...",
+                "done loading: {} entries [edges: {edges:>5}]{saved_suffix}",
                 inputs.len(),
             );
         }
         Ok(())
     }
 
-    pub fn report_find(&mut self, /*config: &Config,*/ input: &[u8]) -> Option<RunResult> {
+    /// Returns `(maybe_run_result, wrote_to_disk)`. `wrote_to_disk` is set if
+    /// either the corpus insert created a file, or this method re-created one
+    /// that had been deleted out from under us.
+    pub fn report_find(&mut self, /*config: &Config,*/ input: &[u8]) -> (Option<RunResult>, bool) {
         // TODO: apply some kind of bandit on config?
-        let res = self.add_corpus(input);
+        let (res, mut wrote_to_disk) = self.add_corpus(input);
 
         if let Some(path) = self.opts.g.out_dir() {
             let mut inp_path = path.clone();
@@ -552,11 +611,11 @@ impl Orchestrator {
             if !inp_path.is_file() {
                 let _ = std::fs::create_dir_all(path);
                 let _ = std::fs::write(&inp_path, input);
-                println!("saved {inp_path:?}");
+                wrote_to_disk = true;
             }
         }
 
-        res
+        (res, wrote_to_disk)
     }
 
     pub fn suggest(&mut self) -> Config {
@@ -829,10 +888,13 @@ impl Orchestrator {
                 .unwrap_or(true)
     }
 
-    fn add_corpus(&mut self, input: &[u8]) -> Option<RunResult> {
+    /// Returns `(maybe_run_result, wrote_to_disk)`. The run result is `None`
+    /// when the input was already in the corpus.
+    fn add_corpus(&mut self, input: &[u8]) -> (Option<RunResult>, bool) {
         let mut corp = self.corpus.write().unwrap();
-        if !corp.insert(input, Instant::now()) {
-            return None;
+        let (newly_added, wrote_to_disk) = corp.insert(input, Instant::now());
+        if !newly_added {
+            return (None, false);
         }
         drop(corp);
         let fuzzing = *self.opts.x.fuzz_through_crashes;
@@ -843,7 +905,7 @@ impl Orchestrator {
             self.last_func_find = Instant::now();
         }
         self.found_crashes |= res.is_crash();
-        Some(res)
+        (Some(res), wrote_to_disk)
     }
 
     fn update_live_coverage(&self) {

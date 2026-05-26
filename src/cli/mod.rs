@@ -196,6 +196,18 @@ pub(crate) enum Subcommand {
         program: PathBuf,
         corpus: PathBuf,
     },
+    /// Analyze per-edge LOD entropy deltas from a corpus.
+    LodAnalyzeEdges {
+        program: PathBuf,
+        grammar: String,
+        corpus: PathBuf,
+        /// Show at most this many rows (sorted by highest entropy increase).
+        #[clap(long, default_value = "50")]
+        top: usize,
+        /// Keep only edges in the lowest-N fraction by least input entropy.
+        #[clap(long, default_value = "0.25")]
+        low_entropy_fraction: f64,
+    },
 }
 
 fn parse_program(path: &Path) -> Arc<ModuleSpec> {
@@ -1217,6 +1229,232 @@ pub(crate) fn main() {
                 "{:<name_w$}  {:>7}  {:>7}  {:>10}  {:>9.1}%",
                 "union", n_processed, total_edges, total_edges, 100.0,
             );
+        }
+        Subcommand::LodAnalyzeEdges {
+            program,
+            grammar,
+            corpus,
+            top,
+            low_entropy_fraction,
+        } => {
+            use crate::instrumentation::{Edge, EdgeCoveragePass};
+            use std::collections::HashMap;
+
+            let mod_spec = parse_program(&program);
+            let mod_filename = mod_spec.filename.clone();
+            let input_paths = gather_inputs_paths(&Some(corpus), &[], true);
+            let mut engine = lod::make_engine(&grammar);
+
+            // Topologically order root variants from lowest to highest using the
+            // grammar's `lower_graph_edges` (each edge is `(higher, lower)`).
+            // NB: tree-shaped graphs are unsupported for now.
+            let edges = engine.lower_graph_edges();
+            let mut down: HashMap<&'static str, &'static str> = HashMap::new();
+            let mut up: HashMap<&'static str, &'static str> = HashMap::new();
+            let mut nodes: BTreeSet<&'static str> = BTreeSet::new();
+            for (hi, lo) in &edges {
+                nodes.insert(hi);
+                nodes.insert(lo);
+                assert!(
+                    down.insert(hi, lo).is_none(),
+                    "non-linear LOD graph (variant {hi:?} has multiple down edges); \
+                     tree-shaped orderings are not yet supported"
+                );
+                assert!(
+                    up.insert(lo, hi).is_none(),
+                    "non-linear LOD graph (variant {lo:?} has multiple up edges); \
+                     tree-shaped orderings are not yet supported"
+                );
+            }
+            let lowest_candidates: Vec<&'static str> = nodes
+                .iter()
+                .copied()
+                .filter(|n| !down.contains_key(n))
+                .collect();
+            assert_eq!(
+                lowest_candidates.len(),
+                1,
+                "expected exactly one lowest variant, got {lowest_candidates:?}"
+            );
+            let mut level_names: Vec<&'static str> = Vec::with_capacity(nodes.len());
+            level_names.push(lowest_candidates[0]);
+            while let Some(next) = up.get(level_names.last().unwrap()) {
+                level_names.push(next);
+            }
+            assert_eq!(
+                level_names.len(),
+                nodes.len(),
+                "LOD graph has disconnected components: ordered {level_names:?}, all {nodes:?}"
+            );
+            let display_names: Vec<String> = level_names.iter().map(|s| s.to_string()).collect();
+
+            // Bucket each corpus entry by its root grammar variant and pre-compute
+            // per-input entropy so we can later aggregate per-edge minima.
+            let variant_index: HashMap<&'static str, usize> = level_names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (*n, i))
+                .collect();
+            let mut buckets: Vec<Vec<(Vec<u8>, u32)>> = vec![Vec::new(); level_names.len()];
+            let mut skipped = 0usize;
+            for path in &input_paths {
+                let bytes = std::fs::read(path).unwrap();
+                let entropy = engine.get_entropy(&bytes) as u32;
+                let hits = engine.parse_exact_levels(&bytes);
+                if hits.is_empty() || !hits[0].is_root {
+                    eprintln!("skipping {path:?}: no root grammar hit");
+                    skipped += 1;
+                    continue;
+                }
+                let variant = hits[0].variant_name;
+                if let Some(&idx) = variant_index.get(variant) {
+                    buckets[idx].push((bytes, entropy));
+                } else {
+                    eprintln!(
+                        "skipping {path:?}: root variant {variant:?} not in lower-graph nodes"
+                    );
+                    skipped += 1;
+                }
+            }
+
+            let mut total_input_count = input_paths.len();
+            if let Some((dummy_variant, dummy_bytes)) = lod::get_dummy(&grammar) {
+                let entropy = engine.get_entropy(&dummy_bytes) as u32;
+                if let Some(&idx) = variant_index.get(dummy_variant) {
+                    buckets[idx].push((dummy_bytes, entropy));
+                    total_input_count += 1;
+                } else {
+                    eprintln!("skipping dummy: variant {dummy_variant:?} not in lower-graph nodes");
+                }
+            }
+
+            let mut sess = JitFuzzingSession::builder(mod_spec)
+                .feedback(FeedbackOptions::minimal_code_coverage())
+                .build();
+            let mut stats = Stats::default();
+            sess.reset_pass_coverage();
+            sess.initialize(&mut stats);
+            let pass = sess.get_pass::<EdgeCoveragePass>();
+            let edge_keys: Vec<Edge> = pass.coverage.keys.to_vec();
+            let mut min_entropy_by_level: Vec<Vec<Option<u32>>> =
+                vec![vec![None; edge_keys.len()]; display_names.len()];
+
+            for (level_idx, (name, inputs)) in display_names.iter().zip(&buckets).enumerate() {
+                eprintln!(
+                    "Level {name}: running {} input(s) for entropy-edge analysis ...",
+                    inputs.len()
+                );
+                for (input, input_entropy) in inputs {
+                    sess.reset_pass_coverage();
+                    sess.initialize(&mut stats);
+                    let _ = sess.run(input, &mut stats);
+                    let pass = sess.get_pass::<EdgeCoveragePass>();
+                    for edge_idx in pass.coverage.saved.iter_ones() {
+                        let cell = &mut min_entropy_by_level[level_idx][edge_idx];
+                        *cell = Some(cell.map_or(*input_entropy, |v| v.min(*input_entropy)));
+                    }
+                }
+            }
+
+            struct EdgeRow {
+                edge: Edge,
+                least_entropy: u32,
+                max_min_entropy: u32,
+                increase: u32,
+                least_level: usize,
+                max_level: usize,
+                covered_levels: usize,
+            }
+
+            let mut rows = Vec::<EdgeRow>::new();
+            for (edge_idx, edge) in edge_keys.into_iter().enumerate() {
+                let mut least_entropy = u32::MAX;
+                let mut max_min_entropy = 0u32;
+                let mut least_level = usize::MAX;
+                let mut max_level = usize::MAX;
+                let mut covered_levels = 0usize;
+                for (level_idx, per_level) in min_entropy_by_level.iter().enumerate() {
+                    if let Some(v) = per_level[edge_idx] {
+                        covered_levels += 1;
+                        if v < least_entropy {
+                            least_entropy = v;
+                            least_level = level_idx;
+                        }
+                        if v > max_min_entropy {
+                            max_min_entropy = v;
+                            max_level = level_idx;
+                        }
+                    }
+                }
+                if covered_levels == 0 {
+                    continue;
+                }
+                rows.push(EdgeRow {
+                    edge,
+                    least_entropy,
+                    max_min_entropy,
+                    increase: max_min_entropy.saturating_sub(least_entropy),
+                    least_level,
+                    max_level,
+                    covered_levels,
+                });
+            }
+
+            if rows.is_empty() {
+                println!(
+                    "No covered edges for {} (grammar={}, {} input(s), {} skipped)",
+                    mod_filename, grammar, total_input_count, skipped
+                );
+                return;
+            }
+
+            let frac = low_entropy_fraction.clamp(0.0, 1.0);
+            let mut entropies: Vec<u32> = rows.iter().map(|r| r.least_entropy).collect();
+            entropies.sort_unstable();
+            let keep_n = ((entropies.len() as f64) * frac).ceil() as usize;
+            let keep_n = keep_n.max(1).min(entropies.len());
+            let entropy_cutoff = entropies[keep_n - 1];
+
+            rows.retain(|r| r.least_entropy <= entropy_cutoff);
+            rows.sort_by(|a, b| {
+                b.increase
+                    .cmp(&a.increase)
+                    .then(a.least_entropy.cmp(&b.least_entropy))
+                    .then(b.max_min_entropy.cmp(&a.max_min_entropy))
+            });
+
+            let shown = top.min(rows.len());
+            println!(
+                "LOD edge entropy deltas on {} (grammar={}, {} input(s), {} skipped)",
+                mod_filename, grammar, total_input_count, skipped
+            );
+            println!(
+                "filter: keep lowest {:.1}% least-entropy edges (<= {}), showing top {} by increase",
+                frac * 100.0,
+                entropy_cutoff,
+                shown
+            );
+            println!(
+                "{:<22}  {:>8}  {:>8}  {:>8}  {:<14}  {:<14}  {:>8}",
+                "edge", "least", "max_min", "increase", "least_level", "max_level", "levels"
+            );
+            println!("{}", "-".repeat(22 + 2 + 8 + 2 + 8 + 2 + 8 + 2 + 14 + 2 + 14 + 2 + 8));
+            for row in rows.into_iter().take(shown) {
+                let edge = format!(
+                    "f{}:{}->{}",
+                    row.edge.function, row.edge.from.0, row.edge.to.0
+                );
+                println!(
+                    "{:<22}  {:>8}  {:>8}  {:>8}  {:<14}  {:<14}  {:>8}",
+                    edge,
+                    row.least_entropy,
+                    row.max_min_entropy,
+                    row.increase,
+                    display_names[row.least_level].as_str(),
+                    display_names[row.max_level].as_str(),
+                    row.covered_levels
+                );
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
 use crate::HashSet;
 use crate::fuzzer::i2s_patches::{CmpLog, CmplogStore};
-use crate::instrumentation::InstrumentationSnapshot;
+use crate::instrumentation::{EdgeCoveragePass, FunctionCoveragePass, InstrumentationSnapshot};
+use crate::jit::RunResult;
 use std::collections::VecDeque;
 use std::{sync::Arc, time::Instant};
 
@@ -39,6 +40,42 @@ pub(crate) enum Message {
     Exit,
 }
 
+/// Which mutation path produced a finding — used to annotate the per-find
+/// coverage log line so it's clear whether LOD or the byte-level mutators
+/// are pulling their weight.
+#[derive(Clone, Copy)]
+pub(crate) enum FindSource {
+    Lod,
+    NonLod,
+}
+
+impl FindSource {
+    fn tag(self) -> &'static str {
+        match self {
+            FindSource::Lod => "LOD",
+            FindSource::NonLod => "non-LOD",
+        }
+    }
+}
+
+/// Accumulates per-find coverage events between edge/func growth points. When
+/// a find adds new edges or funcs we flush the batch first, then print the
+/// growth event; when a find only advances cmpcov/edge-shortest-trace style
+/// non-edge features we just bump a counter so the log doesn't get spammed.
+#[derive(Default)]
+struct CovBatch {
+    counts: crate::HashMap<&'static str, u32>,
+    lod_finds: u32,
+    non_lod_finds: u32,
+    /// Funcs/edges counts from the last printed line — what we compare new
+    /// finds against to decide between batching and flushing.
+    last_funcs: usize,
+    last_edges: usize,
+    /// Set to true after the first growth-line is printed so the very first
+    /// find always emits a normal line (even when funcs/edges are still zero).
+    initialized: bool,
+}
+
 pub(crate) struct Worker {
     idx: usize,
     opts: FuzzOpts,
@@ -59,6 +96,15 @@ pub(crate) struct Worker {
     stop_requested: bool,
     lod_engine: Option<Box<dyn lod::ErasedEngine>>,
     experiment: Option<super::orc::Experiment>,
+    /// Process-wide metrics accumulator, shared with the orchestrator. None
+    /// for direct (non-orc) worker invocations; set by the orchestrator path
+    /// via [`Worker::set_metrics`].
+    metrics: Option<Arc<super::metrics::Accumulator>>,
+    /// Snapshot of `self.stats` at the last `Accumulator::merge_delta` call;
+    /// used to compute the delta to push on each periodic tick + on exit.
+    last_merged_stats: Stats,
+    last_metrics_dump: Instant,
+    cov_batch: CovBatch,
 }
 
 impl Worker {
@@ -81,7 +127,6 @@ impl Worker {
         let sess = match orc {
             Some(ref handle) => {
                 let config = handle.suggest();
-                eprintln!("got config: {config:#?}");
                 schedule.timeout = Some(config.timeout);
                 lod_engine = config.lod.as_deref().map(lod::make_engine);
                 if let Some(engine) = lod_engine.as_mut() {
@@ -139,7 +184,14 @@ impl Worker {
             stop_requested: false,
             lod_engine,
             experiment,
+            metrics: orc.as_ref().map(|h| h.metrics()),
+            last_merged_stats: Stats::default(),
+            last_metrics_dump: Instant::now(),
+            cov_batch: CovBatch::default(),
         };
+        if let Some(ref acc) = worker.metrics {
+            acc.note_worker_started();
+        }
         // TODO: move this somewhere else?
         if let Some(ref orc) = orc {
             let corpus = orc.fetch_corpus();
@@ -312,6 +364,61 @@ impl Worker {
         Ok(())
     }
 
+    /// Signal that this worker has reached end-of-run; bumps the shared
+    /// `workers_completed` counter so the dump shows worker churn.
+    pub(crate) fn note_completed(&self) {
+        if let Some(acc) = self.metrics.as_ref() {
+            acc.note_worker_completed();
+        }
+    }
+
+    /// Merge `self.stats`'s delta-since-last-call into the shared
+    /// [`super::metrics::Accumulator`], refresh the "last-seen active worker"
+    /// fields, and dump to `$WASMFUZZ_METRICS_JSON` when `force` or
+    /// [`super::metrics::METRICS_TICK`] has elapsed since the last dump.
+    pub(crate) fn maybe_dump_metrics(&mut self, force: bool) {
+        if self.metrics.is_none() {
+            return;
+        }
+        if !force && self.last_metrics_dump.elapsed() < super::metrics::METRICS_TICK {
+            return;
+        }
+        self.last_metrics_dump = Instant::now();
+        self.merge_metrics();
+        if let Some(acc) = self.metrics.as_ref() {
+            acc.dump_if_enabled(super::metrics::session_elapsed());
+        }
+    }
+
+    /// Merge `self.stats`'s delta-since-last-call into the shared
+    /// [`super::metrics::Accumulator`] and refresh the "last-seen active
+    /// worker state" fields.
+    pub(crate) fn merge_metrics(&mut self) {
+        let Some(acc) = self.metrics.as_ref() else {
+            return;
+        };
+        let delta = super::metrics::StatsDelta::between(&self.last_merged_stats, &self.stats);
+        acc.merge_delta(delta);
+        self.last_merged_stats = self.stats.clone();
+        use libafl::corpus::Corpus;
+        let lod_engine = self.lod_engine.as_deref().map(|e| e.format_name());
+        let lod_corpus = self.lod_engine.as_deref().map(|e| {
+            let s = e.corpus_stats();
+            (s.num_shapes, s.total_entries)
+        });
+        acc.update_active_state(
+            self.corpus.count(),
+            self.solutions.count(),
+            self.exhaustive_queue.len(),
+            self.stage_depth,
+            lod_engine,
+            lod_corpus,
+        );
+        if self.last_crasher.is_some() {
+            acc.note_crash();
+        }
+    }
+
     fn save_input(&self, input: &[u8]) {
         if let Some(path) = self.opts.g.out_dir() {
             let mut inp_path = path.clone();
@@ -320,7 +427,6 @@ impl Worker {
             if !inp_path.is_file() {
                 let _ = std::fs::create_dir_all(path);
                 let _ = std::fs::write(&inp_path, input);
-                println!("saved {inp_path:?}");
             }
         }
     }
@@ -410,6 +516,7 @@ impl Worker {
 
     pub(crate) fn run(&mut self) -> Result<WorkerExit, libafl::Error> {
         let res = self.run_();
+        self.flush_cov_batch();
         println!("{:?} {}", res, self.stats.format(&self.opts.thread_name));
         res
     }
@@ -476,13 +583,7 @@ impl Worker {
                         let corpus_idx = self.corpus.nth(corpus_idx);
                         let mut testcase = self.corpus.get(corpus_idx)?.borrow_mut();
 
-                        if matches!(
-                            self.experiment,
-                            Some(
-                                super::orc::Experiment::LodCmplog
-                                    | super::orc::Experiment::LodCmplogFresh
-                            )
-                        ) {
+                        if self.experiment.is_some_and(|e| e.wants_cmplog()) {
                             use super::i2s_patches::CmplogStore;
                             if let Ok(i2s_metadata) = testcase.metadata::<CmplogStore>() {
                                 tracy_full::zone!("lod: cmplog snapshot");
@@ -514,6 +615,7 @@ impl Worker {
                                 cmplog: cmplog_ref,
                             });
                         }
+                        self.stats.lod_mutations += 1;
                         {
                             tracy_full::zone!("lod: serialize");
                             lod_buf.clear();
@@ -526,7 +628,7 @@ impl Worker {
                             // TODO: also set input_size_custom during cmin?
                             instance.vmctx.input_size_custom = engine.entropy().try_into().ok();
                         }
-                        let res = self.run_input(&lod_buf)?;
+                        let res = self.run_input(&lod_buf, FindSource::Lod)?;
                         if let Some(instance) = self.sess.reusable_stage.instance.as_mut() {
                             instance.vmctx.input_size_custom = None;
                         }
@@ -540,7 +642,6 @@ impl Worker {
                                         Some(super::orc::Experiment::LodNoLevelSwitching)
                                     ),
                                 );
-                                eprintln!("[LOD/{}] found coverage", engine.format_name());
                             }
                             InputVerdict::NotInteresting => {}
                             InputVerdict::Crashed => {
@@ -559,6 +660,7 @@ impl Worker {
                             }
                         };
                         if _interesting {
+                            self.stats.lod_finds += 1;
                             self.schedule.notify_activity();
                             corpus_additions_since_cmin += 1;
                             // TODO: move this to a proper power schedule / favoured inputs?
@@ -599,12 +701,14 @@ impl Worker {
                     }
                     self.stats.exhaustive_execs += 1;
                     det.next(input.as_mut());
+                    // Deterministic byte-flip stage on new finds is dead-coded:
+                    // the LodExhaustiveOn A/B (2026-05-25 bdKp) was decisively
+                    // net-negative (mean -3.91 %, 5 BH-significant losses).
                     if true {
-                        // FIXME: why do we disable exhaustive here? add experiment?
                         continue;
                     }
                     self.schedule.step();
-                    let _interesting = match self.run_input(input.as_ref())? {
+                    let _interesting = match self.run_input(input.as_ref(), FindSource::NonLod)? {
                         InputVerdict::Interesting => true,
                         InputVerdict::NotInteresting => false,
                         InputVerdict::Crashed if ignore_crashes => unreachable!(),
@@ -612,6 +716,7 @@ impl Worker {
                     };
                     if _interesting {
                         self.stats.exhaustive_finds += 1;
+                        self.stats.non_lod_finds += 1;
                         if let Some(credit) = det.credit() {
                             if self.exhaustive_queue.len() > 1 {
                                 println!(
@@ -670,17 +775,19 @@ impl Worker {
                     // Note: optionally retrace input before mutating?
                     mutator.mutate(self, &mut input)?;
                     assert!(input.as_ref().len() <= self.sess.swarm.input_alloc_size());
+                    self.stats.non_lod_mutations += 1;
                     self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
                 }
 
                 self.schedule.step();
-                let _interesting = match self.run_input(input.as_ref())? {
+                let _interesting = match self.run_input(input.as_ref(), FindSource::NonLod)? {
                     InputVerdict::Interesting => true,
                     InputVerdict::NotInteresting => false,
                     InputVerdict::Crashed if ignore_crashes => unreachable!(),
                     InputVerdict::Crashed => return Ok(WorkerExit::CrashFound),
                 };
                 if _interesting {
+                    self.stats.non_lod_finds += 1;
                     self.schedule.notify_activity();
                     interesting = true;
                     corpus_additions_since_cmin += 1;
@@ -721,8 +828,11 @@ impl Worker {
             }
 
             // periodic stuff
+            self.maybe_dump_metrics(false);
             if self.schedule.next_print() {
+                self.flush_cov_batch();
                 println!("{}", self.stats.format(&self.opts.thread_name));
+                self.merge_metrics();
             }
 
             let force_cmin = corpus_additions_since_cmin >= self.opts.x.cmin_after_corpus_additions;
@@ -796,7 +906,85 @@ impl Worker {
         Ok(())
     }
 
-    fn run_input(&mut self, input: &[u8]) -> Result<InputVerdict, libafl::Error> {
+    fn current_funcs_edges(&self) -> (usize, usize) {
+        let edges = self
+            .sess
+            .get_passes::<EdgeCoveragePass>()
+            .iter()
+            .map(|p| p.coverage.iter_covered_keys().count())
+            .max()
+            .unwrap_or(0);
+        let funcs = self
+            .sess
+            .get_passes::<FunctionCoveragePass>()
+            .iter()
+            .map(|p| p.coverage.iter_covered_keys().count())
+            .max()
+            .unwrap_or(0);
+        (funcs, edges)
+    }
+
+    /// Record a novel-coverage find. Emits a normal `[funcs: … edges: … corp:
+    /// …] new features (LOD): …` line on edge/func growth (flushing any
+    /// pending batch first), otherwise accumulates into the batch.
+    fn note_cov_find(&mut self, res: &RunResult, src: FindSource) {
+        let (funcs, edges) = self.current_funcs_edges();
+        let grew = !self.cov_batch.initialized
+            || edges > self.cov_batch.last_edges
+            || funcs > self.cov_batch.last_funcs;
+        if grew {
+            self.flush_cov_batch();
+            let new_fts = res.novel_coverage_passes.join(", ");
+            println!(
+                "[funcs: {funcs:>3} edges: {edges:>5} corp: {:>4}] new features ({}): {new_fts}",
+                self.corpus.count(),
+                src.tag(),
+            );
+            self.cov_batch.last_funcs = funcs;
+            self.cov_batch.last_edges = edges;
+            self.cov_batch.initialized = true;
+        } else {
+            for &ft in &res.novel_coverage_passes {
+                *self.cov_batch.counts.entry(ft).or_default() += 1;
+            }
+            match src {
+                FindSource::Lod => self.cov_batch.lod_finds += 1,
+                FindSource::NonLod => self.cov_batch.non_lod_finds += 1,
+            }
+        }
+    }
+
+    /// Print the accumulated batch (if any) as a single line and clear it.
+    /// Idempotent; safe to call from periodic-print sites or before exit.
+    fn flush_cov_batch(&mut self) {
+        if self.cov_batch.counts.is_empty() {
+            return;
+        }
+        let mut items: Vec<(&'static str, u32)> = self.cov_batch.counts.drain().collect();
+        items.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        let body = items
+            .iter()
+            .map(|(k, v)| format!("{v}x {k}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let total: u32 = items.iter().map(|(_, v)| v).sum();
+        let lod = self.cov_batch.lod_finds;
+        let non_lod = self.cov_batch.non_lod_finds;
+        println!(
+            "[funcs: {:>3} edges: {:>5} corp: {:>4}] novel features batch ({total}x, LOD: {lod}, non-LOD: {non_lod}): {body}",
+            self.cov_batch.last_funcs,
+            self.cov_batch.last_edges,
+            self.corpus.count(),
+        );
+        self.cov_batch.lod_finds = 0;
+        self.cov_batch.non_lod_finds = 0;
+    }
+
+    fn run_input(
+        &mut self,
+        input: &[u8],
+        src: FindSource,
+    ) -> Result<InputVerdict, libafl::Error> {
         tracy_full::zone!("Worker::run_input");
         assert!(input.len() <= self.sess.swarm.input_alloc_size());
         let res = self.sess.run(input, &mut self.stats);
@@ -817,7 +1005,7 @@ impl Worker {
             return Ok(InputVerdict::Crashed);
         }
         if res.novel_coverage {
-            res.print_cov_update(&self.sess, self.corpus.count());
+            self.note_cov_find(&res, src);
             // Add the input to the main corpus
             self.add_to_corpus(input, false)?;
             self.bus.send(Message::Testcase {

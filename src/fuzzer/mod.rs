@@ -4,6 +4,7 @@ use clap::Parser;
 
 pub(crate) mod exhaustive;
 pub(crate) mod i2s_patches;
+pub(crate) mod metrics;
 pub mod opts;
 pub(crate) mod orc;
 mod worker;
@@ -16,13 +17,20 @@ pub(crate) use crate::fuzzer::worker::WorkerExit;
 use crate::ir::ModuleSpec;
 use crate::simple_bus::MessageBus;
 
-pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
+pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, mut opts: orc::CliOpts) {
     // https://stackoverflow.com/a/36031130
     let orig_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         orig_hook(panic_info);
         std::process::exit(1);
     }));
+
+    // Apply experiment-specific host-side knob overrides (orchestrator
+    // cadence, libafl mutator, corpus eviction). LOD-side knobs are applied
+    // per-worker via `Experiment::lod_config`.
+    if let Some(exp) = opts.experiment {
+        exp.apply_host_opts(&mut opts);
+    }
 
     let cores = opts
         .cores
@@ -82,7 +90,7 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                     fuzz_opts.x = opts.x.clone();
                     fuzz_opts.t.idle_timeout = Some("20s".parse().unwrap());
                     fuzz_opts.x.ignore_bus_inputs =
-                        (!matches!(opts.experiment, Some(orc::Experiment::UseBusInputs))).into();
+                        (!opts.experiment.is_some_and(|e| e.wants_bus())).into();
                     fuzz_opts.g.lod = opts.g.lod.clone();
                     if matches!(opts.experiment, Some(orc::Experiment::Snapshot)) {
                         fuzz_opts.x.run_from_snapshot = true.into();
@@ -97,6 +105,11 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                         opts.experiment,
                     );
                     let res = worker.run().unwrap();
+                    // Final delta — workers respawn per `config_interval`, so
+                    // counters accumulated since the last dump tick would
+                    // otherwise be lost when the Stats struct is dropped.
+                    worker.maybe_dump_metrics(true);
+                    worker.note_completed();
                     use libafl::corpus::Corpus;
                     let res = if worker.solutions.count() != 0 {
                         WorkerExit::CrashFound
@@ -113,7 +126,7 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                         orc_handle.report_finds(inputs);
                     } else {
                         for _ in 0..10 {
-                            if !dbg!(worker.inmemory_cmin(false)) {
+                            if !worker.inmemory_cmin(false) {
                                 break;
                             }
                         }
