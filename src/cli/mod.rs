@@ -196,17 +196,14 @@ pub(crate) enum Subcommand {
         program: PathBuf,
         corpus: PathBuf,
     },
-    /// Analyze per-edge LOD entropy deltas from a corpus.
-    LodAnalyzeEdges {
+    /// Analyze minimum LOD entropy per covered function from a corpus.
+    LodAnalyzeEntropy {
         program: PathBuf,
         grammar: String,
         corpus: PathBuf,
-        /// Show at most this many rows (sorted by highest entropy increase).
-        #[clap(long, default_value = "50")]
-        top: usize,
-        /// Keep only edges in the lowest-N fraction by least input entropy.
-        #[clap(long, default_value = "0.25")]
-        low_entropy_fraction: f64,
+        /// Also include basic blocks as rows.
+        #[clap(long, default_value_t = false)]
+        bbs: bool,
     },
 }
 
@@ -1230,101 +1227,35 @@ pub(crate) fn main() {
                 "union", n_processed, total_edges, total_edges, 100.0,
             );
         }
-        Subcommand::LodAnalyzeEdges {
+        Subcommand::LodAnalyzeEntropy {
             program,
             grammar,
             corpus,
-            top,
-            low_entropy_fraction,
+            bbs,
         } => {
-            use crate::instrumentation::{Edge, EdgeCoveragePass};
-            use std::collections::HashMap;
+            use crate::instrumentation::{BBCoveragePass, FuncIdx, FunctionCoveragePass};
 
             let mod_spec = parse_program(&program);
             let mod_filename = mod_spec.filename.clone();
-            let input_paths = gather_inputs_paths(&Some(corpus), &[], true);
+            let func_symbols: Vec<String> = mod_spec
+                .functions
+                .iter()
+                .map(|f| f.symbol.clone())
+                .collect();
+            let mut input_paths = gather_inputs_paths(&Some(corpus), &[], true);
+            input_paths.push(PathBuf::from("$dummy"));
             let mut engine = lod::make_engine(&grammar);
-
-            // Topologically order root variants from lowest to highest using the
-            // grammar's `lower_graph_edges` (each edge is `(higher, lower)`).
-            // NB: tree-shaped graphs are unsupported for now.
-            let edges = engine.lower_graph_edges();
-            let mut down: HashMap<&'static str, &'static str> = HashMap::new();
-            let mut up: HashMap<&'static str, &'static str> = HashMap::new();
-            let mut nodes: BTreeSet<&'static str> = BTreeSet::new();
-            for (hi, lo) in &edges {
-                nodes.insert(hi);
-                nodes.insert(lo);
-                assert!(
-                    down.insert(hi, lo).is_none(),
-                    "non-linear LOD graph (variant {hi:?} has multiple down edges); \
-                     tree-shaped orderings are not yet supported"
-                );
-                assert!(
-                    up.insert(lo, hi).is_none(),
-                    "non-linear LOD graph (variant {lo:?} has multiple up edges); \
-                     tree-shaped orderings are not yet supported"
-                );
-            }
-            let lowest_candidates: Vec<&'static str> = nodes
-                .iter()
-                .copied()
-                .filter(|n| !down.contains_key(n))
-                .collect();
-            assert_eq!(
-                lowest_candidates.len(),
-                1,
-                "expected exactly one lowest variant, got {lowest_candidates:?}"
-            );
-            let mut level_names: Vec<&'static str> = Vec::with_capacity(nodes.len());
-            level_names.push(lowest_candidates[0]);
-            while let Some(next) = up.get(level_names.last().unwrap()) {
-                level_names.push(next);
-            }
-            assert_eq!(
-                level_names.len(),
-                nodes.len(),
-                "LOD graph has disconnected components: ordered {level_names:?}, all {nodes:?}"
-            );
-            let display_names: Vec<String> = level_names.iter().map(|s| s.to_string()).collect();
-
-            // Bucket each corpus entry by its root grammar variant and pre-compute
-            // per-input entropy so we can later aggregate per-edge minima.
-            let variant_index: HashMap<&'static str, usize> = level_names
-                .iter()
-                .enumerate()
-                .map(|(i, n)| (*n, i))
-                .collect();
-            let mut buckets: Vec<Vec<(Vec<u8>, u32)>> = vec![Vec::new(); level_names.len()];
-            let mut skipped = 0usize;
-            for path in &input_paths {
-                let bytes = std::fs::read(path).unwrap();
-                let entropy = engine.get_entropy(&bytes) as u32;
-                let hits = engine.parse_exact_levels(&bytes);
-                if hits.is_empty() || !hits[0].is_root {
-                    eprintln!("skipping {path:?}: no root grammar hit");
-                    skipped += 1;
-                    continue;
-                }
-                let variant = hits[0].variant_name;
-                if let Some(&idx) = variant_index.get(variant) {
-                    buckets[idx].push((bytes, entropy));
-                } else {
-                    eprintln!(
-                        "skipping {path:?}: root variant {variant:?} not in lower-graph nodes"
-                    );
-                    skipped += 1;
-                }
-            }
-
-            let mut total_input_count = input_paths.len();
-            if let Some((dummy_variant, dummy_bytes)) = lod::get_dummy(&grammar) {
-                let entropy = engine.get_entropy(&dummy_bytes) as u32;
-                if let Some(&idx) = variant_index.get(dummy_variant) {
-                    buckets[idx].push((dummy_bytes, entropy));
-                    total_input_count += 1;
-                } else {
-                    eprintln!("skipping dummy: variant {dummy_variant:?} not in lower-graph nodes");
+            engine.apply_config(&lod::EngineConfig {
+                entropy_mode: lod::EntropyMode::LowEntropy,
+                ..lod::EngineConfig::default()
+            });
+            let total_input_count = input_paths.len();
+            let mut bb_ord_by_loc = std::collections::HashMap::<(u32, u32), usize>::new();
+            if bbs {
+                for func in &mod_spec.functions {
+                    for (bb_idx, bb_start) in func.basic_block_starts.iter().enumerate() {
+                        bb_ord_by_loc.insert((func.idx, bb_start.0), bb_idx);
+                    }
                 }
             }
 
@@ -1334,125 +1265,177 @@ pub(crate) fn main() {
             let mut stats = Stats::default();
             sess.reset_pass_coverage();
             sess.initialize(&mut stats);
-            let pass = sess.get_pass::<EdgeCoveragePass>();
-            let edge_keys: Vec<Edge> = pass.coverage.keys.to_vec();
-            let mut min_entropy_by_level: Vec<Vec<Option<u32>>> =
-                vec![vec![None; edge_keys.len()]; display_names.len()];
-
-            for (level_idx, (name, inputs)) in display_names.iter().zip(&buckets).enumerate() {
-                eprintln!(
-                    "Level {name}: running {} input(s) for entropy-edge analysis ...",
-                    inputs.len()
-                );
-                for (input, input_entropy) in inputs {
-                    sess.reset_pass_coverage();
-                    sess.initialize(&mut stats);
-                    let _ = sess.run(input, &mut stats);
-                    let pass = sess.get_pass::<EdgeCoveragePass>();
-                    for edge_idx in pass.coverage.saved.iter_ones() {
-                        let cell = &mut min_entropy_by_level[level_idx][edge_idx];
-                        *cell = Some(cell.map_or(*input_entropy, |v| v.min(*input_entropy)));
-                    }
-                }
-            }
-
-            struct EdgeRow {
-                edge: Edge,
+            struct Row {
                 least_entropy: u32,
-                max_min_entropy: u32,
-                increase: u32,
-                least_level: usize,
-                max_level: usize,
-                covered_levels: usize,
+                function_name: String,
+                root_kind: String,
+                input_path: PathBuf,
             }
 
-            let mut rows = Vec::<EdgeRow>::new();
-            for (edge_idx, edge) in edge_keys.into_iter().enumerate() {
-                let mut least_entropy = u32::MAX;
-                let mut max_min_entropy = 0u32;
-                let mut least_level = usize::MAX;
-                let mut max_level = usize::MAX;
-                let mut covered_levels = 0usize;
-                for (level_idx, per_level) in min_entropy_by_level.iter().enumerate() {
-                    if let Some(v) = per_level[edge_idx] {
-                        covered_levels += 1;
-                        if v < least_entropy {
-                            least_entropy = v;
-                            least_level = level_idx;
-                        }
-                        if v > max_min_entropy {
-                            max_min_entropy = v;
-                            max_level = level_idx;
+            let pass = sess.get_pass::<FunctionCoveragePass>();
+            let func_keys: Vec<FuncIdx> = pass.coverage.keys.to_vec();
+            let mut min_entropy_by_key: Vec<Option<u32>> = vec![None; func_keys.len()];
+            let mut min_path_by_key: Vec<Option<PathBuf>> = vec![None; func_keys.len()];
+            let mut min_root_by_key: Vec<Option<String>> = vec![None; func_keys.len()];
+            let bb_keys = if bbs {
+                sess.get_pass::<BBCoveragePass>().coverage.keys.to_vec()
+            } else {
+                Vec::new()
+            };
+            let mut min_entropy_by_bb: Vec<Option<u32>> = vec![None; bb_keys.len()];
+            let mut min_path_by_bb: Vec<Option<PathBuf>> = vec![None; bb_keys.len()];
+            let mut min_root_by_bb: Vec<Option<String>> = vec![None; bb_keys.len()];
+
+            eprintln!("Running {} input(s) ...", input_paths.len());
+            for path in &input_paths {
+                let bytes;
+                let input_entropy;
+                if path.to_string_lossy() == "$dummy" {
+                    bytes = lod::get_dummy(&grammar).unwrap().1.clone();
+                    input_entropy = 0;
+                } else {
+                    bytes = std::fs::read(path).unwrap();
+                    input_entropy = engine.get_entropy(&bytes) as u32;
+                };
+                let root_kind = engine
+                    .parse_exact_levels(&bytes)
+                    .into_iter()
+                    .find(|hit| hit.is_root)
+                    .map(|hit| hit.variant_name.to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                sess.reset_pass_coverage();
+                sess.initialize(&mut stats);
+                let _ = sess.run(&bytes, &mut stats);
+                let pass = sess.get_pass::<FunctionCoveragePass>();
+                for key_idx in pass.coverage.saved.iter_ones() {
+                    let replace = match min_entropy_by_key[key_idx] {
+                        Some(prev) => input_entropy < prev,
+                        None => true,
+                    };
+                    if replace {
+                        min_entropy_by_key[key_idx] = Some(input_entropy);
+                        min_path_by_key[key_idx] = Some(path.clone());
+                        min_root_by_key[key_idx] = Some(root_kind.clone());
+                    }
+                }
+                if bbs {
+                    let pass = sess.get_pass::<BBCoveragePass>();
+                    for key_idx in pass.coverage.saved.iter_ones() {
+                        let replace = match min_entropy_by_bb[key_idx] {
+                            Some(prev) => input_entropy < prev,
+                            None => true,
+                        };
+                        if replace {
+                            min_entropy_by_bb[key_idx] = Some(input_entropy);
+                            min_path_by_bb[key_idx] = Some(path.clone());
+                            min_root_by_bb[key_idx] = Some(root_kind.clone());
                         }
                     }
                 }
-                if covered_levels == 0 {
+            }
+
+            let mut rows = Vec::<Row>::new();
+            for (key_idx, func) in func_keys.into_iter().enumerate() {
+                let Some(least_entropy) = min_entropy_by_key[key_idx] else {
                     continue;
-                }
-                rows.push(EdgeRow {
-                    edge,
+                };
+                let Some(input_path) = min_path_by_key[key_idx].clone() else {
+                    continue;
+                };
+                let root_kind = min_root_by_key[key_idx]
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string());
+                let func_idx = func.0 as usize;
+                let function_name = func_symbols
+                    .get(func_idx)
+                    .cloned()
+                    .unwrap_or_else(|| format!("<fn-{}>", func.0));
+                rows.push(Row {
                     least_entropy,
-                    max_min_entropy,
-                    increase: max_min_entropy.saturating_sub(least_entropy),
-                    least_level,
-                    max_level,
-                    covered_levels,
+                    function_name,
+                    root_kind,
+                    input_path,
                 });
+            }
+            if bbs {
+                for (key_idx, bb) in bb_keys.into_iter().enumerate() {
+                    let Some(least_entropy) = min_entropy_by_bb[key_idx] else {
+                        continue;
+                    };
+                    let Some(input_path) = min_path_by_bb[key_idx].clone() else {
+                        continue;
+                    };
+                    let root_kind = min_root_by_bb[key_idx]
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string());
+                    let func_name = func_symbols
+                        .get(bb.function as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("<fn-{}>", bb.function));
+                    // Prefer stable BB ordinal within a function (BB 0, BB 1, ...).
+                    // Source file:line rendering would require debug-line resolution
+                    // that is not available in this command path yet.
+                    let bb_idx = bb_ord_by_loc
+                        .get(&(bb.function, bb.index))
+                        .copied()
+                        .unwrap_or(bb.index as usize);
+                    rows.push(Row {
+                        least_entropy,
+                        function_name: format!("{func_name} > BB {bb_idx}"),
+                        root_kind,
+                        input_path,
+                    });
+                }
             }
 
             if rows.is_empty() {
                 println!(
-                    "No covered edges for {} (grammar={}, {} input(s), {} skipped)",
-                    mod_filename, grammar, total_input_count, skipped
+                    "No covered functions for {} (grammar={}, {} input(s))",
+                    mod_filename, grammar, total_input_count
                 );
                 return;
             }
 
-            let frac = low_entropy_fraction.clamp(0.0, 1.0);
-            let mut entropies: Vec<u32> = rows.iter().map(|r| r.least_entropy).collect();
-            entropies.sort_unstable();
-            let keep_n = ((entropies.len() as f64) * frac).ceil() as usize;
-            let keep_n = keep_n.max(1).min(entropies.len());
-            let entropy_cutoff = entropies[keep_n - 1];
-
-            rows.retain(|r| r.least_entropy <= entropy_cutoff);
-            rows.sort_by(|a, b| {
-                b.increase
-                    .cmp(&a.increase)
-                    .then(a.least_entropy.cmp(&b.least_entropy))
-                    .then(b.max_min_entropy.cmp(&a.max_min_entropy))
-            });
-
-            let shown = top.min(rows.len());
+            rows.sort_by(|a, b| a.least_entropy.cmp(&b.least_entropy));
+            let max_entropy = rows.iter().map(|r| r.least_entropy).max().unwrap_or(0);
+            let truncate_from_start = |s: &str, max_chars: usize| -> String {
+                if max_chars <= 3 {
+                    return s.chars().take(max_chars).collect();
+                }
+                let count = s.chars().count();
+                if count <= max_chars {
+                    s.to_string()
+                } else {
+                    let keep_tail = max_chars - 3;
+                    let tail: String = s.chars().skip(count - keep_tail).collect();
+                    format!("...{tail}")
+                }
+            };
+            let entropy_bar = |entropy: u32| -> String {
+                const BAR_W: usize = 10;
+                if max_entropy == 0 {
+                    return " ".repeat(BAR_W);
+                }
+                let mut filled = ((entropy as u64 * BAR_W as u64) / max_entropy as u64) as usize;
+                if entropy > 0 && filled == 0 {
+                    filled = 1;
+                }
+                filled = filled.min(BAR_W);
+                format!("{}{}", "=".repeat(filled), " ".repeat(BAR_W - filled))
+            };
             println!(
-                "LOD edge entropy deltas on {} (grammar={}, {} input(s), {} skipped)",
-                mod_filename, grammar, total_input_count, skipped
+                "LOD minimum entropies on {} (grammar={}, {} input(s), bbs={})",
+                mod_filename, grammar, total_input_count, bbs
             );
-            println!(
-                "filter: keep lowest {:.1}% least-entropy edges (<= {}), showing top {} by increase",
-                frac * 100.0,
-                entropy_cutoff,
-                shown
-            );
-            println!(
-                "{:<22}  {:>8}  {:>8}  {:>8}  {:<14}  {:<14}  {:>8}",
-                "edge", "least", "max_min", "increase", "least_level", "max_level", "levels"
-            );
-            println!("{}", "-".repeat(22 + 2 + 8 + 2 + 8 + 2 + 8 + 2 + 14 + 2 + 14 + 2 + 8));
-            for row in rows.into_iter().take(shown) {
-                let edge = format!(
-                    "f{}:{}->{}",
-                    row.edge.function, row.edge.from.0, row.edge.to.0
-                );
+            println!();
+            for row in rows {
                 println!(
-                    "{:<22}  {:>8}  {:>8}  {:>8}  {:<14}  {:<14}  {:>8}",
-                    edge,
+                    "[>={:>5}] [{}] {} ({} {})",
                     row.least_entropy,
-                    row.max_min_entropy,
-                    row.increase,
-                    display_names[row.least_level].as_str(),
-                    display_names[row.max_level].as_str(),
-                    row.covered_levels
+                    entropy_bar(row.least_entropy),
+                    truncate_from_start(&row.function_name, 54),
+                    row.root_kind,
+                    row.input_path.display()
                 );
             }
         }

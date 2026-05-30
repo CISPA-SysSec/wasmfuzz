@@ -595,9 +595,9 @@ impl Worker {
                         let bytes = input.as_ref().to_vec();
                         engine.set_input(&bytes);
                     }
-                    let cmplog_ref: Option<&dyn lod::fast::CmplogSource> = cmplog_snapshot
+                    let cmplog_ref: Option<&dyn lod::CmplogSource> = cmplog_snapshot
                         .as_ref()
-                        .map(|s| s as &dyn lod::fast::CmplogSource);
+                        .map(|s| s as &dyn lod::CmplogSource);
 
                     for _ in 0..4 {
                         let start = Instant::now();
@@ -610,7 +610,7 @@ impl Worker {
                         } else {
                             tracy_full::zone!("lod: mutate");
                             let seed = self.rand.next();
-                            engine.mutate(&lod::fast::MutationInputs {
+                            engine.mutate(&lod::MutationInputs {
                                 seed,
                                 cmplog: cmplog_ref,
                             });
@@ -980,11 +980,7 @@ impl Worker {
         self.cov_batch.non_lod_finds = 0;
     }
 
-    fn run_input(
-        &mut self,
-        input: &[u8],
-        src: FindSource,
-    ) -> Result<InputVerdict, libafl::Error> {
+    fn run_input(&mut self, input: &[u8], src: FindSource) -> Result<InputVerdict, libafl::Error> {
         tracy_full::zone!("Worker::run_input");
         assert!(input.len() <= self.sess.swarm.input_alloc_size());
         let res = self.sess.run(input, &mut self.stats);

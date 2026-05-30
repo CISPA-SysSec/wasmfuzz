@@ -177,9 +177,9 @@ impl CmplogStore {
     }
 }
 
-impl lod::fast::CmplogSource for CmplogStore {
-    fn count(&self, kind: lod::fast::CmpKind) -> usize {
-        use lod::fast::CmpKind::*;
+impl lod::CmplogSource for CmplogStore {
+    fn count(&self, kind: lod::CmpKind) -> usize {
+        use lod::CmpKind::*;
         match kind {
             U16 => self.u16s.len(),
             U32 => self.u32s.len(),
@@ -189,13 +189,8 @@ impl lod::fast::CmplogSource for CmplogStore {
         }
     }
 
-    fn with(
-        &self,
-        kind: lod::fast::CmpKind,
-        idx: usize,
-        f: &mut dyn FnMut(lod::fast::CmpPairRef<'_>),
-    ) {
-        use lod::fast::{CmpKind, CmpPairRef};
+    fn with(&self, kind: lod::CmpKind, idx: usize, f: &mut dyn FnMut(lod::CmpPairRef<'_>)) {
+        use lod::{CmpKind, CmpPairRef};
         let (bytes_a, bytes_b);
         let cmp_ref = match kind {
             CmpKind::U16 => {

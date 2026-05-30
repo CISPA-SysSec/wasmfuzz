@@ -70,13 +70,16 @@ pub(crate) enum Experiment {
     /// Disable LOD-tier switching (`lod_switch_inv = 0`). Stays at one tier
     /// per run. Kept as a structural-A/B knob worth re-running periodically.
     LodNoLevelSwitching,
-    /// Archival alias: previous `LodBest` (cmplog-fresh-best, default 30m
-    /// `expire_corpus_after`). Kept so we can replicate the pre-2026-05-26
-    /// baseline on demand for rollback-vs-promote confirming sweeps. Pre-
-    /// cmplog history is recoverable from `git log -p orc.rs`.
+    /// Archival rollback baseline: the *previous* `LodBest` — cmplog-fresh-best
+    /// + cap_per_type=256 + `expire_corpus_after=10m`, *without* the H30B splice
+    /// doubling. Opts out of the splice base only (LOD-side); runs 10m host-side.
+    /// Re-run alongside the new best each post-promotion campaign to confirm the
+    /// promotion stays ahead. Pre-cmplog / 30m history recoverable from
+    /// `git log -p orc.rs`.
     LodOld,
-    /// Current best config. As of 2026-05-26: cap_per_type=256 + cmplog-fresh
-    /// at 0.25 (LOD-side) + `expire_corpus_after=10m` (host-side, applied via
+    /// Current best config. As of 2026-05-30 (H30B): cap_per_type=256 +
+    /// cmplog-fresh at 0.25 + `splice`/`splice_minor`/`splice_append` doubled
+    /// (LOD-side) + `expire_corpus_after=10m` (host-side, applied via
     /// `apply_host_opts`). Everything except `LodOld` / `LodDisable` layers
     /// on top.
     LodBest,
@@ -86,16 +89,57 @@ pub(crate) enum Experiment {
     /// sensitive, kept for a third confirming pass on the post-promotion base.
     LodNoMopt,
     /// Looser corpus minimization: `--cmin-after-corpus-additions 20`
-    /// (default 5). bdKp: +2.92 % mean; WrQ7: +0.86 % — 2-for-2 marginal
-    /// positive, layered probe on the new best.
+    /// (default 5). bdKp: +2.92 % mean; WrQ7: +0.86 %; mHE0: -0.62 % mean
+    /// with one BH-significant per-target loss on `libwebp` (Â12=0.281
+    /// q=0.018). Retired after the 3rd pass; archival anchor.
     LodCminLoose,
     /// Bracket-from-below probe on the 2026-05-26-promoted
-    /// `expire_corpus_after = 10m`: shorten to 5m. 7rtA's direct A/B
-    /// (lod-best 10m vs lod-old 30m) showed -2.44 % at 30m with one BH-
-    /// significant per-target loss; this probes whether the dial peaks at
-    /// 10m from the other side too (mirrors the cmplog_fresh_prob bracket
-    /// at 0.15 / 0.25 / 0.5).
+    /// `expire_corpus_after = 10m`: shorten to 5m. mHE0: -0.46 % mean,
+    /// 13/23 better, no BH cells — combined with 7rtA's 30m → 10m result,
+    /// the dial is converged at 10m from both sides. Retired.
     LodFresherCorpus,
+    /// Tilt `KindWeights` toward byte-leaf operations (`bit_flip_bytes`,
+    /// `bit_flip_byte_arr`, `interesting_bytes`/`_byte_arr`, `byte_mutate`,
+    /// `byte_resize`, `byte_splice` all doubled). Three campaigns (08986d:
+    /// -1.16 % mean / 5 rank-1; 4976d4: +0.24 % / 6 rank-1; rePZ: -0.13 % /
+    /// 5 rank-1) show a recurring byte-friendly per-target cluster (`libpng`,
+    /// `zune-jpeg`, `image-ico`, `libwebp`, `vorbis`, `lewton-ogg`) without
+    /// durable mean uplift. Retired from the uniform rotation after the 3rd
+    /// mean-null; the cluster is per-target-schedule input, not a global knob.
+    /// Archival anchor.
+    LodByteHeavy,
+    /// Opposite-direction probe to [`LodByteHeavy`]: boost structural ops
+    /// (`variant_switch`, `list_pop`/`_append`/`_dup`/`_shuffle`, `splice`/
+    /// `_minor`/`_append`, `option_toggle`). rePZ: +1.94 % mean / 9 rank-1;
+    /// H30B (pass 2): +2.95 % mean / 7 rank-1 (best mean-rank) — reconfirmed.
+    /// Decomposition showed the win is split: the splice half carried the only
+    /// BH-significant cell (no regressions) and was promoted into the base; the
+    /// reshape half carries the openjpeg/x509 losses. Archival — its splice
+    /// doubling now compounds the base to splice×4.
+    LodStructHeavy,
+    /// AFL-style havoc stacking: `MutationConfig::stack = StackProfile::HAVOC`
+    /// (Geometric{p:0.5, max:8}) — replaces the default `Fixed(1)`. rePZ:
+    /// +0.06 % mean, mean Â12 0.508, no large-effect cell either direction —
+    /// genuinely null. Combined with 08986d's lighter Geometric{0.3,4}
+    /// (`stack-geom-light`, -1.25 %), the stack-profile dial is bracketed from
+    /// both sides (light negative, heavy flat) and `Fixed(1)` is confirmed.
+    /// Retired; archival anchor.
+    LodStackHavoc,
+    /// Splice half of [`Experiment::LodStructHeavy`]: `splice` / `splice_minor`
+    /// / `splice_append` doubled. H30B: +2.41 % mean, 16/23 better, mean Â12 0.54
+    /// (highest), sole BH-significant cell jxl-rs (Â12 0.733 q=0.045), no
+    /// regressions — the clean productive half. **Promoted into the base block
+    /// 2026-05-30.** This arm now layers a *second* doubling on top of the base
+    /// (splice×4); reused as the bracket-from-above splice probe.
+    LodSpliceHeavy,
+    /// Reshape half of [`Experiment::LodStructHeavy`]: `variant_switch`,
+    /// `list_pop`/`_append`, `list_dup`/`_shuffle` (×3, they start at 0.5),
+    /// `option_toggle` doubled. H30B: +1.97 % mean / 14 better but carries the
+    /// regression cluster (openjpeg Â12 0.35, x509-certreq 0.386) — the weaker
+    /// half. On the post-splice-promotion base it now equals the whole
+    /// `LodStructHeavy` (splice×2 + reshape); re-run as the "does reshape add
+    /// net value over splice-alone" probe.
+    LodVariantHeavy,
 }
 impl Experiment {
     pub fn is_lod(&self) -> bool {
@@ -122,10 +166,11 @@ impl Experiment {
     /// outside `EngineConfig` (libafl mutator stack, corpus eviction, etc.).
     /// Called once from `fuzzer/mod.rs::fuzz`.
     pub fn apply_host_opts(self, opts: &mut CliOpts) {
-        // Layered host-side base for current best (2026-05-26 promotion):
-        // `expire_corpus_after = 10m` on top of cmplog-fresh-best. Archival /
-        // disable variants opt out so they reproduce older behaviour.
-        if self.is_lod() && !matches!(self, Experiment::LodOld | Experiment::LodDisable) {
+        // Layered host-side base for current best: `expire_corpus_after = 10m`
+        // on top of cmplog-fresh-best. Only `LodDisable` opts out now; `LodOld`
+        // reproduces the *previous* best (which also ran 10m), serving as the
+        // post-splice-promotion rollback baseline.
+        if self.is_lod() && !matches!(self, Experiment::LodDisable) {
             opts.expire_corpus_after = "10m".parse().unwrap();
         }
         match self {
@@ -142,22 +187,33 @@ impl Experiment {
         }
     }
 
-    pub fn lod_config_for(exp: Option<Experiment>) -> lod::fast::EngineConfig {
+    pub fn lod_config_for(exp: Option<Experiment>) -> lod::EngineConfig {
         exp.map(Experiment::lod_config).unwrap_or_default()
     }
 
-    fn lod_config(self) -> lod::fast::EngineConfig {
-        use lod::fast::EngineConfig;
+    fn lod_config(self) -> lod::EngineConfig {
+        use lod::EngineConfig;
         let mut cfg = EngineConfig::default();
         // Experiments layer on top of the current best-known config:
-        //   LOD-side:  cap_per_type = 256, cmplog_fresh_prob = 0.25.
+        //   LOD-side:  cap_per_type = 256, cmplog_fresh_prob = 0.25,
+        //              splice/splice_minor/splice_append doubled (H30B promotion).
         //   host-side: expire_corpus_after = 10m (see `apply_host_opts`).
-        // `LodDisable` opts out so it reproduces raw-libafl behaviour. `LodOld`
-        // inherits the LOD-side base (previous baseline was also cmplog-fresh-
-        // best) and opts out only on the host-side 10m knob.
+        // `LodDisable` opts out entirely. `LodOld` reproduces the *previous*
+        // best (cmplog-fresh + cap256 + 10m, pre-splice) so it opts out of the
+        // splice doubling only — the post-promotion rollback baseline.
         if !matches!(self, Experiment::LodDisable) {
             cfg.corpus.cap_per_type = 256;
             cfg.mutation.cmplog_fresh_prob = 0.25;
+        }
+        // Splice-heavy promoted 2026-05-30 (H30B): +2.41 % mean, 16/23 better,
+        // the campaign's sole BH-significant cell (jxl-rs Â12 0.733 q=0.045),
+        // highest mean Â12, no per-target regressions. `LodOld` reproduces the
+        // pre-splice baseline and opts out.
+        if !matches!(self, Experiment::LodDisable | Experiment::LodOld) {
+            let w = &mut cfg.mutation.weights;
+            w.splice *= 2.0;
+            w.splice_minor *= 2.0;
+            w.splice_append *= 2.0;
         }
         match self {
             Experiment::LodNoLevelSwitching => {
@@ -171,9 +227,47 @@ impl Experiment {
                 // Pure host-knob layered probes / archival aliases; LOD config
                 // is the cmplog-fresh-best base from above.
             }
-            Experiment::LodDisable
-            | Experiment::LodDummyOnly
-            | Experiment::LodGenerateOnly => {
+            Experiment::LodByteHeavy => {
+                let w = &mut cfg.mutation.weights;
+                w.bit_flip_bytes *= 2.0;
+                w.bit_flip_byte_arr *= 2.0;
+                w.interesting_bytes *= 2.0;
+                w.interesting_byte_arr *= 2.0;
+                w.byte_mutate *= 2.0;
+                w.byte_resize *= 2.0;
+                w.byte_splice *= 2.0;
+            }
+            Experiment::LodStructHeavy => {
+                let w = &mut cfg.mutation.weights;
+                w.variant_switch *= 2.0;
+                w.list_pop *= 2.0;
+                w.list_append *= 2.0;
+                w.list_dup *= 3.0;
+                w.list_shuffle *= 3.0;
+                w.splice *= 2.0;
+                w.splice_minor *= 2.0;
+                w.splice_append *= 2.0;
+                w.option_toggle *= 2.0;
+            }
+            Experiment::LodStackHavoc => {
+                cfg.mutation.stack = lod::StackProfile::HAVOC;
+            }
+            Experiment::LodSpliceHeavy => {
+                let w = &mut cfg.mutation.weights;
+                w.splice *= 2.0;
+                w.splice_minor *= 2.0;
+                w.splice_append *= 2.0;
+            }
+            Experiment::LodVariantHeavy => {
+                let w = &mut cfg.mutation.weights;
+                w.variant_switch *= 2.0;
+                w.list_pop *= 2.0;
+                w.list_append *= 2.0;
+                w.list_dup *= 3.0;
+                w.list_shuffle *= 3.0;
+                w.option_toggle *= 2.0;
+            }
+            Experiment::LodDisable | Experiment::LodDummyOnly | Experiment::LodGenerateOnly => {
                 // no knobs, see worker.rs / orc.rs corpus seeding
             }
 
@@ -600,7 +694,10 @@ impl Orchestrator {
     /// Returns `(maybe_run_result, wrote_to_disk)`. `wrote_to_disk` is set if
     /// either the corpus insert created a file, or this method re-created one
     /// that had been deleted out from under us.
-    pub fn report_find(&mut self, /*config: &Config,*/ input: &[u8]) -> (Option<RunResult>, bool) {
+    pub fn report_find(
+        &mut self,
+        /*config: &Config,*/ input: &[u8],
+    ) -> (Option<RunResult>, bool) {
         // TODO: apply some kind of bandit on config?
         let (res, mut wrote_to_disk) = self.add_corpus(input);
 
