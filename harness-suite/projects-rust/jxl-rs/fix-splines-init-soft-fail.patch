@@ -1,0 +1,29 @@
+Subject: [PATCH] skip drawing when spline cache init fails
+---
+diff --git a/jxl/src/render/stages/splines.rs b/jxl/src/render/stages/splines.rs
+index 295c33c..8be3f54 100644
+--- a/jxl/src/render/stages/splines.rs
++++ b/jxl/src/render/stages/splines.rs
+@@ -60,14 +60,20 @@ impl RenderPipelineInPlaceStage for SplinesStage {
+         }
+         if !splines.is_initialized() {
+             let color_correlation_params = self.color_correlation_params.borrow();
+-            splines
++            if splines
+                 .initialize_draw_cache(
+                     self.image_size.0 as u64,
+                     self.image_size.1 as u64,
+                     &color_correlation_params,
+                     self.high_precision,
+                 )
+-                .unwrap();
++                .is_err()
++            {
++                // Malformed spline streams can fail draw-cache initialization.
++                // Disable spline drawing instead of aborting the whole decode.
++                splines.splines.clear();
++                return;
++            }
+         }
+         splines.draw_segments(row, position, xsize);
+     }

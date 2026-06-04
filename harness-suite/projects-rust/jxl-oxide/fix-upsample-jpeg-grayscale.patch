@@ -1,0 +1,32 @@
+diff --git a/crates/jxl-render/src/image.rs b/crates/jxl-render/src/image.rs
+index 8ff6e6b..a2c1d4e 100644
+--- a/crates/jxl-render/src/image.rs
++++ b/crates/jxl-render/src/image.rs
+@@ -450,7 +450,12 @@ impl ImageWithRegion {
+         valid_region: Region,
+         bit_depth: BitDepth,
+     ) -> Result<()> {
+-        assert_eq!(self.color_channels, 3);
++        if self.color_channels != 3 {
++            return Err(jxl_bitstream::Error::ValidationFailed(
++                "jpeg upsample requires three color channels",
++            )
++            .into());
++        }
+         self.convert_modular_color(bit_depth)?;
+ 
+         for (g, (region, shift)) in self.buffer.iter_mut().zip(&mut self.regions).take(3) {
+diff --git a/crates/jxl-render/src/render.rs b/crates/jxl-render/src/render.rs
+index 497407e..64893e9 100644
+--- a/crates/jxl-render/src/render.rs
++++ b/crates/jxl-render/src/render.rs
+@@ -68,6 +68,9 @@ pub(crate) fn render_frame<S: Sample>(
+     };
+ 
+     if frame_header.do_ycbcr {
++        if fb.color_channels() < 3 {
++            fb.clone_gray()?;
++        }
+         fb.upsample_jpeg(color_padded_region, image_header.metadata.bit_depth)?;
+     }
+ 

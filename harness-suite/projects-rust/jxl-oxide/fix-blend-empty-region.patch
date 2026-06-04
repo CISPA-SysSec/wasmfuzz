@@ -1,0 +1,44 @@
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index 42e1366..0c15c28 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -297,6 +297,8 @@ pub(crate) fn blend<S: Sample>(
+                     let bottom = top.wrapping_add_unsigned(height);
+                     if left < 0 || top < 0
+                         || right < 0 || bottom < 0
++                        || left as usize >= right as usize
++                        || top as usize >= bottom as usize
+                         || right as usize > target_grid.width()
+                         || bottom as usize > target_grid.height()
+                     {
+@@ -322,6 +324,8 @@ pub(crate) fn blend<S: Sample>(
+                         let bottom = top.wrapping_add_unsigned(height);
+                         if left < 0 || top < 0
+                             || right < 0 || bottom < 0
++                            || left as usize >= right as usize
++                            || top as usize >= bottom as usize
+                             || right as usize > base_alpha_grid.width()
+                             || bottom as usize > base_alpha_grid.height()
+                         {
+@@ -411,8 +415,19 @@ pub(crate) fn blend<S: Sample>(
+         blend_params.width = clipped_original_frame_region.width as usize;
+         blend_params.height = clipped_original_frame_region.height as usize;
+ 
+-        let new_grid = new_grid.buffer()[idx].as_float().unwrap();
+-        blend_single(target_subgrid, new_grid.as_subgrid(), &blend_params);
++        if blend_params.width == 0 || blend_params.height == 0 {
++            output_grid.append_channel(target_grid, target_region);
++            continue;
++        }
++
++        let new_channel = new_grid.buffer()[idx].as_float().unwrap();
++        if new_channel.width() == 0 || new_channel.height() == 0 {
++            return Err(jxl_bitstream::Error::ValidationFailed(
++                "blend new channel has zero size",
++            )
++            .into());
++        }
++        blend_single(target_subgrid, new_channel.as_subgrid(), &blend_params);
+         output_grid.append_channel(target_grid, target_region);
+     }
+ 

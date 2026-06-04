@@ -1,0 +1,74 @@
+diff --git a/crates/jxl-render/src/filter/gabor.rs b/crates/jxl-render/src/filter/gabor.rs
+--- a/crates/jxl-render/src/filter/gabor.rs
++++ b/crates/jxl-render/src/filter/gabor.rs
+@@ -1,7 +1,7 @@
+ use jxl_grid::{AlignedGrid, MutableSubgrid};
+ use jxl_threadpool::JxlThreadPool;
+ 
+-use crate::{ImageWithRegion, Region};
++use crate::{ImageWithRegion, Region, Result};
+ 
+ use super::impls::generic::gabor::gabor_row_edge;
+ 
+@@ -11,17 +11,35 @@ pub fn apply_gabor_like(
+     fb_scratch: &mut [AlignedGrid<f32>; 3],
+     weights: [[f32; 2]; 3],
+     pool: &jxl_threadpool::JxlThreadPool,
+-) {
++) -> Result<()> {
+     tracing::debug!("Running gaborish");
+     let region = fb.regions_and_shifts()[0].0;
+-    assert!(region.contains(color_padded_region));
++    if !region.contains(color_padded_region) {
++        return Err(jxl_bitstream::Error::ValidationFailed(
++            "gabor color region outside frame buffer region",
++        )
++        .into());
++    }
+     let left = region.left.abs_diff(color_padded_region.left) as usize;
+     let top = region.top.abs_diff(color_padded_region.top) as usize;
+-    let right = left + color_padded_region.width as usize;
+-    let bottom = top + color_padded_region.height as usize;
++    let pad_w = color_padded_region.width as usize;
++    let pad_h = color_padded_region.height as usize;
+ 
+     let buffers = fb.as_color_floats_mut();
+-    let buffers = buffers.map(|g| g.as_subgrid_mut().subgrid(left..right, top..bottom));
++    let subgrid_results: [Result<MutableSubgrid<'_>>; 3] = buffers.map(|g| {
++        let sg = g.as_subgrid_mut();
++        let right = left.saturating_add(pad_w).min(sg.width());
++        let bottom = top.saturating_add(pad_h).min(sg.height());
++        if left >= right || top >= bottom {
++            return Err(jxl_bitstream::Error::ValidationFailed(
++                "gabor subgrid out of bounds",
++            )
++            .into());
++        }
++        Ok(sg.subgrid(left..right, top..bottom))
++    });
++    let [a, b, c] = subgrid_results;
++    let buffers = [a?, b?, c?];
+ 
+     super::impls::apply_gabor_like(buffers, fb_scratch, weights, pool);
+ 
+@@ -38,6 +56,8 @@ pub fn apply_gabor_like(
+         };
+         fb.swap_channel_f32(idx, grid, region);
+     }
++
++    Ok(())
+ }
+ 
+ pub(super) struct GaborRow<'buf> {
+diff --git a/crates/jxl-render/src/render.rs b/crates/jxl-render/src/render.rs
+--- a/crates/jxl-render/src/render.rs
++++ b/crates/jxl-render/src/render.rs
+@@ -96,7 +96,7 @@ pub(crate) fn render_frame<S: Sample>(
+             &mut fb_scratch,
+             weights,
+             &pool,
+-        );
++        )?;
+         scratch_buffer = Some(fb_scratch);
+     }
+ 

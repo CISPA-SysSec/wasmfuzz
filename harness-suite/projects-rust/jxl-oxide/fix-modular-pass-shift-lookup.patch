@@ -1,0 +1,28 @@
+diff --git a/crates/jxl-modular/src/image.rs b/crates/jxl-modular/src/image.rs
+index f7df568..d768c17 100644
+--- a/crates/jxl-modular/src/image.rs
++++ b/crates/jxl-modular/src/image.rs
+@@ -256,11 +256,20 @@ impl<S: Sample> ModularImageDestination<S> {
+ 
+             let (groups, grids) = if hshift < 3 || vshift < 3 {
+                 let shift = hshift.min(vshift); // shift < 3
+-                let pass_idx = *pass_shifts
++                let Some((pass_idx, _)) = pass_shifts
+                     .iter()
+                     .find(|&(_, &(minshift, maxshift))| (minshift..maxshift).contains(&shift))
+-                    .unwrap()
+-                    .0;
++                else {
++                    tracing::error!(
++                        shift,
++                        hshift,
++                        vshift,
++                        ?pass_shifts,
++                        "No pass covers channel shift after transform"
++                    );
++                    return Err(crate::Error::InvalidSqueezeParams);
++                };
++                let pass_idx = *pass_idx;
+                 let pass_idx = pass_idx as usize;
+ 
+                 let group_width = group_dim >> hshift;

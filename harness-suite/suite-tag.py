@@ -307,21 +307,24 @@ lod = [
     # "expat-xml_parsebuffer_UTF-8",
     "firefox-fuzz_target_qcms",
     "fontations-fuzz_skrifa_outline", "freetype2-ftfuzzer", "goblin-parse",
-    "graphite-font", "image-script_png", "image-script_jpeg", "image-script_tiff",
-    "image-script_ico", "image-script_webp", "image-script_guess",
+    "graphite-font", #"image-script_png",
+    "image-script_jpeg", "image-script_tiff",
+    "image-script_ico", # "image-script_webp", # "image-script_guess",
     "jxl-oxide-libfuzzer-decode", "jxl-rs-decode", "lcms-cms_transform_all",
-    "lewton-parse_ogg", "libarchive-ossfuzz", "libarchive-upstream", "libpng-read",
+    "lewton-parse_ogg",
+    # "libarchive-ossfuzz", "libarchive-upstream", # TODO: OOMs with non-snapshot fuzzing
+    "libpng-read",
     "libsndfile", "libtiff-read_rgba", "libwebp-dwebp",
-    "openjpeg-opj_decompress_J2K", "openjpeg-opj_decompress_JP2",
-    "openssl-acert", "openssl-crl", "openssl-x509",  # openthread? # jbig2dec? # mbedtls?
+    "openjpeg-opj_decompress_J2K", # "openjpeg-opj_decompress_JP2",
+    "openssl-acert", # "openssl-crl", "openssl-x509",  # openthread? # jbig2dec? # mbedtls?
     # "quick-xml-fuzz_target_1",
-    "sqlite-ossfuzz",
+    # "sqlite-ossfuzz",
     #"stb-png_read",
     "symphonia-decode_any",
     "vorbis-decode", "woff2-convert_woff2ttf",
     "x509-parser-certreq",
     #"x509-parser-crl",
-    "x509-parser-x509_parse",
+    # "x509-parser-x509_parse",
     "zune-image-zune-jpeg-decode_incremental",
     # Note: these seem saturated in both lod and no-lod?
     # "claxon-decode_full", "zip2-zip2-read"

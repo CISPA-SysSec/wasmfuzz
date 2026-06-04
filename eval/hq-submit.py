@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import csv
 import hashlib
 import json
-import tempfile
-import shutil
-import sys
-import subprocess
 import random
+import shutil
+import subprocess
+import sys
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -18,11 +19,11 @@ def variant_to_args(variant: str) -> tuple[str, str, str]:
     # any other value is treated as a bare --experiment=<value>
     return (variant, f"--experiment={variant}", "")
 
-def cas_copy_target(target: Path, cas_dir: Path, short_hash_len: int = 12) -> Path:
+def cas_copy_target(target: Path, cas_dir: Path, short_hash_len: int = 4) -> Path:
     with open(target, "rb") as f:
         digest = hashlib.file_digest(f, hashlib.blake2b)
-    short = digest.hexdigest()[:short_hash_len]
-    path = cas_dir / f"{target.stem}-{short}{target.suffix}"
+    digest_b64 = base64.urlsafe_b64encode(digest.digest()).decode("ascii").rstrip("=").replace("_", "").replace("-", "")
+    path = cas_dir / f"{target.stem}-{digest_b64[:short_hash_len]}{target.suffix}"
     if not path.exists():
         shutil.copy2(target, path)
     return path
@@ -41,7 +42,7 @@ def main():
     ap.add_argument("--fuzzer", default="./target/release/wasmfuzz", help="Fuzzer path")
     ap.add_argument("--monitor", default="~/.cargo/bin/wasmfuzz", help="Monitor path")
     ap.add_argument("--timeout", default="1h", help="Length of each task")
-    ap.add_argument("--monitor-interval", default="60s", help="monitor-cov sampling interval")
+    ap.add_argument("--monitor-interval", default="5m", help="monitor-cov sampling interval")
     ap.add_argument("--corpora-dir", default="", help="Optional output directory for corpora")
     ap.add_argument("--runner", default="./eval/hq-run-one.py", help="Runner script")
     ap.add_argument("--submit-cwd", default="/tmp", help="Working directory for 'hq submit'")
@@ -85,6 +86,7 @@ def main():
     cas_fuzzer = cas_copy_target(Path(args.fuzzer).expanduser(), cas_dir)
     cas_monitor = cas_copy_target(Path(args.monitor).expanduser(), cas_dir)
     cas_runner = cas_copy_target(Path(args.runner).expanduser(), cas_dir)
+    fuzzer_id = cas_fuzzer.stem.split("-")[-1]
 
     tasks = []
     for _ in range(args.repeat):
@@ -96,7 +98,7 @@ def main():
                     "monitor": str(cas_monitor),
                     "target": str(cas_targets[target]),
                     "runs_dir": str(runs_dir),
-                    "bucket": bucket_suffix,
+                    "bucket": f"{fuzzer_id}-{bucket_suffix}",
                     "timeout": args.timeout,
                     "monitor_interval": args.monitor_interval,
                     "corpora_dir": args.corpora_dir,

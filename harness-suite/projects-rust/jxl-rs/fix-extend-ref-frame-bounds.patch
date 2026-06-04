@@ -1,0 +1,27 @@
+Subject: [PATCH] bound extend stage reference-frame copies
+---
+diff --git a/jxl/src/render/stages/extend.rs b/jxl/src/render/stages/extend.rs
+index 6d5c90c..6e9d706 100644
+--- a/jxl/src/render/stages/extend.rs
++++ b/jxl/src/render/stages/extend.rs
+@@ -76,12 +76,14 @@ impl ExtendToImageDimensionsStage {
+             // and can't be used after extending, so nothing to do.
+             return;
+         };
+-        let bg = if let Some(bg) = self.reference_frames[source].as_ref() {
+-            bg.frame[c].row(y0)
+-        } else {
+-            self.zeros.as_slice()
+-        };
+-        row[0..xsize].copy_from_slice(&bg[x0..x1]);
++        if let Some(rf) = self.reference_frames[source].as_ref() {
++            let (ref_w, ref_h) = rf.frame[c].size();
++            if y0 < ref_h && x0 < x1 && x1 <= ref_w {
++                row[0..xsize].copy_from_slice(&rf.frame[c].row(y0)[x0..x1]);
++                return;
++            }
++        }
++        row[0..xsize].copy_from_slice(&self.zeros[0..xsize]);
+     }
+ }
+ 

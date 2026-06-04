@@ -1,0 +1,40 @@
+diff --git a/crates/jxl-render/src/util.rs b/crates/jxl-render/src/util.rs
+index a217ba3..66774c4 100644
+--- a/crates/jxl-render/src/util.rs
++++ b/crates/jxl-render/src/util.rs
+@@ -350,7 +350,7 @@ pub(crate) fn convert_color_for_record(
+             fb.convert_modular_color(metadata.bit_depth)?;
+             let [x, y, b] = fb.as_color_floats_mut();
+             tracing::trace!(colour_encoding = ?encoding);
+-            let transform = ColorTransform::new(
++            let transform = match ColorTransform::new(
+                 &ColorEncodingWithProfile::new(EnumColourEncoding::xyb(
+                     jxl_color::RenderingIntent::Perceptual,
+                 )),
+@@ -358,11 +358,22 @@ pub(crate) fn convert_color_for_record(
+                 &metadata.opsin_inverse_matrix,
+                 &metadata.tone_mapping,
+                 &jxl_color::NullCms,
+-            )
+-            .unwrap();
+-            let output_channels = transform
++            ) {
++                Ok(transform) => transform,
++                Err(err) => {
++                    tracing::warn!(?err, "Skipping XYB conversion due to unsupported encoding");
++                    return Ok(());
++                }
++            };
++            let output_channels = match transform
+                 .run_with_threads(&mut [x.buf_mut(), y.buf_mut(), b.buf_mut()], pool)
+-                .unwrap();
++            {
++                Ok(output_channels) => output_channels,
++                Err(err) => {
++                    tracing::warn!(?err, "Skipping XYB conversion due to transform failure");
++                    return Ok(());
++                }
++            };
+             fb.remove_color_channels(output_channels);
+             Ok(())
+         })?;

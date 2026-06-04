@@ -1,0 +1,13 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index bb8a7f1..74cbc1b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -11,7 +11,7 @@ version = "1.19.0"
+ [workspace.dependencies.tracing]
+ version = "0.1.40"
+ default-features = false
+-features = ["std"]
++features = ["std", "release_max_level_off"]
+ 
+ [profile.opt]
+ inherits = "release"

@@ -1,0 +1,11 @@
+diff --git a/crates/jxl-render/src/state.rs b/crates/jxl-render/src/state.rs
+--- a/crates/jxl-render/src/state.rs
++++ b/crates/jxl-render/src/state.rs
+@@ -201,6 +201,7 @@ impl<S: Sample> FrameRenderHandle<S> {
+             let render = std::mem::replace(&mut *render_ref, FrameRender::None);
+             match render {
+                 FrameRender::Rendering => {
++                    #[cfg(not(target_os = "wasi"))]
+                     tracing::trace!(index = self.frame.idx, "Waiting...");
+                     *render_ref = render;
+                     #[cfg(target_os = "wasi")]

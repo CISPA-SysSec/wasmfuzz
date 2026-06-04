@@ -1,0 +1,18 @@
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index 0c15c28..a8f3e21 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -253,7 +253,12 @@ pub(crate) fn blend<S: Sample>(
+ 
+             let base_grid_render = Arc::clone(&grid.image).run_with_image()?;
+             let base_grid = base_grid_render.blend(Some(output_image_region), pool)?;
+-            assert_eq!(base_grid.color_channels(), color_channels);
++            if base_grid.color_channels() != color_channels {
++                return Err(jxl_bitstream::Error::ValidationFailed(
++                    "blend base grid color channel count mismatch",
++                )
++                .into());
++            }
+ 
+             if base_grid.regions_and_shifts()[idx].0.is_empty() {
+                 clone_empty = true;

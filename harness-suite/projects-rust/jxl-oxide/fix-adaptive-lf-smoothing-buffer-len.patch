@@ -1,0 +1,66 @@
+diff --git a/crates/jxl-render/src/vardct/generic/mod.rs b/crates/jxl-render/src/vardct/generic/mod.rs
+--- a/crates/jxl-render/src/vardct/generic/mod.rs
++++ b/crates/jxl-render/src/vardct/generic/mod.rs
+@@ -24,9 +24,21 @@ pub fn adaptive_lf_smoothing_impl(
+         return Ok(());
+     }
+ 
+-    assert_eq!(in_x.len(), in_y.len());
+-    assert_eq!(in_y.len(), in_b.len());
+-    assert_eq!(in_x.len(), width * height);
++    let expected_len = match width.checked_mul(height) {
++        Some(len) => len,
++        None => {
++            return Err(jxl_bitstream::Error::ValidationFailed(
++                "adaptive LF smoothing dimensions overflow",
++            )
++            .into());
++        }
++    };
++    if in_x.len() != in_y.len() || in_y.len() != in_b.len() || in_x.len() != expected_len {
++        return Err(jxl_bitstream::Error::ValidationFailed(
++            "adaptive LF smoothing buffer length mismatch",
++        )
++        .into());
++    }
+ 
+     let mut udsum_x = AlignedGrid::with_alloc_tracker(width, height - 2, tracker)?;
+     let mut udsum_y = AlignedGrid::with_alloc_tracker(width, height - 2, tracker)?;
+diff --git a/crates/jxl-render/src/vardct/mod.rs b/crates/jxl-render/src/vardct/mod.rs
+--- a/crates/jxl-render/src/vardct/mod.rs
++++ b/crates/jxl-render/src/vardct/mod.rs
+@@ -425,6 +425,34 @@ pub fn adaptive_lf_smoothing(
+     let tracker = in_x.tracker();
+     let width = in_x.width();
+     let height = in_x.height();
++    let expected_len = match width.checked_mul(height) {
++        Some(len) => len,
++        None => {
++            return Err(jxl_bitstream::Error::ValidationFailed(
++                "adaptive LF smoothing dimensions overflow",
++            )
++            .into());
++        }
++    };
++    if in_y.width() != width
++        || in_y.height() != height
++        || in_b.width() != width
++        || in_b.height() != height
++    {
++        return Err(jxl_bitstream::Error::ValidationFailed(
++            "adaptive LF smoothing channel size mismatch",
++        )
++        .into());
++    }
++    if in_x.buf().len() != expected_len
++        || in_y.buf().len() != expected_len
++        || in_b.buf().len() != expected_len
++    {
++        return Err(jxl_bitstream::Error::ValidationFailed(
++            "adaptive LF smoothing buffer length mismatch",
++        )
++        .into());
++    }
+ 
+     let in_x = in_x.buf_mut();
+     let in_y = in_y.buf_mut();

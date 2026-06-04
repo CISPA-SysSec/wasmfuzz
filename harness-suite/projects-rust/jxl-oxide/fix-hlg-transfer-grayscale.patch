@@ -1,0 +1,75 @@
+diff --git a/crates/jxl-color/src/convert.rs b/crates/jxl-color/src/convert.rs
+index ae352cc..c8f41a2 100644
+--- a/crates/jxl-color/src/convert.rs
++++ b/crates/jxl-color/src/convert.rs
+@@ -888,7 +888,7 @@ impl ColorTransformOp {
+                 hdr_params,
+                 inverse: false,
+             } => {
+-                apply_transfer_function(&mut channels[..num_input_channels], *tf, *hdr_params);
++                apply_transfer_function(&mut channels[..num_input_channels], *tf, *hdr_params)?;
+                 num_input_channels
+             }
+             Self::TransferFunction {
+@@ -900,7 +900,7 @@ impl ColorTransformOp {
+                     &mut channels[..num_input_channels],
+                     *tf,
+                     *hdr_params,
+-                );
++                )?;
+                 num_input_channels
+             }
+             Self::HlgInverseOotf(HdrParams {
+@@ -974,7 +974,7 @@ fn apply_transfer_function(
+     channels: &mut [&mut [f32]],
+     tf: TransferFunction,
+     hdr_params: HdrParams,
+-) {
++) -> Result<()> {
+     match tf {
+         TransferFunction::Gamma {
+             g: gamma,
+@@ -1019,7 +1019,9 @@ fn apply_transfer_function(
+             }
+         }
+         TransferFunction::Hlg => {
+-            let [r, g, b, ..] = channels else { panic!() };
++            let [r, g, b, ..] = channels else {
++                return Err(Error::UnsupportedColorEncoding);
++            };
+             let r = &mut **r;
+             let g = &mut **g;
+             let b = &mut **b;
+@@ -1032,13 +1034,14 @@ fn apply_transfer_function(
+             tf::linear_to_hlg(b);
+         }
+     }
++    Ok(())
+ }
+ 
+ fn apply_inverse_transfer_function(
+     channels: &mut [&mut [f32]],
+     tf: TransferFunction,
+     hdr_params: HdrParams,
+-) {
++) -> Result<()> {
+     match tf {
+         TransferFunction::Gamma {
+             g: gamma,
+@@ -1083,7 +1086,9 @@ fn apply_inverse_transfer_function(
+             }
+         }
+         TransferFunction::Hlg => {
+-            let [r, g, b, ..] = channels else { panic!() };
++            let [r, g, b, ..] = channels else {
++                return Err(Error::UnsupportedColorEncoding);
++            };
+             let r = &mut **r;
+             let g = &mut **g;
+             let b = &mut **b;
+@@ -1096,4 +1101,5 @@ fn apply_inverse_transfer_function(
+             tf::hlg_oo([r, g, b], luminances, intensity_target);
+         }
+     }
++    Ok(())
+ }

@@ -18,4 +18,11 @@ tar -xzf "$PROJECT/png.crate" -C "$PROJECT/png" --strip-components=1
 patch -d "$PROJECT/png" -p1 <"$PROJECT/fix-png-palette-partial.patch"
 rm -f "$PROJECT/png.crate"
 
+curl -fsSL -o "$PROJECT/tiff.crate" https://static.crates.io/crates/tiff/tiff-0.11.3.crate
+mkdir -p "$PROJECT/tiff"
+tar -xzf "$PROJECT/tiff.crate" -C "$PROJECT/tiff" --strip-components=1
+patch -d "$PROJECT/tiff" -p1 <"$PROJECT/tiff-intermediate-row-limit.patch"
+rm -f "$PROJECT/tiff.crate"
+
 git -C "$PROJECT/repo" apply "$PROJECT/fix-jpeg-webp-image.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/fix-tiff-fuzz-limits.patch"

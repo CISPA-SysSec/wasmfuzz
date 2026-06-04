@@ -1,0 +1,22 @@
+Subject: [PATCH] handle zero-length LZ77 restore rewind
+---
+diff --git a/jxl/src/entropy_coding/decode.rs b/jxl/src/entropy_coding/decode.rs
+index c42b37b..b97a138 100644
+--- a/jxl/src/entropy_coding/decode.rs
++++ b/jxl/src/entropy_coding/decode.rs
+@@ -537,6 +537,15 @@ impl SymbolReader {
+                 };
+ 
+                 let num_rewind = lz77_state.num_decoded - num_decoded;
++                if num_rewind == 0 {
++                    lz77_state.num_to_copy = num_to_copy;
++                    lz77_state.copy_pos = copy_pos;
++                    lz77_state.num_decoded = num_decoded;
++                    self.ans_reader = checkpoint.ans_reader;
++                    self.errors = checkpoint.errors;
++                    return;
++                }
++
+                 let rewind_window = &window[..num_rewind as usize];
+ 
+                 let start = (num_decoded & Lz77State::WINDOW_MASK) as usize;

@@ -1,0 +1,13 @@
+--- a/src/decoder/image.rs
++++ b/src/decoder/image.rs
+@@ -911,6 +911,10 @@
+         let chunk_dims = self.chunk_dimensions()?;
+         let data_dims = self.chunk_data_dimensions(chunk_index)?;
+ 
++        if layout.tiff_row_bytes > limits.intermediate_buffer_size {
++            return Err(TiffError::LimitsExceeded);
++        }
++
+         let chunk_row_bytes: usize = layout.tiff_row_bytes;
+         let data_row_bytes: usize = layout.chunk_row_bytes(data_dims.0)?;
+ 

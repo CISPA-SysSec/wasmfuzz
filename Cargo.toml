@@ -120,3 +120,10 @@ opt-level = 3
 
 [profile.release]
 debug = true
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "union_bitboxes"
+harness = false

@@ -1,0 +1,59 @@
+Subject: [PATCH] bounds-check modular pipeline buffer indices
+---
+diff --git a/jxl/src/frame/modular/mod.rs b/jxl/src/frame/modular/mod.rs
+index ffd1588..5b3ad9c 100644
+--- a/jxl/src/frame/modular/mod.rs
++++ b/jxl/src/frame/modular/mod.rs
+@@ -560,7 +560,7 @@ impl FullModularImage {
+             transform_steps,
+             &section_buffer_indices,
+             &mut buffer_info,
+-        );
++        )?;
+ 
+         #[cfg(feature = "tracing")]
+         for (i, bi) in buffer_info.iter().enumerate() {
+@@ -740,20 +740,34 @@ impl FullModularImage {
+         if let Some(chan) = self.buffer_info[buf].info.output_channel_idx {
+             let grid_is_none = self.buffer_info[buf].grid_kind == ModularGridKind::None;
+             let grid_idx = if grid_is_none { 0 } else { grid };
++            if grid_idx >= self.buffer_info[buf].buffer_grid.len() {
++                return Err(Error::OutOfBounds(grid_idx));
++            }
+             let is_final = self.buffer_info[buf].buffer_grid[grid_idx].get_status()
+                 == BUFFER_STATUS_FINAL_RENDER;
+-            let all_final = self.buffers_for_channels.iter().all(|x| {
+-                self.buffer_info[*x].buffer_grid[grid_idx].get_status()
+-                    == BUFFER_STATUS_FINAL_RENDER
+-            });
++            let all_final = {
++                let mut acc = true;
++                for &x in self.buffers_for_channels.iter() {
++                    let Some(info) = self.buffer_info.get(x) else {
++                        return Err(Error::OutOfBounds(x));
++                    };
++                    let Some(cell) = info.buffer_grid.get(grid_idx) else {
++                        return Err(Error::OutOfBounds(grid_idx));
++                    };
++                    acc &= cell.get_status() == BUFFER_STATUS_FINAL_RENDER;
++                }
++                acc
++            };
+ 
+             let channels: SmallVec<usize, 3> = if chan == 0 && self.modular_color_channels == 1 {
+-                (0..3).filter(|x| self.pipeline_used_channels[*x]).collect()
+-            } else {
+-                self.pipeline_used_channels[chan]
+-                    .then_some(chan)
+-                    .into_iter()
++                (0..3)
++                    .filter(|x| self.pipeline_used_channels.get(*x).copied().unwrap_or(false))
+                     .collect()
++            } else {
++                let Some(&used) = self.pipeline_used_channels.get(chan) else {
++                    return Err(Error::OutOfBounds(chan));
++                };
++                used.then_some(chan).into_iter().collect()
+             };
+             if channels.is_empty() {
+                 return Ok(());

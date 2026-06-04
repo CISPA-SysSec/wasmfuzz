@@ -1,0 +1,31 @@
+diff --git a/crates/jxl-frame/src/data/spline.rs b/crates/jxl-frame/src/data/spline.rs
+index 1cf3ac0..3bf3e1f 100644
+--- a/crates/jxl-frame/src/data/spline.rs
++++ b/crates/jxl-frame/src/data/spline.rs
+@@ -167,14 +167,24 @@ impl Bundle<QuantSplineParams<'_>> for QuantSpline {
+         } = params;
+ 
+         let num_points = decoder.read_varint(bitstream, 3)? as usize;
+-        let acc_num_points = acc_control_points + num_points;
++        let acc_num_points = acc_control_points
++            .checked_add(num_points)
++            .ok_or(jxl_bitstream::Error::ValidationFailed(
++                "spline control point count overflowed",
++            ))?;
+         let max_num_points = usize::min(MAX_NUM_CONTROL_POINTS, num_pixels / 2);
+         if acc_num_points > max_num_points {
+             tracing::error!(num_points, max_num_points, "Too many spline points");
+             return Err(jxl_bitstream::Error::ProfileConformance("too many spline points").into());
+         }
+ 
+-        let mut quant_points = Vec::with_capacity(1 + num_points);
++        let mut quant_points = Vec::with_capacity(
++            num_points
++                .checked_add(1)
++                .ok_or(jxl_bitstream::Error::ValidationFailed(
++                    "spline point vector capacity overflowed",
++                ))?,
++        );
+         let mut cur_value = start_point;
+         let mut cur_delta = (0, 0);
+         let mut manhattan_distance = 0u64;

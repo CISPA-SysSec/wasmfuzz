@@ -1,0 +1,12 @@
+diff --git a/crates/jxl-render/src/lib.rs b/crates/jxl-render/src/lib.rs
+--- a/crates/jxl-render/src/lib.rs
++++ b/crates/jxl-render/src/lib.rs
+@@ -206,7 +206,7 @@ impl RenderContext {
+         let tf = match &self.image_header.metadata.colour_encoding {
+             ColourEncoding::Enum(e) => e.tf,
+             ColourEncoding::IccProfile(_) => {
+-                let icc = self.embedded_icc().unwrap();
++                let icc = self.embedded_icc()?;
+                 jxl_color::icc::icc_tf(icc)?
+             }
+         };

@@ -1,5 +1,5 @@
 diff --git a/symphonia-codec-adpcm/src/lib.rs b/symphonia-codec-adpcm/src/lib.rs
-index 6cba413..ab395a5 100644
+index 6cba413..d414464 100644
 --- a/symphonia-codec-adpcm/src/lib.rs
 +++ b/symphonia-codec-adpcm/src/lib.rs
 @@ -26,10 +26,13 @@ use symphonia_core::codecs::audio::well_known::{
@@ -28,13 +28,16 @@ index 6cba413..ab395a5 100644
          if params.frames_per_block.is_none() || params.frames_per_block.unwrap() == 0 {
              return unsupported_error("adpcm: valid frames per block is required");
          }
-@@ -126,8 +133,13 @@ impl AdpcmDecoder {
+@@ -126,8 +133,16 @@ impl AdpcmDecoder {
  
          let block_count = packet.block_dur().get() as usize / frames_per_block;
  
 +        let total_frames = block_count.saturating_mul(frames_per_block);
 +        if total_frames > MAX_ADPCM_PACKET_FRAMES {
 +            return decode_error("adpcm: packet frame count exceeds limit");
++        }
++        if total_frames > self.buf.capacity() {
++            return decode_error("adpcm: packet frame count exceeds output buffer capacity");
 +        }
 +
          self.buf.clear();
@@ -43,6 +46,20 @@ index 6cba413..ab395a5 100644
  
          let channel_count = self.buf.spec().channels().count();
          match channel_count {
+diff --git a/symphonia-codec-adpcm/src/codec_ima_wav.rs b/symphonia-codec-adpcm/src/codec_ima_wav.rs
+index 687cc3b..d3e8993 100644
+--- a/symphonia-codec-adpcm/src/codec_ima_wav.rs
++++ b/symphonia-codec-adpcm/src/codec_ima_wav.rs
+@@ -44,6 +44,9 @@ pub(crate) fn decode_stereo<B: ReadBytes>(
+     buffers: [&mut [i32]; 2],
+     frames_per_block: usize,
+ ) -> Result<()> {
++    if frames_per_block == 0 || (frames_per_block - 1) % 8 != 0 {
++        return decode_error("adpcm (ima): frames_per_block - 1 must be a multiple of 8");
++    }
+     let data_bytes_per_channel = frames_per_block - 1;
+     let mut status = [read_preamble(stream)?, read_preamble(stream)?];
+     buffers[0][0] = from_i16_shift!(status[0].predictor);
 diff --git a/symphonia-codec-pcm/src/lib.rs b/symphonia-codec-pcm/src/lib.rs
 index 60f660f..2e44224 100644
 --- a/symphonia-codec-pcm/src/lib.rs
@@ -81,6 +98,17 @@ diff --git a/symphonia-codec-vorbis/src/codebook.rs b/symphonia-codec-vorbis/src
 index 1cb2ac0..36d90ad 100644
 --- a/symphonia-codec-vorbis/src/codebook.rs
 +++ b/symphonia-codec-vorbis/src/codebook.rs
+@@ -305,6 +305,10 @@ impl VorbisCodebook {
+         // Read and unpack vector quantization (VQ) lookup table.
+         let lookup_type = bs.read_bits_leq32(4)?;
+ 
++        if codebook_dimensions == 0 && (lookup_type & 0xf) != 0 {
++            return decode_error("vorbis: zero-dimension codebook with VQ lookup");
++        }
++
+         let vq_vec = match lookup_type & 0xf {
+             0 => None,
+             1 | 2 => {
 @@ -153,6 +153,9 @@ fn synthesize_codewords(code_lens: &[u8]) -> Result<Vec<u32>> {
              // codewords of length N will use the next codeword for codewords of length N-1 as its
              // prefix.
@@ -714,7 +742,7 @@ diff --git a/symphonia-format-ogg/src/physical.rs b/symphonia-format-ogg/src/phy
 index ee76005..60a57fc 100644
 --- a/symphonia-format-ogg/src/physical.rs
 +++ b/symphonia-format-ogg/src/physical.rs
-@@ -147,7 +147,11 @@ fn scan_stream_end(
+@@ -147,6 +147,10 @@ fn scan_stream_end(
      streams: &mut BTreeMap<u32, LogicalStream>,
      byte_range_end: u64,
  ) -> Option<u64> {
@@ -726,4 +754,136 @@ index ee76005..60a57fc 100644
 +    let scoped_len = byte_range_end - pos;
  
      let mut scoped_reader = ScopedStream::new(reader, scoped_len);
+diff --git a/symphonia-format-caf/src/demuxer.rs b/symphonia-format-caf/src/demuxer.rs
+--- a/symphonia-format-caf/src/demuxer.rs
++++ b/symphonia-format-caf/src/demuxer.rs
+@@ -141,6 +141,7 @@ impl FormatReader for CafReader<'_> {
+                     return Ok(None);
+                 };
  
++                limit_caf_packet_size(bytes_to_read)?;
+                 let buf = self.reader.read_boxed_slice(bytes_to_read as usize)?;
+ 
+                 Ok(Some(Packet::new(0, pts, dur, buf)))
+ 
+diff --git a/symphonia-core/src/audio/buf.rs b/symphonia-core/src/audio/buf.rs
+index ddcea78..da1dc48 100644
+--- a/symphonia-core/src/audio/buf.rs
++++ b/symphonia-core/src/audio/buf.rs
+@@ -350,16 +350,10 @@ impl<S: Sample> AudioBuffer<S> {
+     /// If `num_frames` is `None`, the remaining capacity will be used.
+     ///
+     /// Returns the number of frames rendered.
+-    ///
+-    /// # Panics
+-    ///
+-    /// Panics if `num_frames` is `Some` and would exceed the capacity of the buffer.
+     pub fn render_silence(&mut self, num_frames: Option<usize>) -> usize {
+-        // The number of new frames to render.
+-        let num_new_frames = num_frames.unwrap_or(self.capacity - self.num_frames);
+-
+-        // Do not render past the end of the audio buffer.
+-        assert!(self.num_frames + num_new_frames <= self.capacity(), "capacity will be exceeded");
++        // Clamp requests to remaining capacity instead of panicking on malformed streams.
++        let available = self.capacity.saturating_sub(self.num_frames);
++        let num_new_frames = num_frames.unwrap_or(available).min(available);
+ 
+         // Render silence.
+         for plane in &mut self.planes {
+@@ -382,16 +376,10 @@ impl<S: Sample> AudioBuffer<S> {
+     /// If `num_frames` is `None`, the remaining capacity will be used.
+     ///
+     /// Returns the number of frames rendered.
+-    ///
+-    /// # Panics
+-    ///
+-    /// Panics if `num_frames` is `Some` and would exceed the capacity of the buffer.
+     pub fn render_uninit(&mut self, num_frames: Option<usize>) -> usize {
+-        // The number of new frames to render.
+-        let num_new_frames = num_frames.unwrap_or(self.capacity - self.num_frames);
+-
+-        // Do not render past the end of the audio buffer.
+-        assert!(self.num_frames + num_new_frames <= self.capacity(), "capacity will be exceeded");
++        // Clamp requests to remaining capacity instead of panicking on malformed streams.
++        let available = self.capacity.saturating_sub(self.num_frames);
++        let num_new_frames = num_frames.unwrap_or(available).min(available);
+ 
+         // Commit new frames.
+         self.num_frames += num_new_frames;
+
+diff --git a/symphonia/fuzz/fuzz_targets/decode_flac.rs b/symphonia/fuzz/fuzz_targets/decode_flac.rs
+--- a/symphonia/fuzz/fuzz_targets/decode_flac.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_flac.rs
+@@ -6,7 +6,7 @@ use symphonia::core::codecs::audio::{
+ use symphonia::default::codecs::FlacDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     let mut codec_params = AudioCodecParameters::new();
+     codec_params.for_codec(CODEC_ID_FLAC);
+ 
+diff --git a/symphonia-format-ogg/src/mappings/vorbis.rs b/symphonia-format-ogg/src/mappings/vorbis.rs
+index 2567f59..488555d 100644
+--- a/symphonia-format-ogg/src/mappings/vorbis.rs
++++ b/symphonia-format-ogg/src/mappings/vorbis.rs
+@@ -482,6 +482,10 @@ pub fn skip_codebook(bs: &mut BitReaderRtl<'_>) -> Result<()> {
+     // Read and unpack vector quantization (VQ) lookup table.
+     let lookup_type = bs.read_bits_leq32(4)?;
+ 
++    if codebook_dimensions == 0 && (lookup_type & 0xf) != 0 {
++        return decode_error("ogg (vorbis): zero-dimension codebook with VQ lookup");
++    }
++
+     match lookup_type & 0xf {
+         0 => (),
+         1 | 2 => {
+@@ -492,8 +496,11 @@ pub fn skip_codebook(bs: &mut BitReaderRtl<'_>) -> Result<()> {
+ 
+             // Lookup type is either 1 or 2 as per outer match.
+             let lookup_values = match lookup_type {
+-                1 => lookup1_values(codebook_entries, codebook_dimensions),
+-                2 => codebook_entries * u32::from(codebook_dimensions),
++                1 => lookup1_values(codebook_entries, codebook_dimensions)?,
++                2 => match codebook_entries.checked_mul(u32::from(codebook_dimensions)) {
++                    Some(v) => v,
++                    None => return decode_error("ogg (vorbis): codebook lookup size overflow"),
++                },
+                 _ => unreachable!(),
+             };
+ 
+@@ -722,14 +729,25 @@ pub fn ilog(x: u32) -> u32 {
+ }
+ 
+ #[inline(always)]
+-fn lookup1_values(entries: u32, dimensions: u16) -> u32 {
+-    // (value ^ dimensions) <= entries
+-    // [(value ^ dimensions) ^ (1 / dimensions)] = lower[entries ^ (1 / dimensions)]
+-    // value = lower[entries ^ (1 / dimensions)]
+-    let value = (entries as f32).powf(1.0f32 / f32::from(dimensions)).floor() as u32;
+-
+-    assert!(value.pow(u32::from(dimensions)) <= entries);
+-    assert!((value + 1).pow(u32::from(dimensions)) > entries);
++fn lookup1_values(entries: u32, dimensions: u16) -> Result<u32> {
++    if dimensions == 0 {
++        return decode_error("ogg (vorbis): invalid codebook dimensions for lookup");
++    }
+ 
+-    value
++    let d = u32::from(dimensions);
++    let mut x = 1u32;
++    loop {
++        let xpow = match x.checked_pow(d) {
++            Some(p) => p,
++            None => return decode_error("ogg (vorbis): codebook lookup size overflow"),
++        };
++        if xpow > entries {
++            break;
++        }
++        x = x.saturating_add(1);
++        if x == u32::MAX {
++            return decode_error("ogg (vorbis): invalid codebook lookup size");
++        }
++    }
++    Ok(x - 1)
+ }

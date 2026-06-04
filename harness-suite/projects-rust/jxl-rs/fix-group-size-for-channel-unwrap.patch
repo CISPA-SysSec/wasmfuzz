@@ -1,0 +1,15 @@
+Subject: [PATCH] avoid panic when pipeline channel type unset
+---
+diff --git a/jxl/src/render/internal.rs b/jxl/src/render/internal.rs
+index e2a98cd..80d0c15 100644
+--- a/jxl/src/render/internal.rs
++++ b/jxl/src/render/internal.rs
+@@ -146,7 +146,7 @@ impl<Buffer> RenderPipelineShared<Buffer> {
+         requested_data_type: DataTypeTag,
+     ) -> (usize, usize) {
+         let ChannelInfo { downsample, ty } = self.channel_info[0][channel];
+-        if ty.unwrap() != requested_data_type {
++        if ty.is_some_and(|t| t != requested_data_type) {
+             panic!(
+                 "Invalid pipeline usage: incorrect channel type, requested {:?}, but pipeline wants {ty:?}",
+                 requested_data_type

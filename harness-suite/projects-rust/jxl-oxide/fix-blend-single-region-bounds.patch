@@ -1,0 +1,37 @@
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index 42e1366..554feda 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -560,6 +560,32 @@ fn blend_single(
+         height,
+     } = blend_params;
+ 
++    let base_right = base_x.saturating_add(width);
++    let base_bottom = base_y.saturating_add(height);
++    let new_right = new_x.saturating_add(width);
++    let new_bottom = new_y.saturating_add(height);
++
++    if base_right > base.width()
++        || base_bottom > base.height()
++        || new_right > new_grid.width()
++        || new_bottom > new_grid.height()
++    {
++        return;
++    }
++
++    let base_right = base_x.saturating_add(width);
++    let base_bottom = base_y.saturating_add(height);
++    let new_right = new_x.saturating_add(width);
++    let new_bottom = new_y.saturating_add(height);
++
++    if base_right > base.width()
++        || base_bottom > base.height()
++        || new_right > new_grid.width()
++        || new_bottom > new_grid.height()
++    {
++        return;
++    }
++
+     match mode {
+         BlendMode::Replace | BlendMode::Blend(BlendAlpha { new: None, .. }) => {
+             for dy in 0..height {

@@ -40,6 +40,8 @@ struct LogEvent {
     cov_edges: u32,
     entries: u32,
     finds: u32,
+    // Custom stats reported by the fuzzer-under-test
+    stats: Option<serde_json::Value>,
 }
 
 #[derive(Parser, Clone)]
@@ -51,12 +53,15 @@ pub(crate) struct MonitorCovOpts {
     out_file: Option<String>,
     #[clap(long)]
     continuous: bool,
-    #[clap(long, default_value = "1s")]
+    #[clap(long, default_value = "15s")]
     interval: humantime::Duration,
     #[clap(long)]
     bucket: Option<String>,
-    #[clap(long, default_value = "4096")]
+    #[clap(long, default_value = "65535")]
     input_size_limit: usize,
+    /// Path to a JSON file that the fuzzer-under-test writes to periodically
+    #[clap(long)]
+    stats_in: Option<String>,
 }
 
 pub(crate) fn run(opts: MonitorCovOpts) {
@@ -68,6 +73,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
         continuous,
         bucket,
         input_size_limit,
+        stats_in,
     } = opts;
     let mod_spec = super::parse_program(&PathBuf::from(&program));
     let mut stats = Stats::default();
@@ -95,6 +101,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
         let mut has_find = false;
         let target_dur = (*interval) * i;
         if let Ok(sleep_dur) = (start + target_dur).duration_since(SystemTime::now()) {
+            // TODO: handle SIGINT and do one more log entry?
             std::thread::sleep(sleep_dur);
         }
         for entry in std::fs::read_dir(&dir).expect("failed to list corpus dir") {
@@ -139,37 +146,45 @@ pub(crate) fn run(opts: MonitorCovOpts) {
             }
         }
 
-        if continuous || has_find {
-            let event = LogEvent {
-                i,
-                seconds: target_dur.as_secs_f32(),
-                seconds_rt: start_rt.elapsed().as_secs_f32(),
-                cov_funcs: sess.get_pass::<FunctionCoveragePass>().count_saved() as u32,
-                cov_bbs: sess.get_pass::<BBCoveragePass>().count_saved() as u32,
-                cov_edges: sess.get_pass::<EdgeCoveragePass>().count_saved() as u32,
-                crashing: crashes,
-                timeout,
-                entries: corpus.len() as u32,
-                finds,
+        if !has_find && !continuous {
+            continue;
+        }
+
+        let stats = stats_in
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|s| serde_json::from_str(&s).unwrap());
+
+        let event = LogEvent {
+            i,
+            seconds: target_dur.as_secs_f32(),
+            seconds_rt: start_rt.elapsed().as_secs_f32(),
+            cov_funcs: sess.get_pass::<FunctionCoveragePass>().count_saved() as u32,
+            cov_bbs: sess.get_pass::<BBCoveragePass>().count_saved() as u32,
+            cov_edges: sess.get_pass::<EdgeCoveragePass>().count_saved() as u32,
+            crashing: crashes,
+            timeout,
+            entries: corpus.len() as u32,
+            finds,
+            stats,
+        };
+        let line = if emit_meta {
+            emit_meta = false;
+            let event = MetaPacket {
+                first_event: event,
+                target: mod_spec.filename.clone(),
+                bucket: bucket.clone(),
+                interval_secs: interval.as_secs_f32(),
+                start_timestamp,
             };
-            let line = if emit_meta {
-                emit_meta = false;
-                let event = MetaPacket {
-                    first_event: event,
-                    target: mod_spec.filename.clone(),
-                    bucket: bucket.clone(),
-                    interval_secs: interval.as_secs_f32(),
-                    start_timestamp,
-                };
-                serde_json::to_string(&event).unwrap()
-            } else {
-                serde_json::to_string(&event).unwrap()
-            };
-            println!("{line}");
-            if let Some(file) = out_file.as_mut() {
-                file.write_all(line.as_bytes()).unwrap();
-                file.write_all(b"\n").unwrap();
-            }
+            serde_json::to_string(&event).unwrap()
+        } else {
+            serde_json::to_string(&event).unwrap()
+        };
+        println!("{line}");
+        if let Some(file) = out_file.as_mut() {
+            file.write_all(line.as_bytes()).unwrap();
+            file.write_all(b"\n").unwrap();
         }
     }
 }

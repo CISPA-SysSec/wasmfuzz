@@ -8,9 +8,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import secrets
 from pathlib import Path
 
 _terminate_signal = 0
+_children: list["Child"] = []
 
 
 def count_cores_from_hq_cpus(hq_cpus: str | None) -> int:
@@ -19,16 +21,13 @@ def count_cores_from_hq_cpus(hq_cpus: str | None) -> int:
     return max(1, sum(1 for cpu in hq_cpus.split(",") if cpu.strip()))
 
 
-def parse_timeout_seconds(timeout: str) -> int:
-    match = re.fullmatch(r"([1-9][0-9]*)([smh])", timeout)
+def parse_duration_seconds(value: str) -> float:
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([smh])", value.strip())
     if not match:
         raise ValueError(
-            "timeout must match '<n>s', '<n>m', or '<n>h' (e.g. 1s/1m/1h)"
+            f"duration must match '<n>s', '<n>m', or '<n>h': got {value!r}"
         )
-    value = int(match.group(1))
-    unit = match.group(2)
-    scale = {"s": 1, "m": 60, "h": 3600}[unit]
-    return value * scale
+    return float(match.group(1)) * {"s": 1, "m": 60, "h": 3600}[match.group(2)]
 
 
 def apply_env_assignments(env_assigns: str) -> None:
@@ -45,33 +44,92 @@ def apply_env_assignments(env_assigns: str) -> None:
 def signal_handler(sig: int, _frame: object) -> None:
     global _terminate_signal
     _terminate_signal = sig
+    for child in _children:
+        child.signal(signal.SIGINT)
 
 
-def terminate_process(proc: subprocess.Popen[bytes] | None, label: str) -> None:
-    if proc is None or proc.poll() is not None:
+class Child:
+    """A subprocess in its own session, killable as a group."""
+
+    def __init__(self, label: str, cmd: list[str], env: dict[str, str] = {}) -> None:
+        env_ = os.environ.copy()
+        env_.update(env)
+        self.label = label
+        self.proc = subprocess.Popen(cmd, start_new_session=True, env=env_)
+        # start_new_session=True makes the child its own session leader,
+        # so pgid == pid.
+        self.pgid = self.proc.pid
+        _children.append(self)
+
+    def poll(self) -> int | None:
+        return self.proc.poll()
+
+    def signal(self, sig: int) -> None:
+        try:
+            os.killpg(self.pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def wait_for_exit(self, grace_seconds: float) -> None:
+        if self.proc.poll() is not None:
+            return
+        try:
+            self.proc.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            pass
+
+    def terminate(self) -> None:
+        if self.proc.poll() is not None:
+            return
+        self.signal(signal.SIGINT)
+        try:
+            self.proc.wait(timeout=0.2)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        self.signal(signal.SIGKILL)
+        try:
+            self.proc.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            print(
+                f"[hq-run] warning: failed to kill {self.label} pid={self.proc.pid}",
+                file=sys.stderr,
+            )
+
+
+def supervise(fuzzer: Child, monitor: Child, deadline: float) -> tuple[str, int]:
+    """Block until something interesting happens. Returns (reason, rc)."""
+    while True:
+        if _terminate_signal:
+            return ("signal", 128 + _terminate_signal)
+        rc = fuzzer.poll()
+        if rc is not None:
+            return ("fuzzer_exited", rc)
+        rc = monitor.poll()
+        if rc is not None:
+            return ("monitor_exited", rc)
+        if time.monotonic() >= deadline:
+            return ("timeout", 124)
+        try:
+            fuzzer.proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def save_corpus(corpus_dir: Path, corpora_dir: str, dest_name: str) -> None:
+    if not corpora_dir:
         return
+    dest = Path(corpora_dir) / dest_name
+    dest.mkdir(parents=True, exist_ok=True)
     try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        return
-    try:
-        os.killpg(pgid, signal.SIGINT)
-    except ProcessLookupError:
-        return
-    try:
-        proc.wait(timeout=2)
-        return
-    except subprocess.TimeoutExpired:
+        for item in corpus_dir.iterdir():
+            dst = dest / item.name
+            if item.is_dir():
+                shutil.copytree(item, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dst)
+    except FileNotFoundError:
         pass
-
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    try:
-        proc.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        print(f"[hq-run] warning: failed to kill {label} pid={proc.pid}", file=sys.stderr)
 
 
 def main() -> int:
@@ -86,8 +144,9 @@ def main() -> int:
     monitor_bin = str(task["monitor"])
     runs_dir_raw = str(task["runs_dir"])
     timeout = str(task["timeout"])
-    timeout_seconds = parse_timeout_seconds(timeout)
+    timeout_seconds = parse_duration_seconds(timeout)
     monitor_interval = str(task.get("monitor_interval") or "60s")
+    monitor_grace_seconds = parse_duration_seconds(monitor_interval) * 1.5
     corpora_dir = str(task.get("corpora_dir") or "")
     exp_arg = str(task.get("experiment_arg") or "")
     env_assigns = str(task.get("env_assignments") or "")
@@ -100,89 +159,66 @@ def main() -> int:
     runs_dir.mkdir(parents=True, exist_ok=True)
     target_stem = Path(target).stem
     job_id = (
-        f"{target_stem}-{bucket}-{int(time.time())}-"
+        f"{target_stem}-{bucket}-{int(time.time())}-{secrets.token_hex(4)}-"
         f"{os.environ.get('HQ_JOB_ID', 'x')}.{os.environ.get('HQ_TASK_ID', '0')}"
     )
     out_file = runs_dir / f"{job_id}.jsonl"
-    corpus_dir = Path(tempfile.mkdtemp(prefix="wasmfuzz-hq-"))
+    if os.environ.get("HQ_TASK_DIR"):
+        task_dir = Path(os.environ["HQ_TASK_DIR"])
+    else:
+        task_dir = Path(tempfile.mkdtemp(prefix="wasmfuzz-hq-"))
+    corpus_dir = task_dir / "corpus"
+    corpus_dir.mkdir()
 
-    monitor_proc: subprocess.Popen[bytes] | None = None
-    fuzzer_proc: subprocess.Popen[bytes] | None = None
+    monitor: Child | None = None
+    fuzzer: Child | None = None
 
     print(f"[hq-run] job={job_id} cores={cores} target={target} bucket={bucket}")
     print(f"[hq-run] exp_arg='{exp_arg}' env='{env_assigns}'")
 
     try:
-        monitor_cmd = [
-            monitor_bin,
-            "monitor-cov",
-            target,
-            "--dir",
-            str(corpus_dir),
-            "--out-file",
-            str(out_file),
-            "--bucket",
-            bucket,
-            f"--interval={monitor_interval}",
-            "--continuous",
-        ]
-        monitor_proc = subprocess.Popen(monitor_cmd, start_new_session=True)
+        monitor = Child(
+            "monitor",
+            [
+                monitor_bin, "monitor-cov", target,
+                "--dir", str(corpus_dir),
+                "--out-file", str(out_file),
+                "--bucket", bucket,
+                f"--interval={monitor_interval}",
+                "--continuous",
+                f"--stats-in={task_dir / 'metrics.json'}"
+            ],
+        )
 
         fuzz_cmd = [
-            wasmfuzz,
-            "fuzz",
-            target,
-            "--dir",
-            str(corpus_dir),
-            "--timeout",
-            timeout,
-            "--cores",
-            str(cores),
+            wasmfuzz, "fuzz", target,
+            "--dir", str(corpus_dir),
+            "--timeout", timeout,
+            "--cores", str(cores),
         ]
         if exp_arg:
             fuzz_cmd.append(exp_arg)
-        fuzzer_proc = subprocess.Popen(fuzz_cmd, start_new_session=True)
+        fuzzer = Child("fuzzer", fuzz_cmd, env={"WASMFUZZ_METRICS_JSON": task_dir / 'metrics.json'})
 
-        first_rc: int | None = None
-        deadline = time.monotonic() + timeout_seconds
-        while first_rc is None:
-            if _terminate_signal:
-                print(f"[hq-run] received signal {_terminate_signal}; cleaning up")
-                first_rc = 128 + _terminate_signal
-                break
-            fuzzer_rc = fuzzer_proc.poll()
-            if fuzzer_rc is not None:
-                first_rc = fuzzer_rc
-                break
-            monitor_rc = monitor_proc.poll()
-            if monitor_rc is not None:
-                first_rc = monitor_rc
-                break
-            if time.monotonic() >= deadline:
-                print(f"[hq-run] timeout {timeout} reached; cleaning up")
-                first_rc = 124
-                break
-            time.sleep(1)
+        reason, rc = supervise(fuzzer, monitor, time.monotonic() + timeout_seconds)
+        print(f"[hq-run] {reason} rc={rc}; cleaning up")
 
-        print(f"[hq-run] first child exited rc={first_rc}; cleaning up")
-        return int(first_rc or 0)
+        if reason in ("fuzzer_exited", "timeout"):
+            fuzzer.terminate()
+            print(
+                f"[hq-run] waiting up to {monitor_grace_seconds:.1f}s "
+                f"for monitor to catch up"
+            )
+            monitor.wait_for_exit(monitor_grace_seconds)
+
+        return rc
     finally:
-        terminate_process(monitor_proc, "monitor")
-        terminate_process(fuzzer_proc, "fuzzer")
+        if monitor is not None:
+            monitor.terminate()
+        if fuzzer is not None:
+            fuzzer.terminate()
 
-        if corpora_dir:
-            dest = Path(corpora_dir) / f"{target_stem}-{bucket}"
-            dest.mkdir(parents=True, exist_ok=True)
-            try:
-                for item in corpus_dir.iterdir():
-                    dst = dest / item.name
-                    if item.is_dir():
-                        shutil.copytree(item, dst, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(item, dst)
-            except FileNotFoundError:
-                pass
-
+        save_corpus(corpus_dir, corpora_dir, f"{target_stem}-{bucket}")
         shutil.rmtree(corpus_dir, ignore_errors=True)
 
 

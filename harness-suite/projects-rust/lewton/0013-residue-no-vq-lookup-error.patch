@@ -15,3 +15,25 @@ index a0c9c3f..0a18f68 100644
  									}
  								},
  							}
+diff --git a/src/huffman_tree.rs b/src/huffman_tree.rs
+--- a/src/huffman_tree.rs
++++ b/src/huffman_tree.rs
+@@ -386,7 +386,17 @@ impl<'a> VorbisHuffmanIter<'a> {
+ 		assert!((cur_entry & (1u32 << 31)) != 0);*/
+ 
+ 		//print!("With bit {:?}, pos {:?} becomes pos ", bit, self.pos);
+-		self.pos = self.desc_prog[self.pos as usize + 1 + bit as usize];
++		let next_idx = self.pos as usize + 1 + bit as usize;
++		if next_idx >= self.desc_prog.len() {
++			self.pos = 0;
++			return None;
++		}
++		let next_pos = self.desc_prog[next_idx] as usize;
++		if next_pos >= self.desc_prog.len() {
++			self.pos = 0;
++			return None;
++		}
++		self.pos = next_pos as u32;
+ 		//print!("{:?}", self.pos);
+ 		let child = self.desc_prog[self.pos as usize];
+ 		if (child & (1u32 << 31)) != 0 {

@@ -1,54 +1,10 @@
-diff --git a/jxl/fuzz/fuzz_targets/decode_header.rs b/jxl/fuzz/fuzz_targets/decode_header.rs
-index 0f56728..6f1b4c2 100644
---- a/jxl/fuzz/fuzz_targets/decode_header.rs
-+++ b/jxl/fuzz/fuzz_targets/decode_header.rs
-@@ -10,7 +10,9 @@ use libfuzzer_sys::fuzz_target;
- fuzz_target!(|data: &[u8]| {
-     // Note: cargo-fuzz doesn't support |mut data: &[u8]| here.
-     let mut data = data;
--    let decoder_options = JxlDecoderOptions::default();
-+    let mut decoder_options = JxlDecoderOptions::default();
-+    decoder_options.sample_limit = Some(1 << 22);
-+    decoder_options.scan_frames_only = true;
-     let initialized_decoder = JxlDecoder::<states::Initialized>::new(decoder_options);
-     let _ = initialized_decoder.process(&mut data);
- });
-diff --git a/jxl/fuzz/fuzz_targets/decode.rs b/jxl/fuzz/fuzz_targets/decode.rs
-index e2966b4..442c79d 100644
---- a/jxl/fuzz/fuzz_targets/decode.rs
-+++ b/jxl/fuzz/fuzz_targets/decode.rs
-@@ -38,12 +38,24 @@ fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
-         let decoder_with_frame_info = as_complete(decoder_with_image_info.process(&mut data))?;
-         let frame_header = decoder_with_frame_info.frame_header();
-         let frame_size = frame_header.size;
-+        let frame_pixels = frame_size.0.checked_mul(frame_size.1).ok_or(())?;
-+        const MAX_FRAME_PIXELS: usize = 1 << 22;
-+        if frame_pixels >= MAX_FRAME_PIXELS {
-+            return Err(());
-+        }
-+
-+        let row_samples = frame_size.0.checked_mul(samples_per_pixel).ok_or(())?;
-+        let output_samples = row_samples.checked_mul(frame_size.1).ok_or(())?;
-+        const MAX_OUTPUT_SAMPLES: usize = 1 << 22;
-+        if output_samples >= MAX_OUTPUT_SAMPLES {
-+            return Err(());
-+        }
- 
-         let mut outputs =
--            vec![Image::<f32>::new((frame_size.0 * samples_per_pixel, frame_size.1)).unwrap()];
-+            vec![Image::<f32>::new((row_samples, frame_size.1)).map_err(|_| ())?];
- 
-         for _ in 0..extra_channels {
--            outputs.push(Image::<f32>::new(frame_size).unwrap());
-+            outputs.push(Image::<f32>::new(frame_size).map_err(|_| ())?);
-         }
- 
-         let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
+Subject: [PATCH] reject oversized untrusted parse dimensions early
+---
 diff --git a/jxl/src/api/inner/box_parser.rs b/jxl/src/api/inner/box_parser.rs
-index 6471b92..c1bab95 100644
+index 787b3ba..01f62af 100644
 --- a/jxl/src/api/inner/box_parser.rs
 +++ b/jxl/src/api/inner/box_parser.rs
-@@ -360,7 +360,10 @@ impl BoxParser {
+@@ -361,7 +361,10 @@ impl BoxParser {
                                      if self.ooo_jxlp.buffered.contains_key(&idx) {
                                          return Err(Error::InvalidBox);
                                      }
@@ -60,11 +16,32 @@ index 6471b92..c1bab95 100644
                                          return Err(Error::InvalidBox);
                                      }
                                      self.state = ParseState::BufferingOooJxlp {
+diff --git a/jxl/src/api/inner/codestream_parser/mod.rs b/jxl/src/api/inner/codestream_parser/mod.rs
+index d26cdad..2d5a5fb 100644
+--- a/jxl/src/api/inner/codestream_parser/mod.rs
++++ b/jxl/src/api/inner/codestream_parser/mod.rs
+@@ -459,10 +459,12 @@ impl CodestreamParser {
+                         }
+                         let len = buf.data.len();
+                         if len > ready {
+-                            let readable = (available_codestream + ready).min(len);
+-                            section_buffers.push(IoSliceMut::new(&mut buf.data[ready..readable]));
+-                            available_codestream =
+-                                available_codestream.saturating_sub(readable - ready);
++                            let end = (available_codestream + ready).min(len);
++                            if end > ready {
++                                section_buffers.push(IoSliceMut::new(&mut buf.data[ready..end]));
++                                available_codestream =
++                                    available_codestream.saturating_sub(end - ready);
++                            }
+                             if available_codestream == 0 {
+                                 break;
+                             }
 diff --git a/jxl/src/api/inner/codestream_parser/non_section.rs b/jxl/src/api/inner/codestream_parser/non_section.rs
-index cc35fae..3e10767 100644
+index 52f3ed1..0efe3c0 100644
 --- a/jxl/src/api/inner/codestream_parser/non_section.rs
 +++ b/jxl/src/api/inner/codestream_parser/non_section.rs
-@@ -231,12 +231,25 @@ impl CodestreamParser {
+@@ -221,6 +221,19 @@ impl CodestreamParser {
                  frame_header.size(),
                  frame_header.num_extra_channels as usize,
              )?;
@@ -84,14 +61,16 @@ index cc35fae..3e10767 100644
  
              // Initialize storage buffers for available sections.
              self.lf_global_section = None;
-             self.lf_sections.clear();
-             self.hf_global_section = None;
--            self.hf_sections = (0..frame_header.num_groups())
-+            self.hf_sections = (0..ng)
-                 .map(|_| (0..frame_header.passes.num_passes).map(|_| None).collect())
-                 .collect();
-             self.candidate_hf_sections.clear();
-@@ -251,8 +264,28 @@ impl CodestreamParser {
+@@ -230,7 +243,7 @@ impl CodestreamParser {
+             // (untrusted) frame header dimensions and can be astronomically
+             // large for malformed/fuzz inputs. Avoid aborting the process on
+             // OOM and return a recoverable error instead.
+-            let num_groups = frame_header.num_groups();
++            let num_groups = ng;
+             let num_passes = frame_header.passes.num_passes as usize;
+             let mut hf_sections = Vec::new_with_capacity(num_groups)?;
+             for _ in 0..num_groups {
+@@ -253,8 +266,28 @@ impl CodestreamParser {
              let mut br = BitReader::new(&self.non_section_buf);
              br.skip_bits(self.non_section_bit_offset as usize)?;
              if self.toc_parser.is_none() {
@@ -122,7 +101,7 @@ index cc35fae..3e10767 100644
              }
  
              let toc_parser = self.toc_parser.as_mut().unwrap();
-@@ -292,6 +325,19 @@ impl CodestreamParser {
+@@ -281,6 +314,19 @@ impl CodestreamParser {
              self.toc_parser.take().unwrap().finalize()
          };
  
@@ -142,7 +121,7 @@ index cc35fae..3e10767 100644
          let mut frame = Frame::from_header_and_toc(
              self.frame_header.take().unwrap(),
              toc,
-@@ -325,32 +358,36 @@ impl CodestreamParser {
+@@ -327,28 +373,32 @@ impl CodestreamParser {
          self.ready_section_data = 0;
  
          // Move data from the pre-section buffer into the sections.
@@ -176,10 +155,6 @@ index cc35fae..3e10767 100644
  
 -        frame.prepare_render_pipeline(
 -            self.pixel_format.as_ref().unwrap(),
--            decode_options.cms.as_deref(),
--            self.embedded_color_profile
--                .as_ref()
--                .expect("embedded_color_profile should be set before pipeline preparation"),
 -            self.output_color_profile
 -                .as_ref()
 -                .expect("output_color_profile should be set before pipeline preparation"),
@@ -187,10 +162,6 @@ index cc35fae..3e10767 100644
 +        if !decode_options.scan_frames_only {
 +            frame.prepare_render_pipeline(
 +                self.pixel_format.as_ref().unwrap(),
-+                decode_options.cms.as_deref(),
-+                self.embedded_color_profile
-+                    .as_ref()
-+                    .expect("embedded_color_profile should be set before pipeline preparation"),
 +                self.output_color_profile
 +                    .as_ref()
 +                    .expect("output_color_profile should be set before pipeline preparation"),
@@ -200,10 +171,10 @@ index cc35fae..3e10767 100644
          self.frame = Some(frame);
  
 diff --git a/jxl/src/api/inner/process.rs b/jxl/src/api/inner/process.rs
-index 2870225..cb09e44 100644
+index 2870225..0bb8952 100644
 --- a/jxl/src/api/inner/process.rs
 +++ b/jxl/src/api/inner/process.rs
-@@ -31,15 +31,15 @@ impl SmallBuffer {
+@@ -31,7 +31,7 @@ impl SmallBuffer {
      ) -> Result<usize> {
          let mut total = 0;
          loop {
@@ -212,7 +183,7 @@ index 2870225..cb09e44 100644
                  let start = self.range.start;
                  let len = self.range.len();
                  let (pre, post) = self.buf.split_at_mut(start);
-                 pre[0..len].copy_from_slice(&post[0..len]);
+@@ -39,7 +39,7 @@ impl SmallBuffer {
                  self.range.start -= start;
                  self.range.end -= start;
              }
@@ -234,7 +205,7 @@ index 2870225..cb09e44 100644
  
      pub(super) fn can_read_more(&self) -> bool {
 diff --git a/jxl/src/frame/decode.rs b/jxl/src/frame/decode.rs
-index 82d091e..93dbe79 100644
+index 82d091e..9b85dda 100644
 --- a/jxl/src/frame/decode.rs
 +++ b/jxl/src/frame/decode.rs
 @@ -156,6 +156,8 @@ impl Frame {
@@ -246,24 +217,6 @@ index 82d091e..93dbe79 100644
          if frame_header.is_visible() {
              decoder_state.visible_frame_index += 1;
              decoder_state.nonvisible_frame_index = 0;
-@@ -211,7 +213,7 @@ impl Frame {
-             let image_size = &decoder_state.file_header.size;
-             let image_size = (image_size.xsize() as usize, image_size.ysize() as usize);
-             let sz = if frame_header.save_before_ct {
--                frame_header.size_upsampled()
-+                frame_header.size()
-             } else {
-                 image_size
-             };
-@@ -229,7 +231,7 @@ impl Frame {
-         let lf_frame_data = if frame_header.lf_level != 0 {
-             Some(
-                 (0..3)
--                    .map(|_| Image::new(frame_header.size_upsampled()))
-+                    .map(|_| Image::new(frame_header.size()))
-                     .collect::<Result<Vec<_>, _>>()?
-                     .try_into()
-                     .unwrap(),
 @@ -243,8 +245,8 @@ impl Frame {
          Ok(Self {
              #[cfg(test)]
@@ -275,18 +228,22 @@ index 82d091e..93dbe79 100644
              header: frame_header,
              color_channels,
              toc,
-@@ -337,7 +339,8 @@ impl Frame {
+@@ -337,7 +339,12 @@ impl Frame {
  
              if self.header.has_splines() {
                  info!("decoding splines");
 -                let s = Splines::read(br, self.header.width * self.header.height)?;
-+                let spline_area = self.header.size().0.saturating_mul(self.header.size().1);
-+                let s = Splines::read(br, u32::try_from(spline_area).unwrap_or(u32::MAX))?;
++                let spline_area = self
++                    .header
++                    .width
++                    .checked_mul(self.header.height)
++                    .ok_or(Error::SizeOverflow)?;
++                let s = Splines::read(br, spline_area)?;
                  *self.splines.borrow_mut() = s;
              }
  
 diff --git a/jxl/src/frame/group.rs b/jxl/src/frame/group.rs
-index b7d8021..952eeea 100644
+index b60a1ef..32cf8b4 100644
 --- a/jxl/src/frame/group.rs
 +++ b/jxl/src/frame/group.rs
 @@ -223,7 +223,10 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
@@ -301,18 +258,41 @@ index b7d8021..952eeea 100644
              for (y, lf) in lf.chunks_exact_mut(xs).enumerate().take(ys) {
                  lf.copy_from_slice(&rect.row(y)[0..xs]);
              }
+diff --git a/jxl/src/frame/render.rs b/jxl/src/frame/render.rs
+index 20a8271..009892f 100644
+--- a/jxl/src/frame/render.rs
++++ b/jxl/src/frame/render.rs
+@@ -21,7 +21,7 @@ use crate::headers::frame_header::FrameType;
+ use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
+ use crate::image::Image;
+ use crate::image::Rect;
+-use crate::util::AtomicRefCell;
++use crate::util::{AtomicRefCell, ShiftRightCeil};
+ use std::sync::Arc;
+ 
+ #[cfg(test)]
+@@ -330,6 +330,16 @@ impl Frame {
+         let num_channels = frame_header.num_extra_channels as usize + 3;
+         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
+         let metadata = &decoder_state.file_header.image_metadata;
++        const MAX_RENDER_PIPELINE_GRID_CELLS: usize = 1 << 22;
++        let downsampling_shift = frame_header.upsampling.ilog2() as usize;
++        let log_group_size = frame_header.log_group_dim() + downsampling_shift;
++        let (uw, uh) = frame_header.size_upsampled();
++        let gw = uw.shrc(log_group_size);
++        let gh = uh.shrc(log_group_size);
++        let grid_cells = gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
++        if grid_cells >= MAX_RENDER_PIPELINE_GRID_CELLS {
++            return Err(Error::ImageDimensionTooLarge(grid_cells as u64));
++        }
+         let mut pipeline = RenderPipelineBuilder::<T>::new(
+             num_channels + num_temp_channels,
+             frame_header.size_upsampled(),
 diff --git a/jxl/src/headers/permutation.rs b/jxl/src/headers/permutation.rs
-index c189c0b..c14e0cd 100644
+index c189c0b..90c9a5c 100644
 --- a/jxl/src/headers/permutation.rs
 +++ b/jxl/src/headers/permutation.rs
-@@ -39,12 +39,17 @@ impl Permutation {
-         })
-     }
- 
-+    #[inline(never)]
-     fn decode_inner(
-         size: u32,
-         skip: u32,
+@@ -45,6 +45,10 @@ impl Permutation {
          end: u32,
          mut read: impl FnMut(usize) -> Result<u32>,
      ) -> Result<Self> {
@@ -338,57 +318,3 @@ index eecbe8e..6d30c5f 100644
          let permuted = bool::read_unconditional(&(), br, &Empty {})?;
          let mut entries = Vec::new();
          entries.try_reserve(num_entries as usize)?;
-diff --git a/jxl/src/frame/render.rs b/jxl/src/frame/render.rs
-index d20d693..edd57df 100644
---- a/jxl/src/frame/render.rs
-+++ b/jxl/src/frame/render.rs
-@@ -23,7 +23,7 @@ use crate::headers::frame_header::FrameType;
- use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
- use crate::image::Image;
- use crate::image::Rect;
--use crate::util::AtomicRefCell;
-+use crate::util::{AtomicRefCell, ShiftRightCeil};
- use std::sync::Arc;
- 
- #[cfg(test)]
-@@ -360,6 +360,18 @@ impl Frame {
-         let num_channels = frame_header.num_extra_channels as usize + 3;
-         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
-         let metadata = &decoder_state.file_header.image_metadata;
-+        // Match `RenderPipelineBuilder::new_with_chunk_size`: pipeline allocates
-+        // O(group_chan_complete.len()) structures; bound before constructing the builder.
-+        const MAX_RENDER_PIPELINE_GRID_CELLS: usize = 1 << 22;
-+        let downsampling_shift = frame_header.upsampling.ilog2() as usize;
-+        let log_group_size = frame_header.log_group_dim() + downsampling_shift;
-+        let (uw, uh) = frame_header.size_upsampled();
-+        let gw = uw.shrc(log_group_size);
-+        let gh = uh.shrc(log_group_size);
-+        let grid_cells = gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
-+        if grid_cells >= MAX_RENDER_PIPELINE_GRID_CELLS {
-+            return Err(Error::ImageDimensionTooLarge(grid_cells as u64));
-+        }
-         let mut pipeline = RenderPipelineBuilder::<T>::new(
-             num_channels + num_temp_channels,
-             frame_header.size_upsampled(),
-
-diff --git a/jxl/src/api/inner/codestream_parser/mod.rs b/jxl/src/api/inner/codestream_parser/mod.rs
-index dd650c3..a992cd0 100644
---- a/jxl/src/api/inner/codestream_parser/mod.rs
-+++ b/jxl/src/api/inner/codestream_parser/mod.rs
-@@ -461,10 +461,12 @@ impl CodestreamParser {
-                         }
-                         let len = buf.data.len();
-                         if len > ready {
--                            let readable = (available_codestream + ready).min(len);
--                            section_buffers.push(IoSliceMut::new(&mut buf.data[ready..readable]));
--                            available_codestream =
--                                available_codestream.saturating_sub(readable - ready);
-+                            let end = (available_codestream + ready).min(len);
-+                            if end > ready {
-+                                section_buffers.push(IoSliceMut::new(&mut buf.data[ready..end]));
-+                                available_codestream =
-+                                    available_codestream.saturating_sub(end - ready);
-+                            }
-                             if available_codestream == 0 {
-                                 break;
-                             }

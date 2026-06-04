@@ -1,0 +1,18 @@
+diff --git a/crates/jxl-render/src/image.rs b/crates/jxl-render/src/image.rs
+--- a/crates/jxl-render/src/image.rs
++++ b/crates/jxl-render/src/image.rs
+@@ -744,12 +744,8 @@ impl<S: Sample> RenderedImage<S> {
+             return Ok(image);
+         }
+ 
+-        // `Rendering` + releasing the lock lets other threads wait on the condvar during
+-        // composition. On single-threaded targets that wait panics; keep the lock path instead.
+-        if pool.is_multithreaded() {
+-            *grid_lock = FrameRender::Rendering;
+-            drop(grid_lock);
+-        }
++        *grid_lock = FrameRender::Rendering;
++        drop(grid_lock);
+ 
+         composite(
+             &self.image.frame,

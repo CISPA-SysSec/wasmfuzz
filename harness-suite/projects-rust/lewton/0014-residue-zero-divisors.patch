@@ -1,0 +1,25 @@
+diff --git a/src/audio.rs b/src/audio.rs
+--- a/src/audio.rs
++++ b/src/audio.rs
+@@ -590,6 +590,9 @@ fn residue_packet_read_partition(rdr :&mut BitpackCursor, codebook :&Codebook,
+ fn residue_packet_read_partition(rdr :&mut BitpackCursor, codebook :&Codebook,
+ 		resid :&Residue, vec_v :&mut [f32]) -> Result<(), HuffmanVqReadErr> {
+ 	if resid.residue_type == 0 {
++		if codebook.codebook_dimensions == 0 {
++			return Err(HuffmanVqReadErr::NoVqLookupForCodebook);
++		}
+ 		let codebook_dimensions = codebook.codebook_dimensions as usize;
+ 		let step = resid.residue_partition_size as usize / codebook_dimensions;
+ 		for i in 0 .. step {
+@@ -631,8 +634,11 @@ fn residue_packet_decode_inner(rdr :&mut BitpackCursor, cur_blocksize :u16,
+ 
+ 	let cur_codebook = &codebooks[resid.residue_classbook as usize];
+ 	let classwords_per_codeword = cur_codebook.codebook_dimensions as usize;
++	if resid.residue_partition_size == 0 {
++		return Err(());
++	}
+ 	let n_to_read = limit_residue_end - limit_residue_begin;
+ 	let partitions_to_read = n_to_read / resid.residue_partition_size as usize;
+ 	let residue_classbok_ht = &cur_codebook.codebook_huffman_tree;
+ 
+ 	// Allocate and zero all vectors that will be returned

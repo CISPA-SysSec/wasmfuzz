@@ -1,0 +1,45 @@
+Subject: [PATCH] return error on mixed channel downsampling
+---
+diff --git a/jxl/src/render/low_memory_pipeline/mod.rs b/jxl/src/render/low_memory_pipeline/mod.rs
+index 761175a..cf109d5 100644
+--- a/jxl/src/render/low_memory_pipeline/mod.rs
++++ b/jxl/src/render/low_memory_pipeline/mod.rs
+@@ -10,7 +10,7 @@ use std::any::Any;
+ use row_buffers::RowBuffer;
+ 
+ use crate::api::JxlOutputBuffer;
+-use crate::error::Result;
++use crate::error::{Error, Result};
+ use crate::image::{DataTypeTag, Image, ImageDataType, OwnedRawImage, Rect};
+ use crate::render::MAX_BORDER;
+ use crate::render::buffer_splitter::{BufferSplitter, SaveStageBufferInfo};
+@@ -180,7 +180,7 @@ impl RenderPipeline for LowMemoryRenderPipeline {
+             .stages
+             .iter()
+             .zip(shared.channel_info.iter())
+-            .map(|(s, ci)| {
++            .map(|(s, ci)| -> Result<(usize, usize)> {
+                 let dowsamplings: Vec<_> = (0..nc)
+                     .filter_map(|c| {
+                         if s.uses_channel(c) {
+@@ -190,12 +190,17 @@ impl RenderPipeline for LowMemoryRenderPipeline {
+                         }
+                     })
+                     .collect();
++                let first = *dowsamplings
++                    .first()
++                    .ok_or(Error::MixingDifferentChannels)?;
+                 for &d in dowsamplings.iter() {
+-                    assert_eq!(d, dowsamplings[0]);
++                    if d != first {
++                        return Err(Error::MixingDifferentChannels);
++                    }
+                 }
+-                (dowsamplings[0].0 as usize, dowsamplings[0].1 as usize)
++                Ok((first.0 as usize, first.1 as usize))
+             })
+-            .collect();
++            .collect::<Result<Vec<_>>>()?;
+ 
+         // Create opaque alpha buffers for save stages that need fill_opaque_alpha
+         let mut opaque_alpha_buffers = vec![];

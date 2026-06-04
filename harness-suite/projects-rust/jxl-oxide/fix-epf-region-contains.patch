@@ -1,0 +1,15 @@
+diff --git a/crates/jxl-render/src/filter/epf.rs b/crates/jxl-render/src/filter/epf.rs
+index 4f4f4dc..34333cf 100644
+--- a/crates/jxl-render/src/filter/epf.rs
++++ b/crates/jxl-render/src/filter/epf.rs
+@@ -22,7 +22,9 @@ pub fn apply_epf<S: Sample>(
+     let _guard = span.enter();
+ 
+     let region = fb_image.regions_and_shifts()[0].0;
+-    assert!(region.contains(color_padded_region));
++    if !region.contains(color_padded_region) {
++        return;
++    }
+     let left = region.left.abs_diff(color_padded_region.left) as usize;
+     let top = region.top.abs_diff(color_padded_region.top) as usize;
+     let right = left + color_padded_region.width as usize;

@@ -557,9 +557,14 @@ fn iter_cmp_instrs(spec: &ModuleSpec) -> impl Iterator<Item = Location> + '_ {
 }
 
 pub(crate) fn union_bitboxes(a: &mut bitvec::boxed::BitBox, b: &bitvec::boxed::BitBox) -> bool {
-    let is_update = a.domain().zip(b.domain()).any(|(a, b)| (b & !a) != 0);
-    if is_update {
-        *a |= b;
+    let mut is_update = false;
+    let a_slice = a.as_raw_mut_slice();
+    let b_slice = b.as_raw_slice();
+    debug_assert_eq!(a_slice.len(), b_slice.len());
+    for (a_word, b_word) in a_slice.iter_mut().zip(b_slice.iter().copied()) {
+        let merged = *a_word | b_word;
+        is_update |= merged != *a_word;
+        *a_word = merged;
     }
     is_update
 }

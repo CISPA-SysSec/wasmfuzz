@@ -1,0 +1,34 @@
+diff --git a/fuzz/fuzzers/fuzzer_script_tiff.rs b/fuzz/fuzzers/fuzzer_script_tiff.rs
+--- a/fuzz/fuzzers/fuzzer_script_tiff.rs
++++ b/fuzz/fuzzers/fuzzer_script_tiff.rs
+@@ -1,19 +1,27 @@
+ #![no_main]
+ #[macro_use] extern crate libfuzzer_sys;
+ extern crate image;
+-use image::ImageDecoder;
++use image::{ImageDecoder, Limits};
+ use std::io::Cursor;
+ 
+ fuzz_target!(|data: &[u8]| {
+-    let decoder = match image::codecs::tiff::TiffDecoder::new(Cursor::new(data)) {
++    let mut decoder = match image::codecs::tiff::TiffDecoder::new(Cursor::new(data)) {
+         Ok(decoder) => decoder,
+         Err(_) => return,
+     };
+ 
+-    if decoder.total_bytes() > 256 * 1024 * 1024 {
++    let mut limits = Limits::default();
++    limits.max_alloc = Some(64 * 1024 * 1024);
++    limits.max_image_width = Some(8192);
++    limits.max_image_height = Some(8192);
++    if decoder.set_limits(limits).is_err() {
++        return;
++    }
++
++    if decoder.total_bytes() > 64 * 1024 * 1024 {
+         return;
+     }
+ 
+     let mut buf = vec![0; decoder.total_bytes() as usize];
+     let _ = decoder.read_image(&mut buf);
+ });
