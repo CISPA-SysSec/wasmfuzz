@@ -59,6 +59,10 @@ pub(crate) struct Stats {
     pub non_lod_mutations: usize,
     pub lod_finds: usize,
     pub non_lod_finds: usize,
+    /// Finds minimized by the `LodShrinkFinds` experiment shrink pass.
+    pub lod_shrink_finds: usize,
+    /// Total bytes shaved off finds by that shrink pass.
+    pub lod_shrink_bytes_saved: usize,
 }
 
 impl Stats {
@@ -91,6 +95,8 @@ impl Stats {
             non_lod_mutations,
             lod_finds,
             non_lod_finds,
+            lod_shrink_finds,
+            lod_shrink_bytes_saved,
             tracing_stage_executions,
         } = self;
 
@@ -138,6 +144,8 @@ impl Stats {
             ("non_lod_mutations", non_lod_mutations),
             ("lod_finds", lod_finds),
             ("non_lod_finds", non_lod_finds),
+            ("lod_shrink_finds", lod_shrink_finds),
+            ("lod_shrink_bytes_saved", lod_shrink_bytes_saved),
         ];
         for (key, val) in kv {
             let val = *val;
@@ -321,6 +329,7 @@ impl PassesGen for FullFeedbackPasses {
             func_input_size_cyclic,
             func_input_size_color,
             func_input_size_custom,
+            edge_input_size_custom,
             memory_op_value,
             memory_op_address,
             memory_store_prev_value,
@@ -377,6 +386,10 @@ impl PassesGen for FullFeedbackPasses {
         add_pass!(
             func_input_size_custom,
             InputSizePass::new(InputComplexityMetric::Custom, &self.spec, filter)
+        );
+        add_pass!(
+            edge_input_size_custom,
+            EdgeInputSizeCustomPass::new(&self.spec, filter)
         );
 
         add_pass!(perffuzz_func, PerffuzzFunctionPass::new(&self.spec, filter));
@@ -549,6 +562,7 @@ pub(crate) struct FeedbackOptions {
     pub func_input_size_cyclic: bool,
     pub func_input_size_color: bool,
     pub func_input_size_custom: bool,
+    pub edge_input_size_custom: bool,
     pub memory_op_value: bool,
     pub memory_op_address: bool,
     pub memory_store_prev_value: bool,
@@ -587,6 +601,7 @@ impl FeedbackOptions {
             func_input_size_cyclic: false,
             func_input_size_color: false,
             func_input_size_custom: false,
+            edge_input_size_custom: false,
             memory_op_value: false,
             memory_op_address: false,
             memory_store_prev_value: false,
@@ -616,6 +631,7 @@ impl FeedbackOptions {
             func_input_size_cyclic: true,
             func_input_size_color: true,
             func_input_size_custom: true,
+            edge_input_size_custom: true,
             memory_op_value: true,
             memory_op_address: true,
             memory_store_prev_value: true,
@@ -730,6 +746,7 @@ impl JitStage {
         {
             // eprintln!("resetting vmctx because it's tainted");
             self.inp_ptr = None;
+            // instance.vmctx.restore();
         }
 
         if self.inp_ptr.is_none() {

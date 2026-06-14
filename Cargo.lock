@@ -313,9 +313,9 @@ dependencies = [
 
 [[package]]
 name = "brotli"
-version = "8.0.2"
+version = "8.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bd8b9603c7aa97359dbd97ecf258968c95f3adddd6db2f7e7a5bef101c84560"
+checksum = "8119e4516436f5708bbc474a9d395bf12f1b5395e93a92a56e647ac3388c8610"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -324,9 +324,9 @@ dependencies = [
 
 [[package]]
 name = "brotli-decompressor"
-version = "5.0.0"
+version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "874bb8112abecc98cbd6d81ea4fa7e94fb9449648c93cc89aa40c81c24d7de03"
+checksum = "5962523e1b92ce1b5e793d9169b9943eece10d39f62550bc04bb605d75b94924"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -968,29 +968,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "facet-dessert"
-version = "0.46.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4505ec8ef086d776fd99b86fb17e3d1c711188d27aa72845e64a30146226e3b"
-dependencies = [
- "facet-core",
- "facet-reflect",
-]
-
-[[package]]
-name = "facet-format"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c5cd7279699433cea9d921165ebc6fad0526574e6e8e6d1144b3bc5136e8c3a"
-dependencies = [
- "facet-core",
- "facet-dessert",
- "facet-path",
- "facet-reflect",
- "facet-solver",
-]
-
-[[package]]
 name = "facet-macro-parse"
 version = "0.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1036,38 +1013,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "facet-mutate"
-version = "0.1.0"
-dependencies = [
- "facet-core",
- "facet-postcard",
- "facet-pretty",
- "facet-reflect",
- "rand 0.10.1",
- "rustc-hash",
-]
-
-[[package]]
 name = "facet-path"
 version = "0.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5813c7eadfc0db841e12c36598b2671f52a17ffd70ccac5a4536489ed8344727"
 dependencies = [
  "facet-core",
-]
-
-[[package]]
-name = "facet-postcard"
-version = "0.46.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f714b1bab22177fd4c9ad0313cd03d13120c51b29df427aad15181dfea86a4d5"
-dependencies = [
- "facet-core",
- "facet-format",
- "facet-path",
- "facet-reflect",
- "facet-value",
- "tracing",
 ]
 
 [[package]]
@@ -1092,29 +1043,6 @@ dependencies = [
  "hashbrown 0.17.0",
  "regex",
  "smallvec 2.0.0-alpha.12",
-]
-
-[[package]]
-name = "facet-solver"
-version = "0.46.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73b5fef33b0a0b10f56b95971f33f5ceb3ef60332240663dcab4ba799f52d54e"
-dependencies = [
- "facet-core",
- "facet-reflect",
- "strsim",
-]
-
-[[package]]
-name = "facet-value"
-version = "0.46.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c61477bcef8cda3ba1082f25ad69569792214f9d430671afb32e9cdedbce6d7"
-dependencies = [
- "facet-core",
- "facet-format",
- "facet-reflect",
- "indexmap",
 ]
 
 [[package]]
@@ -1651,26 +1579,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
-name = "linkme"
-version = "0.3.36"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e83272d46373fb8decca684579ac3e7c8f3d71d4cc3aa693df8759e260ae41cf"
-dependencies = [
- "linkme-impl",
-]
-
-[[package]]
-name = "linkme-impl"
-version = "0.3.36"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32d59e20403c7d08fe62b4376edfe5c7fb2ef1e6b1465379686d0f21c8df444b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1689,21 +1597,138 @@ dependencies = [
 name = "lod"
 version = "0.1.0"
 dependencies = [
- "arbitrary",
- "brotli",
  "byteorder",
- "clap",
- "crc32fast",
  "facet",
- "facet-mutate",
  "facet-path",
  "facet-pretty",
  "facet-reflect",
- "flate2",
- "linkme",
  "lod_derive",
  "memchr",
  "paste",
+ "rand 0.10.1",
+]
+
+[[package]]
+name = "lod-fmt-archive"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "lod",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-asn1"
+version = "0.1.0"
+dependencies = [
+ "lod",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-audio"
+version = "0.1.0"
+dependencies = [
+ "lod",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-document"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "lod",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-executable"
+version = "0.1.0"
+dependencies = [
+ "lod",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-font"
+version = "0.1.0"
+dependencies = [
+ "brotli",
+ "lod",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-harness"
+version = "0.1.0"
+dependencies = [
+ "lod",
+ "lod-fmt-archive",
+ "lod-fmt-asn1",
+ "lod-fmt-audio",
+ "lod-fmt-font",
+ "lod-fmt-image",
+ "lod-fmt-network",
+ "lod-fmt-text",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-image"
+version = "0.1.0"
+dependencies = [
+ "brotli",
+ "crc32fast",
+ "facet",
+ "flate2",
+ "lod",
+ "lod-fmt-text",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-network"
+version = "0.1.0"
+dependencies = [
+ "lod",
+ "lod-fmt-asn1",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-text"
+version = "0.1.0"
+dependencies = [
+ "lod",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-fmt-video"
+version = "0.1.0"
+dependencies = [
+ "lod",
+ "lod_derive",
+]
+
+[[package]]
+name = "lod-formats"
+version = "0.1.0"
+dependencies = [
+ "lod",
+ "lod-fmt-archive",
+ "lod-fmt-asn1",
+ "lod-fmt-audio",
+ "lod-fmt-document",
+ "lod-fmt-executable",
+ "lod-fmt-font",
+ "lod-fmt-harness",
+ "lod-fmt-image",
+ "lod-fmt-network",
+ "lod-fmt-text",
+ "lod-fmt-video",
+ "lod_derive",
  "rand 0.10.1",
 ]
 
@@ -3265,6 +3290,7 @@ dependencies = [
  "libafl_bolts",
  "libc",
  "lod",
+ "lod-formats",
  "md5",
  "memchr",
  "mimalloc",

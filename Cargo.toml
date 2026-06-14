@@ -59,7 +59,8 @@ cranelift = { version = "0.131", features = [
 ] }
 libc = "0.2.158"
 
-lod = { path = "../lod-sketch" }
+lod = { path = "../lod-sketch/lod-core" }
+lod-formats = { path = "../lod-sketch/lod-formats" }
 
 # feat:concolic
 # Note: waiting for 0.3.1 upstream

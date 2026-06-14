@@ -397,7 +397,9 @@ impl ReportInfo {
                     missing_source: true,
                     lines: &[],
                 };
-                std::fs::write(output_path.join(&file.html_filename), t.render().unwrap()).unwrap();
+                if let Err(err) = std::fs::write(output_path.join(&file.html_filename), t.render().unwrap()) {
+                    eprintln!("Failed to write file: {:?} {:?}", err, file.html_filename);
+                }
                 continue;
             };
 

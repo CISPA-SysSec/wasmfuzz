@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use cranelift::codegen::ir::{self, InstBuilder, MemFlags};
 use cranelift::module::{DataDescription, DataId, Module};
 
@@ -5,7 +7,8 @@ use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
 
 use super::Location;
 use super::{
-    AssociatedCoverageArray, FuncIdx, InstrCtx, KVInstrumentationPass, feedback_lattice::Minimize,
+    AssociatedCoverageArray, Edge, FuncIdx, InstrCtx, KVInstrumentationPass,
+    feedback_lattice::Minimize,
 };
 
 #[derive(Hash, PartialEq, Eq, Clone, Copy)]
@@ -162,35 +165,104 @@ impl KVInstrumentationPass for InputSizePass {
                 res.try_into().unwrap_or(u16::MAX)
             }
         }
-
-        unsafe extern "C" fn compute_metric_custom(
-            _inp_ptr: u32,
-            _inp_size: u32,
-            vmctx: *mut VMContext,
-        ) -> u16 {
-            unsafe {
-                let vmctx = &mut *vmctx;
-                vmctx.input_size_custom.unwrap_or(u16::MAX)
-            }
-        }
     }
 }
 
 impl InputSizePass {
     fn get_cost_var(&self, ctx: &mut InstrCtx) -> DataId {
-        let key = ("input-size", self.metric);
-        if ctx.instance_meta::<_, Option<DataId>>(key).is_none() {
-            let val = ctx
-                .state
-                .module
-                .declare_anonymous_data(true, false)
-                .unwrap();
-            let mut data_desc = DataDescription::new();
-            data_desc.define_zeroinit(std::mem::size_of::<u16>());
-            ctx.state.module.define_data(val, &data_desc).unwrap();
-            *ctx.instance_meta::<_, Option<DataId>>(key).insert(val)
-        } else {
-            ctx.instance_meta::<_, Option<DataId>>(key).unwrap()
+        get_input_size_cost_var(ctx, ("input-size", self.metric))
+    }
+}
+
+/// Tracks the smallest custom input complexity metric that reaches each edge.
+pub(crate) struct EdgeInputSizeCustomPass {
+    pub coverage: AssociatedCoverageArray<Edge, Minimize<u16>>,
+}
+
+impl EdgeInputSizeCustomPass {
+    pub(crate) fn new<F: Fn(&Location) -> bool>(spec: &ModuleSpec, key_filter: F) -> Self {
+        Self {
+            coverage: AssociatedCoverageArray::new(
+                &Self::generate_keys(spec)
+                    .filter(|x| key_filter(&Location::from(*x)))
+                    .collect::<Vec<_>>(),
+            ),
         }
+    }
+}
+
+impl KVInstrumentationPass for EdgeInputSizeCustomPass {
+    type Key = Edge;
+    type Value = Minimize<u16>;
+    super::traits::impl_kv_instrumentation_pass!("edge-in-size");
+
+    fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
+        super::iter_edges(spec)
+    }
+
+    fn instrument_edge(&self, edge: Edge, mut ctx: InstrCtx) {
+        let data = get_input_size_cost_var(&mut ctx, "edge-input-size-custom");
+        let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
+        let cost_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
+        let cost = ctx
+            .bcx
+            .ins()
+            .load(ir::types::I16, MemFlags::trusted(), cost_ptr, 0);
+        self.coverage.instrument_coverage(&edge, cost, ctx, self);
+    }
+
+    fn instrument_trampoline(&self, mut ctx: InstrCtx) {
+        let data = get_input_size_cost_var(&mut ctx, "edge-input-size-custom");
+        let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
+        let cost_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
+        let zero = ctx.bcx.ins().iconst(ir::types::I16, 0);
+        ctx.bcx.ins().store(MemFlags::trusted(), zero, cost_ptr, 0);
+    }
+
+    fn instrument_fuzz_trampoline(
+        &self,
+        inp_ptr: ir::Value,
+        inp_size: ir::Value,
+        mut ctx: InstrCtx,
+    ) {
+        let data = get_input_size_cost_var(&mut ctx, "edge-input-size-custom");
+        let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
+        let cost_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
+
+        let [cost_val] = ctx.state.host_call(
+            ctx.bcx,
+            compute_metric_custom as unsafe extern "C" fn(_, _, _) -> u16,
+            &[inp_ptr, inp_size],
+        );
+        ctx.bcx
+            .ins()
+            .store(MemFlags::trusted(), cost_val, cost_ptr, 0);
+    }
+}
+
+fn get_input_size_cost_var(ctx: &mut InstrCtx, key: impl Hash + Copy) -> DataId {
+    if ctx.instance_meta::<_, Option<DataId>>(key).is_none() {
+        let val = ctx
+            .state
+            .module
+            .declare_anonymous_data(true, false)
+            .unwrap();
+        let mut data_desc = DataDescription::new();
+        data_desc.define_zeroinit(std::mem::size_of::<u16>());
+        ctx.state.module.define_data(val, &data_desc).unwrap();
+        *ctx.instance_meta::<_, Option<DataId>>(key).insert(val)
+    } else {
+        ctx.instance_meta::<_, Option<DataId>>(key).unwrap()
+    }
+}
+
+unsafe extern "C" fn compute_metric_custom(
+    _inp_ptr: u32,
+    _inp_size: u32,
+    vmctx: *mut VMContext,
+) -> u16 {
+    unsafe {
+        let vmctx = &mut *vmctx;
+        vmctx.input_size_custom.unwrap_or(u16::MAX)
     }
 }

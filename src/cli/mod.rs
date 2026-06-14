@@ -15,6 +15,7 @@ use crate::{
 };
 
 mod cmin;
+mod tmin;
 #[cfg(feature = "concolic")]
 mod concolic_explore;
 #[cfg(feature = "reports")]
@@ -109,11 +110,8 @@ pub(crate) enum Subcommand {
     Fuzz(crate::fuzzer::orc::CliOpts),
     /// Remove uninteresting inputs from corups.
     Cmin(cmin::CminOpts),
-    /// Minimize crashing input.
-    Tmin {
-        program: PathBuf,
-        input: PathBuf,
-    },
+    /// Minimize input with LOD mutations (preserve crash or edge coverage).
+    Tmin(tmin::TminOpts),
     /// Watch directory for new entries and report total coverage over time.
     MonitorCov(monitor_cov::MonitorCovOpts),
     #[cfg(feature = "concolic_bitwuzla")]
@@ -259,6 +257,7 @@ fn gather_inputs_paths(dir: &Option<PathBuf>, inputs_paths: &[String], sort: boo
 }
 
 pub(crate) fn main() {
+    lod_formats::force_link();
     let opts: Opts = Opts::parse();
 
     match opts.subcmd {
@@ -500,24 +499,9 @@ pub(crate) fn main() {
             let mod_spec = parse_program(&opts.program);
             cmin::run(mod_spec, opts);
         }
-        Subcommand::Tmin { program, input } => {
-            let mod_spec = parse_program(&PathBuf::from(&program));
-            let input = std::fs::read(input).unwrap();
-
-            {
-                let mut stats = Stats::default();
-                let mut sess = JitFuzzingSession::builder(mod_spec.clone())
-                    .feedback(FeedbackOptions::nothing())
-                    .build();
-                sess.initialize(&mut stats);
-                let res = sess.run(&input, &mut stats);
-                assert!(res.is_crash());
-            }
-
-            let opts = crate::fuzzer::orc::CliOpts::parse_from(vec!["wasmfuzz-fuzz", "dummy.wasm"]);
-            crate::fuzzer::fuzz(mod_spec, opts);
-
-            todo!()
+        Subcommand::Tmin(opts) => {
+            let mod_spec = parse_program(&opts.program);
+            tmin::run(mod_spec, opts);
         }
         #[cfg(feature = "concolic_bitwuzla")]
         Subcommand::CheckConcolic { program, input } => {
@@ -972,6 +956,7 @@ pub(crate) fn main() {
             } else {
                 vec![program_or_dir]
             };
+            let verbose = programs.len() == 1;
 
             let mut handles = Vec::new();
             for program in &programs {
@@ -988,12 +973,12 @@ pub(crate) fn main() {
                         })
                         .build();
                     sess.initialize(&mut stats);
-                    let engines = lod::guess_engines(|bytes: &[u8]| -> Vec<bool> {
+                    let engines = lod::guess_engines_verbose(|bytes: &[u8]| -> Vec<bool> {
                         sess.reset_pass_coverage();
                         let _ = sess.run_reusable_fresh(bytes, true, &mut stats);
                         let pass = sess.get_pass::<EdgeCoveragePass>();
                         pass.coverage().saved.iter().by_vals().collect()
-                    });
+                    }, verbose);
                     (filename, engines)
                 }));
             }

@@ -184,6 +184,7 @@ impl Accumulator {
     fn snapshot(&self, wall_elapsed: Duration) -> MetricsSnapshot {
         let inner = self.inner.lock().unwrap();
         MetricsSnapshot {
+            process_rss_bytes: current_process_rss_bytes(),
             wall_elapsed_ns: wall_elapsed.as_nanos().min(u64::MAX as u128) as u64,
             metrics_updates: inner.metrics_updates,
             reusable_stage_executions: inner.reusable_stage_executions,
@@ -302,11 +303,28 @@ impl StatsDelta {
     }
 }
 
+/// Current process RSS in bytes, sampled at snapshot time. Linux only
+/// (`/proc/self/statm` resident pages × page size).
+#[cfg(target_os = "linux")]
+fn current_process_rss_bytes() -> Option<u64> {
+    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let resident_pages = statm.split_whitespace().nth(1)?.parse::<u64>().ok()?;
+    let page_size = rustix::param::page_size() as u64;
+    Some(resident_pages.saturating_mul(page_size))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_process_rss_bytes() -> Option<u64> {
+    None
+}
+
 /// JSON payload written to `$WASMFUZZ_METRICS_JSON`. Flattens the
 /// accumulated [`Stats`] counters plus worker-lifecycle and last-seen state
 /// fields. Folded into per-snapshot `LogEvent.stats` by `monitor-cov`.
 #[derive(Debug, Serialize)]
 pub(crate) struct MetricsSnapshot {
+    /// Process RSS in bytes at snapshot time (`None` on non-Linux).
+    pub process_rss_bytes: Option<u64>,
     pub wall_elapsed_ns: u64,
     pub metrics_updates: usize,
     pub reusable_stage_executions: usize,

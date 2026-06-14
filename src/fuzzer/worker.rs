@@ -58,6 +58,16 @@ impl FindSource {
     }
 }
 
+/// True when every bit set in `target` is also set in `entries` (i.e. `entries`
+/// covers at least all of `target`'s edges). Both must share a length. Mirrors
+/// the word-wise domain iteration in `instrumentation::union_bitboxes`.
+fn covers_all(entries: &bitvec::boxed::BitBox, target: &bitvec::boxed::BitBox) -> bool {
+    !target
+        .domain()
+        .zip(entries.domain())
+        .any(|(t, e)| (t & !e) != 0)
+}
+
 /// Accumulates per-find coverage events between edge/func growth points. When
 /// a find adds new edges or funcs we flush the batch first, then print the
 /// growth event; when a find only advances cmpcov/edge-shortest-trace style
@@ -108,6 +118,17 @@ pub(crate) struct Worker {
 }
 
 impl Worker {
+    /// Returns an exit reason when a wall-clock or idle limit is hit.
+    fn poll_schedule(&self) -> Option<WorkerExit> {
+        if self.stop_requested || self.schedule.is_timeout() || self.schedule.is_setup_timeout() {
+            return Some(WorkerExit::Timeout);
+        }
+        if self.schedule.fuzzing() && self.schedule.is_idle_timeout() {
+            return Some(WorkerExit::IdleTimeout);
+        }
+        None
+    }
+
     pub(crate) fn new(
         mod_spec: Arc<ModuleSpec>,
         opts: FuzzOpts,
@@ -203,6 +224,10 @@ impl Worker {
                 let mut interesting_inputs = 0;
                 let orc_input_count = corpus.len();
                 for input in corpus {
+                    if worker.poll_schedule().is_some() {
+                        eprintln!("[WARN] timeout during fetch_corpus");
+                        break;
+                    }
                     if input.len() > worker.sess.swarm.input_alloc_size() {
                         discarded_input_size += 1;
                         continue;
@@ -225,6 +250,10 @@ impl Worker {
                     worker.corpus.count()
                 );
                 for _ in 0..10 {
+                    if worker.poll_schedule().is_some() {
+                        eprintln!("[WARN] timeout during fetch_corpus cmin");
+                        break;
+                    }
                     if !worker.inmemory_cmin(false) {
                         break;
                     }
@@ -235,9 +264,13 @@ impl Worker {
                     worker.corpus.count()
                 );
 
-                if let Some(engine) = &mut worker.lod_engine {
+                if let Some(mut engine) = worker.lod_engine.take() {
                     tracy_full::zone!("lod: feed_corpus");
-                    for idx in worker.corpus.ids() {
+                    let corpus_ids: Vec<_> = worker.corpus.ids().collect();
+                    for idx in corpus_ids {
+                        if worker.poll_schedule().is_some() {
+                            break;
+                        }
                         let testcase = worker.corpus.get(idx).unwrap().borrow();
                         let input = testcase.input().as_ref().unwrap().as_ref();
                         engine.feed(
@@ -248,6 +281,7 @@ impl Worker {
                             ),
                         );
                     }
+                    worker.lod_engine = Some(engine);
                 }
             }
         }
@@ -262,13 +296,18 @@ impl Worker {
 
         if let Some(engine) = &mut self.lod_engine {
             tracy_full::zone!("lod: get_entropy");
-            self.sess
-                .reusable_stage
-                .instance
-                .as_mut()
-                .unwrap()
-                .vmctx
-                .input_size_custom = engine.get_entropy(input).try_into().ok();
+            if matches!(
+                self.experiment,
+                Some(super::orc::Experiment::LodEntropyFeedback)
+            ) {
+                self.sess
+                    .reusable_stage
+                    .instance
+                    .as_mut()
+                    .unwrap()
+                    .vmctx
+                    .input_size_custom = engine.get_entropy(input).try_into().ok();
+            }
         }
 
         let mut was_interesting = false;
@@ -283,6 +322,13 @@ impl Worker {
             }
             was_interesting = res.novel_coverage;
         }
+        self.sess
+            .reusable_stage
+            .instance
+            .as_mut()
+            .unwrap()
+            .vmctx
+            .input_size_custom = None;
 
         // make sure we catch inputs that crash on fresh instances but not on used ones (TODO?)
         let res = self.sess.run_reusable_fresh(input, false, &mut self.stats);
@@ -536,13 +582,12 @@ impl Worker {
             if self.corpus.is_empty() {
                 return Ok(WorkerExit::InvalidSwarm);
             }
-            if self.schedule.is_timeout() {
-                panic!("timeout hit during corpus initialization");
-            }
-            self.schedule.notify_activity();
-            self.schedule.start();
-        } else if self.schedule.is_timeout() {
-            return Ok(WorkerExit::Timeout);
+        }
+
+        self.schedule.start();
+        self.schedule.notify_activity();
+        if let Some(exit) = self.poll_schedule() {
+            return Ok(exit);
         }
 
         println!("starting with {} corpus entries...", self.corpus.count());
@@ -624,14 +669,7 @@ impl Worker {
                         }
                         self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
 
-                        if let Some(instance) = self.sess.reusable_stage.instance.as_mut() {
-                            // TODO: also set input_size_custom during cmin?
-                            instance.vmctx.input_size_custom = engine.entropy().try_into().ok();
-                        }
                         let res = self.run_input(&lod_buf, FindSource::Lod)?;
-                        if let Some(instance) = self.sess.reusable_stage.instance.as_mut() {
-                            instance.vmctx.input_size_custom = None;
-                        }
                         match res {
                             InputVerdict::Interesting => {
                                 // Re-feed the winning bytes so the splice corpus sees the new LOD level.
@@ -846,12 +884,8 @@ impl Worker {
                 sticky_input = None;
             }
 
-            if self.schedule.is_timeout() || self.stop_requested {
-                return Ok(WorkerExit::Timeout);
-            }
-
-            if self.schedule.is_idle_timeout() {
-                return Ok(WorkerExit::IdleTimeout);
+            if let Some(exit) = self.poll_schedule() {
+                return Ok(exit);
             }
         }
     }
@@ -869,6 +903,10 @@ impl Worker {
                 .unwrap();
             dir.shuffle(&mut self.rand);
             for entry in dir {
+                if self.poll_schedule().is_some() {
+                    eprintln!("[WARN] timeout during initialize_corpus");
+                    break;
+                }
                 if self.opts.x.corpus_drop_pct as usize > self.rand.below(101.try_into().unwrap()) {
                     println!(
                         "{:?}: Dropped by chance ({}%)",
@@ -889,10 +927,6 @@ impl Worker {
                 }
                 // eprintln!("on_corpus: {:?}", entry.file_name());
                 CrashOrLibAFLError::convert(self.on_corpus(&input, true))?;
-                if self.schedule.is_timeout() {
-                    eprintln!("[WARN] timeout during initialize_corpus");
-                    break;
-                }
             }
         }
         if self.corpus.is_empty() {
@@ -980,10 +1014,82 @@ impl Worker {
         self.cov_batch.non_lod_finds = 0;
     }
 
+    fn shrink_find(&mut self, input: &[u8], shrink_exec_budget: u32) -> Option<Vec<u8>> {
+        let mut engine = self.lod_engine.take()?;
+        engine.set_input(input);
+
+        self.sess.reset_pass_coverage_keep_saved();
+        let _ = self.sess.run_reusable(input, true, &mut self.stats);
+        let target = self
+            .sess
+            .get_pass::<EdgeCoveragePass>()
+            .coverage
+            .entries
+            .clone();
+
+        let ignore_crashes = *self.opts.x.fuzz_through_crashes;
+        let mut best: Option<Vec<u8>> = None;
+        let mut execs = 0u32;
+        // Shrink candidates whose run reached novel edges. Their edges are
+        // already committed to the session's `saved` map by the time we see
+        // them, so we back each with a real corpus entry below instead of
+        // leaking the coverage on a discarded input.
+        let mut novel_finds: Vec<Vec<u8>> = Vec::new();
+        engine.shrink_pass(&mut |candidate, _entropy| {
+            if execs >= shrink_exec_budget {
+                return false;
+            }
+            if self.poll_schedule().is_some() {
+                return false;
+            }
+            execs += 1;
+            self.sess.reset_pass_coverage_keep_saved();
+            let res = self.sess.run_reusable(candidate, true, &mut self.stats);
+            if res.is_crash() && !ignore_crashes {
+                novel_finds.push(candidate.to_vec());
+                return false;
+            }
+            if res.novel_coverage {
+                novel_finds.push(candidate.to_vec());
+            }
+            let entries = &self.sess.get_pass::<EdgeCoveragePass>().coverage.entries;
+            if !covers_all(entries, &target) {
+                return false;
+            }
+            best = Some(candidate.to_vec());
+            true
+        });
+
+        self.lod_engine = Some(engine);
+
+        // Back every novel-coverage shrink candidate with a corpus entry so the
+        // `saved` edges they committed are reproduced by a real input. Skip the
+        // one that became `best` — the caller (`run_input`) adds it as the
+        // stored representative.
+        for inp in &novel_finds {
+            if best.as_deref() != Some(inp.as_slice()) {
+                let _ = self.add_to_corpus(inp, false);
+            }
+        }
+        best
+    }
+
     fn run_input(&mut self, input: &[u8], src: FindSource) -> Result<InputVerdict, libafl::Error> {
         tracy_full::zone!("Worker::run_input");
         assert!(input.len() <= self.sess.swarm.input_alloc_size());
+        if let Some(instance) = self.sess.reusable_stage.instance.as_mut()
+            && matches!(
+                self.experiment,
+                Some(super::orc::Experiment::LodEntropyFeedback)
+            )
+            && let Some(engine) = &self.lod_engine
+        {
+            instance.vmctx.input_size_custom = engine.get_entropy(input).try_into().ok();
+        }
         let res = self.sess.run(input, &mut self.stats);
+        if let Some(instance) = self.sess.reusable_stage.instance.as_mut() {
+            instance.vmctx.input_size_custom = None;
+        }
         let ignore_crashes = *self.opts.x.fuzz_through_crashes;
         if res.is_crash() && !ignore_crashes {
             self.save_input(input);
@@ -1002,10 +1108,28 @@ impl Worker {
         }
         if res.novel_coverage {
             self.note_cov_find(&res, src);
+            // `LodShrink*` family: minimize the find structurally before it
+            // enters the corpus, keeping the smaller representative if one is
+            // found. Per-variant knobs (exec budget, size gate, keep-original)
+            // come from `Experiment::shrink_find_config`.
+            let shrink_cfg = self.experiment.and_then(|e| e.shrink_find_config());
+            let minimized = shrink_cfg
+                .filter(|c| input.len() >= c.min_input_len)
+                .and_then(|c| self.shrink_find(input, c.exec_budget));
+            if let Some(min) = &minimized {
+                self.stats.lod_shrink_finds += 1;
+                self.stats.lod_shrink_bytes_saved += input.len().saturating_sub(min.len());
+            }
+            let stored: &[u8] = minimized.as_deref().unwrap_or(input);
             // Add the input to the main corpus
-            self.add_to_corpus(input, false)?;
+            self.add_to_corpus(stored, false)?;
+            // `shrink-keep-both`: also retain the original full-structure find so
+            // splice / list-grow mutations still have the richer scaffolding.
+            if minimized.is_some() && shrink_cfg.is_some_and(|c| c.keep_original) {
+                self.add_to_corpus(input, false)?;
+            }
             self.bus.send(Message::Testcase {
-                input: Arc::new(input.to_vec()),
+                input: Arc::new(stored.to_vec()),
                 sender: self.idx,
             });
             self.stats.bus_tx += 1;
@@ -1035,6 +1159,10 @@ impl Worker {
         let mut cov_acc = InstrumentationSnapshot::empty_from(&self.sess.passes);
 
         for idx in corpus_idxs {
+            if self.poll_schedule().is_some() {
+                *self.corpus.current_mut() = None;
+                return false;
+            }
             let drop_by_chance = is_periodic
                 && self.opts.x.corpus_cmin_drop_pct
                     > self.rand.below(100.try_into().unwrap()) as u64;
@@ -1066,6 +1194,10 @@ impl Worker {
             self.sess.initialize(&mut self.stats);
 
             for idx in self.corpus.ids() {
+                if self.poll_schedule().is_some() {
+                    *self.corpus.current_mut() = None;
+                    return false;
+                }
                 let testcase = self.corpus.get(idx).unwrap().borrow();
                 let input = testcase.input().as_ref().unwrap().as_ref();
                 let _ = self.sess.run_reusable_fresh(input, false, &mut self.stats);
@@ -1091,11 +1223,17 @@ impl Worker {
             let _ = CrashOrLibAFLError::convert(self.on_corpus(b"YELLOW SUBMARINE", false));
         }
 
-        if let Some(lod) = &mut self.lod_engine {
+        if let Some(mut lod) = self.lod_engine.take() {
             tracy_full::zone!("lod: cmin");
             if lod.count_corpus() > self.corpus.count() * 2 {
                 lod.reset_corpus();
-                for idx in self.corpus.ids() {
+                let corpus_ids: Vec<_> = self.corpus.ids().collect();
+                for idx in corpus_ids {
+                    if self.poll_schedule().is_some() {
+                        self.lod_engine = Some(lod);
+                        *self.corpus.current_mut() = None;
+                        return false;
+                    }
                     let testcase = self.corpus.get(idx).unwrap().borrow();
                     let input = testcase.input().as_ref().unwrap().as_ref();
                     lod.feed(
@@ -1107,6 +1245,7 @@ impl Worker {
                     );
                 }
             }
+            self.lod_engine = Some(lod);
         }
 
         !to_remove.is_empty()

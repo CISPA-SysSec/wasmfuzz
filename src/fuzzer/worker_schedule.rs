@@ -31,7 +31,13 @@ impl Throttle {
 }
 
 pub(crate) struct WorkerSchedule {
-    pub(crate) start: Instant,
+    /// Wall clock when this schedule was created (worker spawn).
+    epoch: Instant,
+    /// Set by [`Self::start`] when the main fuzz loop begins; idle timeout
+    /// only applies after this point.
+    fuzz_start: Option<Instant>,
+    /// Fuzz-phase deadline (`fuzz_start` + `timeout`), set in [`Self::start`].
+    deadline: Option<Instant>,
     pub(crate) steps: u64,
 
     pub(crate) timeout: Option<Duration>,
@@ -53,7 +59,9 @@ impl WorkerSchedule {
         let now = Instant::now();
         Self {
             steps: 0,
-            start: now,
+            epoch: now,
+            fuzz_start: None,
+            deadline: None,
             last_cmin: now,
             last_print: now,
             last_poll: now,
@@ -67,18 +75,42 @@ impl WorkerSchedule {
         }
     }
 
+    pub(crate) fn fuzzing(&self) -> bool {
+        self.fuzz_start.is_some()
+    }
+
+    /// Begin the fuzz-phase timer and idle-activity baseline. Idempotent.
     pub(crate) fn start(&mut self) {
-        self.start = Instant::now();
+        if self.fuzz_start.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        self.fuzz_start = Some(now);
+        self.last_activity = now;
+        if let Some(timeout) = self.timeout {
+            self.deadline = Some(now + timeout);
+        }
     }
 
     pub(crate) fn is_timeout(&self) -> bool {
-        self.timeout
-            .map(|timeout| self.start.elapsed() >= timeout)
-            .unwrap_or(false)
+        self.timed_out()
             || self
                 .timeout_steps
                 .map(|timeout| self.steps >= timeout)
                 .unwrap_or(false)
+    }
+
+    pub(crate) fn timed_out(&self) -> bool {
+        self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    /// Caps corpus load / setup before [`Self::start`] using the same duration
+    /// as the fuzz-phase timeout (measured from `epoch`).
+    pub(crate) fn is_setup_timeout(&self) -> bool {
+        !self.fuzzing()
+            && self
+                .timeout
+                .is_some_and(|timeout| self.epoch.elapsed() >= timeout)
     }
 
     pub(crate) fn notify_activity(&mut self) {
