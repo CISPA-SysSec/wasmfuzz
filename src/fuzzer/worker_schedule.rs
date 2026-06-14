@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use crate::fuzzer::WorkerExit;
+
 use super::FuzzOpts;
 
 struct Throttle {
@@ -101,7 +103,8 @@ impl WorkerSchedule {
     }
 
     pub(crate) fn timed_out(&self) -> bool {
-        self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
+        self.deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
     /// Caps corpus load / setup before [`Self::start`] using the same duration
@@ -146,5 +149,15 @@ impl WorkerSchedule {
 
     pub(crate) fn step(&mut self) {
         self.steps += 1;
+    }
+
+    pub(crate) fn poll(&self) -> Option<WorkerExit> {
+        if self.is_timeout() || self.is_setup_timeout() {
+            return Some(WorkerExit::Timeout);
+        }
+        if self.fuzzing() && self.is_idle_timeout() {
+            return Some(WorkerExit::IdleTimeout);
+        }
+        None
     }
 }

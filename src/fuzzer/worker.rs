@@ -120,6 +120,9 @@ pub(crate) struct Worker {
 impl Worker {
     /// Returns an exit reason when a wall-clock or idle limit is hit.
     fn poll_schedule(&self) -> Option<WorkerExit> {
+        if self.stop_requested {
+            return Some(WorkerExit::Timeout);
+        }
         if self.stop_requested || self.schedule.is_timeout() || self.schedule.is_setup_timeout() {
             return Some(WorkerExit::Timeout);
         }
@@ -149,8 +152,8 @@ impl Worker {
             Some(ref handle) => {
                 let config = handle.suggest();
                 schedule.timeout = Some(config.timeout);
-                lod_engine = config.lod.as_deref().map(lod::make_engine);
-                if let Some(engine) = lod_engine.as_mut() {
+                lod_engine = config.lod.as_deref().map(lod_formats::make_engine);
+                if let Some(engine) = &mut lod_engine {
                     engine.apply_config(&super::orc::Experiment::lod_config_for(experiment));
                 }
                 JitFuzzingSession::builder(mod_spec.clone())
@@ -165,8 +168,8 @@ impl Worker {
                     .build()
             }
             None => {
-                lod_engine = opts.g.lod.as_deref().map(lod::make_engine);
-                if let Some(engine) = lod_engine.as_mut() {
+                lod_engine = opts.g.lod.as_deref().map(lod_formats::make_engine);
+                if let Some(engine) = &mut lod_engine {
                     engine.apply_config(&super::orc::Experiment::lod_config_for(experiment));
                 }
                 JitFuzzingSession::builder(mod_spec.clone())
@@ -264,11 +267,11 @@ impl Worker {
                     worker.corpus.count()
                 );
 
-                if let Some(mut engine) = worker.lod_engine.take() {
+                if let Some(engine) = &mut worker.lod_engine {
                     tracy_full::zone!("lod: feed_corpus");
                     let corpus_ids: Vec<_> = worker.corpus.ids().collect();
                     for idx in corpus_ids {
-                        if worker.poll_schedule().is_some() {
+                        if worker.schedule.poll().is_some() {
                             break;
                         }
                         let testcase = worker.corpus.get(idx).unwrap().borrow();
@@ -281,7 +284,6 @@ impl Worker {
                             ),
                         );
                     }
-                    worker.lod_engine = Some(engine);
                 }
             }
         }
@@ -617,9 +619,10 @@ impl Worker {
         loop {
             tracy_full::zone!("Worker loop");
 
-            if let Some(mut engine) = self.lod_engine.take() {
+            if self.lod_engine.is_some() {
                 tracy_full::zone!("lod: fuzz loop");
                 let mut lod_buf = Vec::new();
+                lod_buf.clear();
                 for _ in 0..A_FEW_EXECS / 4 {
                     let corp_count = self.corpus.count();
                     let mut cmplog_snapshot: Option<super::i2s_patches::CmplogStore> = None;
@@ -638,13 +641,14 @@ impl Worker {
 
                         let input = testcase.load_input(&self.corpus)?;
                         let bytes = input.as_ref().to_vec();
-                        engine.set_input(&bytes);
+                        self.lod_engine.as_mut().unwrap().set_input(&bytes);
                     }
                     let cmplog_ref: Option<&dyn lod::CmplogSource> = cmplog_snapshot
                         .as_ref()
                         .map(|s| s as &dyn lod::CmplogSource);
 
                     for _ in 0..4 {
+                        let engine = self.lod_engine.as_mut().unwrap();
                         let start = Instant::now();
                         if matches!(
                             self.experiment,
@@ -670,6 +674,7 @@ impl Worker {
                         self.stats.wall_mutate_ns += start.elapsed().as_nanos() as u64;
 
                         let res = self.run_input(&lod_buf, FindSource::Lod)?;
+                        let engine = self.lod_engine.as_mut().unwrap();
                         match res {
                             InputVerdict::Interesting => {
                                 // Re-feed the winning bytes so the splice corpus sees the new LOD level.
@@ -693,7 +698,6 @@ impl Worker {
                             InputVerdict::NotInteresting => false,
                             InputVerdict::Crashed if ignore_crashes => unreachable!(),
                             InputVerdict::Crashed => {
-                                self.lod_engine = Some(engine);
                                 return Ok(WorkerExit::CrashFound);
                             }
                         };
@@ -707,7 +711,6 @@ impl Worker {
                         }
                     }
                 }
-                self.lod_engine = Some(engine);
             }
 
             let mut interesting = false;
@@ -1015,7 +1018,9 @@ impl Worker {
     }
 
     fn shrink_find(&mut self, input: &[u8], shrink_exec_budget: u32) -> Option<Vec<u8>> {
-        let mut engine = self.lod_engine.take()?;
+        let Some(engine) = &mut self.lod_engine else {
+            return None;
+        };
         engine.set_input(input);
 
         self.sess.reset_pass_coverage_keep_saved();
@@ -1039,7 +1044,7 @@ impl Worker {
             if execs >= shrink_exec_budget {
                 return false;
             }
-            if self.poll_schedule().is_some() {
+            if self.schedule.poll().is_some() {
                 return false;
             }
             execs += 1;
@@ -1059,8 +1064,6 @@ impl Worker {
             best = Some(candidate.to_vec());
             true
         });
-
-        self.lod_engine = Some(engine);
 
         // Back every novel-coverage shrink candidate with a corpus entry so the
         // `saved` edges they committed are reproduced by a real input. Skip the
@@ -1223,14 +1226,13 @@ impl Worker {
             let _ = CrashOrLibAFLError::convert(self.on_corpus(b"YELLOW SUBMARINE", false));
         }
 
-        if let Some(mut lod) = self.lod_engine.take() {
+        if let Some(lod) = &mut self.lod_engine {
             tracy_full::zone!("lod: cmin");
             if lod.count_corpus() > self.corpus.count() * 2 {
                 lod.reset_corpus();
                 let corpus_ids: Vec<_> = self.corpus.ids().collect();
                 for idx in corpus_ids {
-                    if self.poll_schedule().is_some() {
-                        self.lod_engine = Some(lod);
+                    if self.schedule.poll().is_some() {
                         *self.corpus.current_mut() = None;
                         return false;
                     }
@@ -1245,7 +1247,6 @@ impl Worker {
                     );
                 }
             }
-            self.lod_engine = Some(lod);
         }
 
         !to_remove.is_empty()

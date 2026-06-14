@@ -113,7 +113,7 @@ pub(crate) fn run(mod_spec: Arc<ModuleSpec>, opts: TminOpts) {
         .build();
     sess.initialize(&mut stats);
 
-    let mut engine = lod::make_engine(&grammar);
+    let mut engine = lod_formats::make_engine(&grammar);
     engine.apply_config(&lod::EngineConfig {
         entropy_mode: lod::EntropyMode::LowEntropy,
         ..lod::EngineConfig::default()

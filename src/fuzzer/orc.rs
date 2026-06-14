@@ -932,7 +932,7 @@ impl Orchestrator {
         let init_funcs = funcs_pass.coverage.iter_covered_keys().collect();
         let mut lod_options = if opts.experiment.is_some_and(|x| x.is_lod()) {
             assert!(opts.g.lod.is_none());
-            let results = lod::guess_engines(|bytes: &[u8]| -> Vec<bool> {
+            let results = lod_formats::guess_engines(|bytes: &[u8]| -> Vec<bool> {
                 use crate::instrumentation::CodeCovInstrumentationPass;
                 codecov_sess.reset_pass_coverage();
                 let _ = codecov_sess.run_reusable_fresh(bytes, true, &mut Stats::default());
@@ -961,7 +961,7 @@ impl Orchestrator {
         if matches!(opts.experiment, Some(Experiment::LodDummyOnly)) {
             let mut corpus = corpus.write().unwrap();
             for option in lod_options.drain(..) {
-                if let Some(dummy_bytes) = lod::get_dummy_bytes(option) {
+                if let Some(dummy_bytes) = lod_formats::get_dummy_bytes(option) {
                     let _ = corpus.insert(&dummy_bytes, Instant::now());
                 }
             }

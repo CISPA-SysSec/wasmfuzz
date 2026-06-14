@@ -15,7 +15,6 @@ use crate::{
 };
 
 mod cmin;
-mod tmin;
 #[cfg(feature = "concolic")]
 mod concolic_explore;
 #[cfg(feature = "reports")]
@@ -25,6 +24,7 @@ mod doctor;
 pub(crate) mod lcov;
 mod misc_eval;
 mod monitor_cov;
+mod tmin;
 
 #[derive(Parser)]
 pub(crate) struct Opts {
@@ -257,7 +257,6 @@ fn gather_inputs_paths(dir: &Option<PathBuf>, inputs_paths: &[String], sort: boo
 }
 
 pub(crate) fn main() {
-    lod_formats::force_link();
     let opts: Opts = Opts::parse();
 
     match opts.subcmd {
@@ -903,7 +902,7 @@ pub(crate) fn main() {
                 .feedback(FeedbackOptions::nothing())
                 .build();
             sess.initialize(&mut stats);
-            let mut lod_engine = lod.as_deref().map(lod::make_engine);
+            let mut lod_engine = lod.as_deref().map(lod_formats::make_engine);
 
             let mut results = Vec::new();
 
@@ -973,12 +972,15 @@ pub(crate) fn main() {
                         })
                         .build();
                     sess.initialize(&mut stats);
-                    let engines = lod::guess_engines_verbose(|bytes: &[u8]| -> Vec<bool> {
-                        sess.reset_pass_coverage();
-                        let _ = sess.run_reusable_fresh(bytes, true, &mut stats);
-                        let pass = sess.get_pass::<EdgeCoveragePass>();
-                        pass.coverage().saved.iter().by_vals().collect()
-                    }, verbose);
+                    let engines = lod_formats::guess_engines_verbose(
+                        |bytes: &[u8]| -> Vec<bool> {
+                            sess.reset_pass_coverage();
+                            let _ = sess.run_reusable_fresh(bytes, true, &mut stats);
+                            let pass = sess.get_pass::<EdgeCoveragePass>();
+                            pass.coverage().saved.iter().by_vals().collect()
+                        },
+                        verbose,
+                    );
                     (filename, engines)
                 }));
             }
@@ -1053,7 +1055,7 @@ pub(crate) fn main() {
             let mod_filename = mod_spec.filename.clone();
             let input_paths = gather_inputs_paths(&Some(corpus), &[], true);
 
-            let engine = lod::make_engine(&grammar);
+            let engine = lod_formats::make_engine(&grammar);
 
             // Topologically order root variants from lowest to highest using the
             // grammar's `lower_graph_edges` (each edge is `(higher, lower)`).
@@ -1129,7 +1131,7 @@ pub(crate) fn main() {
             // ensures the highest LOD level always has at least the skeleton's
             // coverage even when no real corpus input lands there.
             let mut total_input_count = input_paths.len();
-            if let Some((dummy_variant, dummy_bytes)) = lod::get_dummy(&grammar) {
+            if let Some((dummy_variant, dummy_bytes)) = lod_formats::get_dummy(&grammar) {
                 if let Some(&idx) = variant_index.get(dummy_variant) {
                     buckets[idx].push(dummy_bytes);
                     total_input_count += 1;
@@ -1229,7 +1231,7 @@ pub(crate) fn main() {
                 .collect();
             let mut input_paths = gather_inputs_paths(&Some(corpus), &[], true);
             input_paths.push(PathBuf::from("$dummy"));
-            let mut engine = lod::make_engine(&grammar);
+            let mut engine = lod_formats::make_engine(&grammar);
             engine.apply_config(&lod::EngineConfig {
                 entropy_mode: lod::EntropyMode::LowEntropy,
                 ..lod::EngineConfig::default()
@@ -1276,7 +1278,7 @@ pub(crate) fn main() {
                 let bytes;
                 let input_entropy;
                 if path.to_string_lossy() == "$dummy" {
-                    bytes = lod::get_dummy(&grammar).unwrap().1.clone();
+                    bytes = lod_formats::get_dummy(&grammar).unwrap().1.clone();
                     input_entropy = 0;
                 } else {
                     bytes = std::fs::read(path).unwrap();
@@ -1381,7 +1383,7 @@ pub(crate) fn main() {
                 return;
             }
 
-            rows.sort_by(|a, b| a.least_entropy.cmp(&b.least_entropy));
+            rows.sort_by_key(|a| a.least_entropy);
             let max_entropy = rows.iter().map(|r| r.least_entropy).max().unwrap_or(0);
             let truncate_from_start = |s: &str, max_chars: usize| -> String {
                 if max_chars <= 3 {
