@@ -1,0 +1,62 @@
+diff --git a/symphonia-codec-vorbis/src/residue.rs b/symphonia-codec-vorbis/src/residue.rs
+index e3bc9f3..fe90ae0 100644
+--- a/symphonia-codec-vorbis/src/residue.rs
++++ b/symphonia-codec-vorbis/src/residue.rs
+@@ -81,8 +81,8 @@ impl Residue {
+         let residue_classifications = bs.read_bits_leq32(6)? as u8 + 1;
+         let residue_classbook = bs.read_bits_leq32(8)? as u8;
+ 
+-        if residue_classbook >= max_codebook {
+-            return decode_error("vorbis: invalid codebook for residue classbook");
++        if residue_classbook == 0 || residue_classbook >= max_codebook {
++            return decode_error("vorbis: invalid codebook for residue classification");
+         }
+ 
+         if residue_end < residue_begin {
+@@ -240,6 +240,9 @@ impl Residue {
+ 
+         // Number of partitions per classword.
+         let parts_per_classword = class_book.dimensions();
++        if parts_per_classword == 0 {
++            return decode_error("vorbis: invalid classification codebook dimensions");
++        }
+ 
+         // Number of partitions to read.
+         let parts_to_read = residue_len / self.setup.residue_partition_size as usize;
+@@ -330,6 +333,9 @@ impl Residue {
+ 
+         // Number of partitions per classword.
+         let parts_per_classword = class_book.dimensions();
++        if parts_per_classword == 0 {
++            return decode_error("vorbis: invalid classification codebook dimensions");
++        }
+ 
+         // Number of partitions to read.
+         let parts_to_read = residue_len / self.setup.residue_partition_size as usize;
+@@ -481,7 +487,15 @@ fn read_residue_partition_format0(
+     codebook: &VorbisCodebook,
+     out: &mut [f32],
+ ) -> Result<()> {
+-    let step = out.len() / codebook.dimensions() as usize;
++    let dim = codebook.dimensions() as usize;
++    if dim == 0 {
++        return decode_error("vorbis: invalid zero-dimension codebook");
++    }
++
++    let step = out.len() / dim;
++    if step == 0 {
++        return decode_error("vorbis: invalid residue partition size");
++    }
+ 
+     for i in 0..step {
+         let vq = codebook.read_vq(bs)?;
+@@ -501,6 +515,9 @@ fn read_residue_partition_format1(
+     out: &mut [f32],
+ ) -> Result<()> {
+     let dim = codebook.dimensions() as usize;
++    if dim == 0 {
++        return decode_error("vorbis: invalid zero-dimension codebook");
++    }
+ 
+     // For small dimensions it is too expensive to use iterator loops. Special case small sizes
+     // to improve performance.

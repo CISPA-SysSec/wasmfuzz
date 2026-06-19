@@ -1,0 +1,38 @@
+diff --git a/symphonia-format-mkv/src/ebml.rs b/symphonia-format-mkv/src/ebml.rs
+index 9cad4ec..ece208c 100644
+--- a/symphonia-format-mkv/src/ebml.rs
++++ b/symphonia-format-mkv/src/ebml.rs
+@@ -60,6 +60,17 @@ impl From<std::io::Error> for EbmlError {
+ 
+ pub type Result<T> = std::result::Result<T, EbmlError>;
+ 
++/// Hard cap on EBML string/binary element payload size (hostile `data_size` on wasm32).
++const MAX_EBML_ELEMENT_BYTES: usize = 32 * 1024 * 1024;
++
++fn check_ebml_element_size(size: usize) -> Result<()> {
++    if size > MAX_EBML_ELEMENT_BYTES {
++        Err(EbmlError::ElementError("mkv: element data size exceeds limit"))
++    } else {
++        Ok(())
++    }
++}
++
+ /// A super-trait of `ReadBytes` and `SeekBuffered` that all readers of `EbmlIterator` must
+ /// implement.
+ pub(crate) trait ReadEbml: ReadBytes + SeekBuffered {}
+@@ -804,6 +815,7 @@ impl<R: ReadEbml, S: EbmlSchema> EbmlIterator<R, S> {
+                             Ok(None)
+                         }
+                         _ => {
++                            check_ebml_element_size(size)?;
+                             let data = self.reader.read_boxed_slice_exact(size)?;
+                             self.discard_current();
+                             let bytes = data.split(|b| *b == 0).next().unwrap_or(&data);
+@@ -842,6 +854,7 @@ impl<R: ReadEbml, S: EbmlSchema> EbmlIterator<R, S> {
+                 EbmlDataType::Master => Err(EbmlError::ExpectedNonMasterElement),
+                 EbmlDataType::Binary => {
+                     let size = element.data_size.ok_or(EbmlError::UnknownElementDataSize)? as usize;
++                    check_ebml_element_size(size)?;
+                     let data = self.reader.read_boxed_slice_exact(size)?;
+                     self.discard_current();
+                     Ok(data)

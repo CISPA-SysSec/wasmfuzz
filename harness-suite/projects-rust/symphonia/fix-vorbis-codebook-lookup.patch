@@ -1,0 +1,124 @@
+diff --git a/symphonia-codec-vorbis/src/codebook.rs b/symphonia-codec-vorbis/src/codebook.rs
+index 6a47818..82da777 100644
+--- a/symphonia-codec-vorbis/src/codebook.rs
++++ b/symphonia-codec-vorbis/src/codebook.rs
+@@ -31,20 +31,27 @@ fn float32_unpack(x: u32) -> f32 {
+ /// The return value for this function is defined to be ’the greatest integer value for which the
+ /// return value to the power of `dimensions` is less than or equal to `entries`.
+ #[inline(always)]
+-fn lookup1_values(entries: u32, dimensions: u16) -> u32 {
+-    // Prevent division by 0.
++fn lookup1_values(entries: u32, dimensions: u16) -> Result<u32> {
+     if dimensions == 0 {
+-        return 0;
++        return decode_error("vorbis: invalid codebook dimensions for lookup");
+     }
+ 
+-    // (value ^ dimensions) <= entries
+-    // [(value ^ dimensions) ^ (1 / dimensions)] = lower[entries ^ (1 / dimensions)]
+-    // value = lower[entries ^ (1 / dimensions)]
+-    let value = (entries as f32).powf(1.0f32 / f32::from(dimensions)).floor() as u32;
+-
+-    assert!(value.pow(u32::from(dimensions)) <= entries);
+-
+-    value
++    let d = u32::from(dimensions);
++    let mut x = 1u32;
++    loop {
++        let xpow = match x.checked_pow(d) {
++            Some(p) => p,
++            None => return decode_error("vorbis: codebook lookup size overflow"),
++        };
++        if xpow > entries {
++            break;
++        }
++        x = x.saturating_add(1);
++        if x == u32::MAX {
++            return decode_error("vorbis: invalid codebook lookup size");
++        }
++    }
++    Ok(x - 1)
+ }
+ 
+ /// As defined in section 3.2.1 of the Vorbis I specification.
+@@ -132,8 +139,9 @@ fn synthesize_codewords(code_lens: &[u8]) -> Result<Vec<u32>> {
+     let mut next_codeword = [0u32; 33];
+ 
+     for &len in code_lens.iter() {
+-        // This should always be true.
+-        debug_assert!(len <= 32);
++        if len > 32 {
++            return decode_error("vorbis: invalid codebook codeword length");
++        }
+ 
+         // Zero length codewords are invalid and ignored.
+         if len == 0 {
+@@ -336,8 +344,11 @@ impl VorbisCodebook {
+ 
+                 // Lookup type is either 1 or 2 as per outer match.
+                 let lookup_values = match lookup_type {
+-                    1 => lookup1_values(codebook_entries, codebook_dimensions),
+-                    2 => codebook_entries * u32::from(codebook_dimensions),
++                    1 => lookup1_values(codebook_entries, codebook_dimensions)?,
++                    2 => match codebook_entries.checked_mul(u32::from(codebook_dimensions)) {
++                        Some(v) => v,
++                        None => return decode_error("vorbis: codebook lookup size overflow"),
++                    },
+                     _ => unreachable!(),
+                 };
+ 
+@@ -376,6 +387,10 @@ impl VorbisCodebook {
+         // Generate a canonical list of codewords given the set of codeword lengths.
+         let code_words = synthesize_codewords(&code_lens)?;
+ 
++        if code_words.is_empty() {
++            return decode_error("vorbis: codebook has no codewords");
++        }
++
+         // Finally, generate the codebook with a reverse (LSb) bit order.
+         let mut builder = CodebookBuilder::new(BitOrder::Reverse);
+ 
+@@ -384,6 +399,10 @@ impl VorbisCodebook {
+ 
+         let codebook = builder.make::<Entry32x32>(&code_words, &code_lens, &code_values)?;
+ 
++        if codebook.is_empty() {
++            return decode_error("vorbis: empty codebook");
++        }
++
+         Ok(VorbisCodebook { codebook, dimensions: codebook_dimensions, vq_vec })
+     }
+ 
+@@ -454,18 +473,20 @@ mod tests {
+ 
+     #[test]
+     fn verify_lookup1_values() {
+-        assert_eq!(lookup1_values(0, 0), naive_lookup1_values(0, 1));
+-        assert_eq!(lookup1_values(1, 0), naive_lookup1_values(1, 0));
+-        assert_eq!(lookup1_values(0, 1), naive_lookup1_values(0, 1));
+-        assert_eq!(lookup1_values(1, 1), naive_lookup1_values(1, 1));
+-        assert_eq!(lookup1_values(361, 2), naive_lookup1_values(361, 2));
+-        assert_eq!(lookup1_values(361, 2), naive_lookup1_values(361, 2));
+-        assert_eq!(lookup1_values(560, 3), naive_lookup1_values(560, 3));
+-        assert_eq!(lookup1_values(3, 950), naive_lookup1_values(3, 950));
+-        assert_eq!(lookup1_values(0xffff, 0xff), naive_lookup1_values(0xffff, 0xff));
+-        assert_eq!(lookup1_values(0, u16::MAX), naive_lookup1_values(0, u16::MAX));
+-        assert_eq!(lookup1_values(1, u16::MAX), naive_lookup1_values(1, u16::MAX));
+-        assert_eq!(lookup1_values(0xff_ffff, u16::MAX), naive_lookup1_values(0xff_ffff, u16::MAX));
++        assert!(lookup1_values(0, 0).is_err());
++        assert!(lookup1_values(1, 0).is_err());
++        assert_eq!(lookup1_values(0, 1).unwrap(), naive_lookup1_values(0, 1));
++        assert_eq!(lookup1_values(1, 1).unwrap(), naive_lookup1_values(1, 1));
++        assert_eq!(lookup1_values(361, 2).unwrap(), naive_lookup1_values(361, 2));
++        assert_eq!(lookup1_values(560, 3).unwrap(), naive_lookup1_values(560, 3));
++        assert_eq!(lookup1_values(3, 950).unwrap(), naive_lookup1_values(3, 950));
++        assert_eq!(lookup1_values(0xffff, 0xff).unwrap(), naive_lookup1_values(0xffff, 0xff));
++        assert_eq!(lookup1_values(0, u16::MAX).unwrap(), naive_lookup1_values(0, u16::MAX));
++        assert_eq!(lookup1_values(1, u16::MAX).unwrap(), naive_lookup1_values(1, u16::MAX));
++        assert_eq!(
++            lookup1_values(0xff_ffff, u16::MAX).unwrap(),
++            naive_lookup1_values(0xff_ffff, u16::MAX)
++        );
+     }
+ 
+     #[test]

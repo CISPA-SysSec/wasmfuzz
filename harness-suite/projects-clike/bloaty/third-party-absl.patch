@@ -1,0 +1,47 @@
+diff --git a/absl/base/internal/poison.cc b/absl/base/internal/poison.cc
+index b33d4c2d..a337cc1f 100644
+--- a/absl/base/internal/poison.cc
++++ b/absl/base/internal/poison.cc
+@@ -56,6 +56,9 @@ size_t GetPageSize() {
+ }  // namespace
+ 
+ void* InitializePoisonedPointerInternal() {
++#if defined(__wasm__)
++  return (void*) 0xdeadbeef;
++#else
+   const size_t block_size = GetPageSize();
+ #if defined(ABSL_HAVE_ADDRESS_SANITIZER)
+   void* data = malloc(block_size);
+@@ -77,6 +80,7 @@ void* InitializePoisonedPointerInternal() {
+   // Return the middle of the block so that dereferences before and after the
+   // pointer will both crash.
+   return static_cast<char*>(data) + block_size / 2;
++#endif
+ }
+ 
+ }  // namespace base_internal
+diff --git a/absl/debugging/internal/examine_stack.cc b/absl/debugging/internal/examine_stack.cc
+index 3dd6ba1a..eb27d4be 100644
+--- a/absl/debugging/internal/examine_stack.cc
++++ b/absl/debugging/internal/examine_stack.cc
+@@ -33,6 +33,15 @@
+ #include <sys/ucontext.h>
+ #endif
+ 
++#if defined(__wasi__)
++namespace absl {
++ABSL_NAMESPACE_BEGIN
++namespace debugging_internal {
++}  // namespace debugging_internal
++ABSL_NAMESPACE_END
++}  // namespace absl
++#else
++
+ #include <csignal>
+ #include <cstdio>
+ 
+@@ -318,3 +327,4 @@ void DumpStackTrace(int min_dropped_frames, int max_num_frames,
+ }  // namespace debugging_internal
+ ABSL_NAMESPACE_END
+ }  // namespace absl
++#endif

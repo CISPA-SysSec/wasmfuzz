@@ -1,0 +1,26 @@
+diff --git a/symphonia-format-riff/src/aiff/chunks.rs b/symphonia-format-riff/src/aiff/chunks.rs
+index d3330cd..0e67d17 100644
+--- a/symphonia-format-riff/src/aiff/chunks.rs
++++ b/symphonia-format-riff/src/aiff/chunks.rs
+@@ -372,6 +372,10 @@ pub struct AppSpecificChunk {
+ impl ParseChunk for AppSpecificChunk {
+     fn parse<B: ReadBytes>(reader: &mut B, _tag: [u8; 4], len: u32) -> Result<Self> {
+         let start_pos = reader.pos();
++        // `APPL` payload length is attacker-controlled; cap before allocating remainder.
++        if len > 16 * 1024 * 1024 {
++            return decode_error("aiff: app-specific chunk too large");
++        }
+ 
+         // The application signature.
+         let signature = reader.read_quad_bytes()?;
+@@ -432,6 +436,10 @@ pub struct TextChunk {
+ 
+ impl ParseChunk for TextChunk {
+     fn parse<B: ReadBytes>(reader: &mut B, tag: [u8; 4], len: u32) -> Result<Self> {
++        // wasm32 cannot allocate > isize::MAX (~2 GiB) without aborting on capacity overflow.
++        if len > 16 * 1024 * 1024 {
++            return decode_error("aiff: text chunk too large");
++        }
+         let text = reader.read_boxed_slice_exact(len as usize)?;
+ 
+         let value = Arc::new(decode_string(&text));

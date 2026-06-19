@@ -1,0 +1,34 @@
+diff --git a/crates/zune-jpeg/src/mcu.rs b/crates/zune-jpeg/src/mcu.rs
+index fd0d808b..802e5749 100644
+--- a/crates/zune-jpeg/src/mcu.rs
++++ b/crates/zune-jpeg/src/mcu.rs
+@@ -1103,12 +1103,24 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
+                             * component.width_stride
+                             * component.sample_ratio.sample();
+ 
+-                        let last_bytes =
+-                            component.raw_coeff.rchunks_exact_mut(size).next().unwrap();
++                        // Guard against malformed inputs where the raw coefficient
++                        // buffer is shorter than `size`, or where dimensions multiply
++                        // to zero. Both would otherwise panic in `rchunks_exact_mut`
++                        // (zero chunk size) or `.next().unwrap()` (empty iterator).
++                        if size == 0 {
++                            continue;
++                        }
++                        let Some(last_bytes) =
++                            component.raw_coeff.rchunks_exact_mut(size).next()
++                        else {
++                            continue;
++                        };
+ 
+-                        component
+-                            .first_row_upsample_dest
+-                            .copy_from_slice(last_bytes);
++                        if last_bytes.len() == component.first_row_upsample_dest.len() {
++                            component
++                                .first_row_upsample_dest
++                                .copy_from_slice(last_bytes);
++                        }
+                     }
+                 }
+             }

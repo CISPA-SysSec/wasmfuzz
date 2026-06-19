@@ -1,0 +1,173 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6580e0d..3a30979 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -67,8 +67,9 @@ endif()
+ 
+ # Check out Git submodules.
+ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.gitmodules")
+-  execute_process (COMMAND git submodule update --init --recursive
+-                   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
++  # Submodules are initialized in prepare.sh; skip here to preserve patches.
++  # execute_process (COMMAND git submodule update --init --recursive
++  #                  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+ endif()
+ 
+ # Add third_party libraries, disabling as much as we can of their builds.
+@@ -123,12 +124,16 @@ if(UNIX OR MINGW)
+   else()
+     set(protobuf_BUILD_TESTS OFF CACHE BOOL "enable tests for proto2" FORCE)
+     set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "enable shared libs for proto2" FORCE)
++    set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "disable protoc for wasm" FORCE)
+     add_subdirectory(third_party/protobuf/cmake)
+     include_directories(SYSTEM third_party/protobuf/src)
+   endif()
+   if(NOT ZLIB_FOUND)
+-    add_subdirectory(third_party/zlib)
+     include_directories(SYSTEM third_party/zlib)
++    set(ZLIB_BUILD_SHARED OFF CACHE BOOL "disable zlib shared library" FORCE)
++    set(ZLIB_BUILD_TESTING OFF CACHE BOOL "enable tests for zlib" FORCE)
++    add_subdirectory(third_party/zlib)
++    include_directories(${CMAKE_CURRENT_BINARY_DIR}/third_party/zlib)
+   endif()
+ else()
+   if(BLOATY_ENABLE_RE2)
+@@ -146,20 +151,22 @@ else()
+ 
+   set(protobuf_BUILD_TESTS OFF CACHE BOOL "enable tests for proto2" FORCE)
+   set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "enable shared libs for proto2" FORCE)
++  set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "disable protoc for wasm" FORCE)
+   add_subdirectory(third_party/protobuf/cmake)
+   include_directories(SYSTEM third_party/protobuf/src)
+ 
+-  add_subdirectory(third_party/zlib)
+   include_directories(third_party/zlib)
++  set(ZLIB_BUILD_SHARED OFF CACHE BOOL "disable zlib shared library" FORCE)
++  set(ZLIB_BUILD_TESTING OFF CACHE BOOL "enable tests for zlib" FORCE)
++  add_subdirectory(third_party/zlib)
+   include_directories(${CMAKE_CURRENT_BINARY_DIR}/third_party/zlib)
+-  set_property(TARGET example PROPERTY FOLDER "third_party")
+-  set_property(TARGET minigzip PROPERTY FOLDER "third_party")
+-  set_property(TARGET zlib PROPERTY FOLDER "third_party")
++  # set_property(TARGET example PROPERTY FOLDER "third_party")
++  # set_property(TARGET minigzip PROPERTY FOLDER "third_party")
+   set_property(TARGET zlibstatic PROPERTY FOLDER "third_party")
+   set_property(TARGET libprotobuf PROPERTY FOLDER "third_party")
+   set_property(TARGET libprotobuf-lite PROPERTY FOLDER "third_party")
+-  set_property(TARGET libprotoc PROPERTY FOLDER "third_party")
+-  set_property(TARGET protoc PROPERTY FOLDER "third_party")
++  # set_property(TARGET libprotoc PROPERTY FOLDER "third_party")
++  # set_property(TARGET protoc PROPERTY FOLDER "third_party")
+ endif()
+ 
+ include_directories(.)
+@@ -265,7 +272,7 @@ if(UNIX OR MINGW)
+   if(PROTOBUF_FOUND)
+     list(APPEND LIBBLOATY_LIBS ${PROTOBUF_LIBRARIES})
+   else()
+-    list(APPEND LIBBLOATY_LIBS libprotoc)
++    list(APPEND LIBBLOATY_LIBS libprotobuf)
+   endif()
+   if(BLOATY_ENABLE_RE2)
+     if(RE2_FOUND)
+@@ -285,7 +292,7 @@ if(UNIX OR MINGW)
+     list(APPEND LIBBLOATY_LIBS zlibstatic)
+   endif()
+ else()
+-  set(LIBBLOATY_LIBS libbloaty libprotoc capstone-static)
++  set(LIBBLOATY_LIBS libbloaty libprotobuf capstone-static)
+   if(BLOATY_ENABLE_RE2)
+     list(APPEND LIBBLOATY_LIBS  re2)
+   endif()
+diff --git a/src/bloaty.cc b/src/bloaty.cc
+index f9fe973..1e61762 100644
+--- a/src/bloaty.cc
++++ b/src/bloaty.cc
+@@ -43,7 +43,9 @@ typedef size_t z_size_t;
+ 
+ #if !defined(_WIN32)
+ #include <sys/mman.h>
++#ifndef __wasi__
+ #include <sys/wait.h>
++#endif
+ #include <unistd.h>
+ #else
+ #include <windows.h>
+diff --git a/src/range_map.h b/src/range_map.h
+index aab0771..dcfc711 100644
+--- a/src/range_map.h
++++ b/src/range_map.h
+@@ -261,8 +261,8 @@ void RangeMap::ComputeRollup(const std::vector<const RangeMap*>& range_maps,
+             "Error, range (%s) exists at index %d, but base map is empty\n",
+             range_map->EntryDebugString(range_map->mappings_.begin()).c_str(),
+             i);
+-        assert(false);
+-        throw std::runtime_error("Range extends beyond base map.");
++        assert(false && "Range extends beyond base map.");
++        // throw std::runtime_error("Range extends beyond base map.");
+       }
+     }
+     return;
+@@ -309,8 +309,8 @@ void RangeMap::ComputeRollup(const std::vector<const RangeMap*>& range_maps,
+               "(%s)\n",
+               range_maps[i]->EntryDebugString(iters[i]).c_str(),
+               range_maps[0]->EntryDebugString(std::prev(iters[0])).c_str());
+-          assert(false);
+-          throw std::runtime_error("Range extends beyond base map.");
++          assert(false && "Range extends beyond base map.");
++          // throw std::runtime_error("Range extends beyond base map.");
+         }
+       }
+       return;
+@@ -324,16 +324,16 @@ void RangeMap::ComputeRollup(const std::vector<const RangeMap*>& range_maps,
+               "Error, no more ranges for index %d but we need one "
+               "to match (%s)\n",
+               i, range_maps[0]->EntryDebugString(iters[0]).c_str());
+-          assert(false);
+-          throw std::runtime_error("No more ranges.");
++          assert(false && "No more ranges.");
++          // throw std::runtime_error("No more ranges.");
+         } else if (iters[i]->first != current) {
+           printf(
+               "Error, range (%s) doesn't match the beginning of base range "
+               "(%s)\n",
+               range_maps[i]->EntryDebugString(iters[i]).c_str(),
+               range_maps[0]->EntryDebugString(iters[0]).c_str());
+-          assert(false);
+-          throw std::runtime_error("No more ranges.");
++          assert(false && "No more ranges.");
++          // throw std::runtime_error("No more ranges.");
+         }
+         keys.push_back(iters[i]->second.label);
+       }
+@@ -372,8 +372,8 @@ void RangeMap::ComputeRollup(const std::vector<const RangeMap*>& range_maps,
+                 map.EntryDebugString(std::prev(iter)).c_str(),
+                 map.EntryDebugString(iter).c_str(),
+                 range_maps[0]->EntryDebugString(iters[0]).c_str());
+-            assert(false);
+-            throw std::runtime_error("Entry range extends beyond base range");
++            assert(false && "Entry range extends beyond base range");
++            // throw std::runtime_error("Entry range extends beyond base range");
+           }
+           assert(i == 0 || !continuous);
+           continuous = false;
+diff --git a/src/util.cc b/src/util.cc
+index 7e24568..820e4a3 100644
+--- a/src/util.cc
++++ b/src/util.cc
+@@ -20,7 +20,15 @@ namespace bloaty {
+ 
+ ABSL_ATTRIBUTE_NORETURN
+ void Throw(const char *str, int line) {
++#ifndef __wasi__
+   throw bloaty::Error(str, __FILE__, line);
++#else
++  void wasmfuzz_exit_testcase()
++     __attribute__((__noreturn__))
++     __attribute__((__import_module__("wasmfuzz"), __import_name__("exit_testcase")));
++  printf("bloaty::Throw(%s)\n", str);
++  wasmfuzz_exit_testcase();
++#endif
+ }
+ 
+ std::string_view ReadUntilConsuming(std::string_view* data, char c) {

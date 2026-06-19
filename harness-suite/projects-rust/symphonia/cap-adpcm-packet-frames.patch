@@ -1,0 +1,43 @@
+diff --git a/symphonia-codec-adpcm/src/lib.rs b/symphonia-codec-adpcm/src/lib.rs
+index 3ef25d8..64f1f69 100644
+--- a/symphonia-codec-adpcm/src/lib.rs
++++ b/symphonia-codec-adpcm/src/lib.rs
+@@ -30,6 +30,9 @@ use symphonia_core::errors::{Result, decode_error, unsupported_error};
+ use symphonia_core::io::ReadBytes;
+ use symphonia_core::packet::PacketRef;
+ 
++/// Upper bound on frames per packet for buffer preallocation (hostile `max_frames_per_packet`).
++const MAX_ADPCM_PACKET_FRAMES: usize = 65_536;
++
+ mod codec_ima_qt;
+ mod codec_ima_wav;
+ mod codec_ms;
+@@ -85,6 +88,10 @@ impl AdpcmDecoder {
+             _ => return unsupported_error("adpcm: maximum frames per packet is required"),
+         };
+ 
++        if frames > MAX_ADPCM_PACKET_FRAMES {
++            return decode_error("adpcm: max frames per packet exceeds limit");
++        }
++
+         if params.frames_per_block.is_none_or(|v| v == 0) {
+             return unsupported_error("adpcm: valid frames per block is required");
+         }
+@@ -129,8 +136,16 @@ impl AdpcmDecoder {
+ 
+         let block_count = packet.block_dur().get() as usize / frames_per_block;
+ 
++        let total_frames = block_count.saturating_mul(frames_per_block);
++        if total_frames > MAX_ADPCM_PACKET_FRAMES {
++            return decode_error("adpcm: packet frame count exceeds limit");
++        }
++        if total_frames > self.buf.capacity() {
++            return decode_error("adpcm: packet frame count exceeds output buffer capacity");
++        }
++
+         self.buf.clear();
+-        self.buf.render_uninit(Some(block_count * frames_per_block));
++        self.buf.render_uninit(Some(total_frames));
+ 
+         let channel_count = self.buf.spec().channels().count();
+         match channel_count {

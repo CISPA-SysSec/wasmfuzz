@@ -11,3 +11,5 @@ git -C "$PROJECT/repo" apply "$PROJECT/fix-low-memory-pipeline-downsampling.patc
 git -C "$PROJECT/repo" apply "$PROJECT/fix-group-size-for-channel-unwrap.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-entropy-restore-zero-rewind.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-extend-ref-frame-bounds.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/fix-vardct-lf-rect-bounds.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/fix-modular-predict-neighbor-bounds.patch"

@@ -1,0 +1,44 @@
+diff --git a/symphonia-core/src/audio/buf.rs b/symphonia-core/src/audio/buf.rs
+index c160980..01d047a 100644
+--- a/symphonia-core/src/audio/buf.rs
++++ b/symphonia-core/src/audio/buf.rs
+@@ -350,16 +350,10 @@ impl<S: Sample> AudioBuffer<S> {
+     /// If `num_frames` is `None`, the remaining capacity will be used.
+     ///
+     /// Returns the number of frames rendered.
+-    ///
+-    /// # Panics
+-    ///
+-    /// Panics if `num_frames` is `Some` and would exceed the capacity of the buffer.
+     pub fn render_silence(&mut self, num_frames: Option<usize>) -> usize {
+-        // The number of new frames to render.
+-        let num_new_frames = num_frames.unwrap_or(self.capacity - self.num_frames);
+-
+-        // Do not render past the end of the audio buffer.
+-        assert!(self.num_frames + num_new_frames <= self.capacity(), "capacity will be exceeded");
++        // Clamp requests to remaining capacity instead of panicking on malformed streams.
++        let available = self.capacity.saturating_sub(self.num_frames);
++        let num_new_frames = num_frames.unwrap_or(available).min(available);
+ 
+         // Render silence.
+         for plane in &mut self.planes {
+@@ -382,16 +376,10 @@ impl<S: Sample> AudioBuffer<S> {
+     /// If `num_frames` is `None`, the remaining capacity will be used.
+     ///
+     /// Returns the number of frames rendered.
+-    ///
+-    /// # Panics
+-    ///
+-    /// Panics if `num_frames` is `Some` and would exceed the capacity of the buffer.
+     pub fn render_uninit(&mut self, num_frames: Option<usize>) -> usize {
+-        // The number of new frames to render.
+-        let num_new_frames = num_frames.unwrap_or(self.capacity - self.num_frames);
+-
+-        // Do not render past the end of the audio buffer.
+-        assert!(self.num_frames + num_new_frames <= self.capacity(), "capacity will be exceeded");
++        // Clamp requests to remaining capacity instead of panicking on malformed streams.
++        let available = self.capacity.saturating_sub(self.num_frames);
++        let num_new_frames = num_frames.unwrap_or(available).min(available);
+ 
+         // Commit new frames.
+         self.num_frames += num_new_frames;

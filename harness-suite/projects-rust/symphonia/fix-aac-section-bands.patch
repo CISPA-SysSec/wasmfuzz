@@ -1,0 +1,26 @@
+diff --git a/symphonia-codec-aac/src/aac/ics/mod.rs b/symphonia-codec-aac/src/aac/ics/mod.rs
+index 5317f51..7814137 100644
+--- a/symphonia-codec-aac/src/aac/ics/mod.rs
++++ b/symphonia-codec-aac/src/aac/ics/mod.rs
+@@ -240,6 +240,10 @@ impl Ics {
+             let mut l = 0;
+ 
+             while k < self.info.max_sfb {
++                if l >= MAX_SFBS {
++                    return decode_error("aac: too many section bands");
++                }
++
+                 self.sect_cb[g][l] = bs.read_bits_leq32(4)? as u8;
+                 self.sect_len[g][l] = 0;
+ 
+@@ -257,6 +261,10 @@ impl Ics {
+                     }
+                 }
+ 
++                if self.sect_len[g][l] == 0 {
++                    return decode_error("aac: invalid zero-length section");
++                }
++
+                 validate!(k + self.sect_len[g][l] <= self.info.max_sfb);
+ 
+                 for sfb in k..k + self.sect_len[g][l] {

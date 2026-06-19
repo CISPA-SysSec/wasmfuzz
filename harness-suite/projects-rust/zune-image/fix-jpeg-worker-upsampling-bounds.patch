@@ -1,0 +1,38 @@
+diff --git a/crates/zune-jpeg/src/worker.rs b/crates/zune-jpeg/src/worker.rs
+index ce378e5a..27f66ddb 100644
+--- a/crates/zune-jpeg/src/worker.rs
++++ b/crates/zune-jpeg/src/worker.rs
+@@ -416,7 +416,12 @@ pub(crate) fn upsample(
+                 // get current row
+                 let row = &component.row[..];
+                 let row_up = &component.row_up[..];
+-                let row_down = &component.raw_coeff[0..stride];
++                let row_down = component
++                    .raw_coeff
++                    .get(0..stride)
++                    .ok_or_else(|| {
++                        DecodeErrors::FormatStatic("Invalid raw_coeff slice for upsample")
++                    })?;
+                 (component.up_sampler)(row, row_up, row_down, upsampler_scratch_space, dest);
+             }
+ 
+@@ -535,9 +540,16 @@ pub(crate) fn upsample(
+                 PS(cae): I can't add the image to the repo as it is nsfw, but can send if required
+                 */
+                 let length = component.first_row_upsample_dest.len();
+-                component
+-                    .first_row_upsample_dest
+-                    .copy_from_slice(dest_coeff.rchunks_exact(length).next().unwrap());
++                // Guard against invalid inputs where component buffers were not
++                // sized as expected: `rchunks_exact(0)` would panic, and
++                // `next()` may return `None` when `dest_coeff.len() < length`.
++                // Skip the carry-over silently; downstream code handles this as
++                // missing reference rows on corrupt images.
++                if length > 0 {
++                    if let Some(last_row) = dest_coeff.rchunks_exact(length).next() {
++                        component.first_row_upsample_dest.copy_from_slice(last_row);
++                    }
++                }
+             }
+             // up-sample each row
+             for (single_row, output_stride) in raw_coeff

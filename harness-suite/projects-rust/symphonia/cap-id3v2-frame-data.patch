@@ -1,0 +1,34 @@
+diff --git a/symphonia-metadata/src/id3v2/frames.rs b/symphonia-metadata/src/id3v2/frames.rs
+index e26d57d..bf463c2 100644
+--- a/symphonia-metadata/src/id3v2/frames.rs
++++ b/symphonia-metadata/src/id3v2/frames.rs
+@@ -27,6 +27,9 @@ mod readers;
+ 
+ use readers::*;
+ 
++/// Upper bound for one ID3v2 frame body allocation.
++const MAX_ID3V2_FRAME_DATA_BYTES: u32 = 32 * 1024 * 1024;
++
+ // The following is a list of all standardized ID3v2.x frames for all ID3v2 major versions and their
+ // implementation status ("S" column) in Symphonia.
+ //
+@@ -537,6 +540,9 @@ pub fn read_id3v2p3_frame<B: ReadBytes>(reader: &mut B) -> Result<FrameResult> {
+ 
+     // The size of the frame's body.
+     let data_size = size - flag_data_size;
++    if data_size > MAX_ID3V2_FRAME_DATA_BYTES {
++        return decode_error("id3v2: frame body size exceeds limit");
++    }
+ 
+     // If compression is enabled, read the decompressed size of the frame.
+     let _decompressed_size = if is_compressed { Some(reader.read_be_u32()?) } else { None };
+@@ -642,6 +648,9 @@ pub fn read_id3v2p4_frame<B: ReadBytes + FiniteStream>(reader: &mut B) -> Result
+ 
+     // The size of the frame's body.
+     let data_size = size - flag_data_size;
++    if data_size > MAX_ID3V2_FRAME_DATA_BYTES {
++        return decode_error("id3v2: frame body size exceeds limit");
++    }
+ 
+     // Frame group identifier byte. Used to group a set of frames. The frame group will be added as
+     // a sub-field to all produced tags.

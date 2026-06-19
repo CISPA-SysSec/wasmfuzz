@@ -1,0 +1,57 @@
+diff --git a/crates/zune-png/fuzz/fuzz_targets/decode_buffer.rs b/crates/zune-png/fuzz/fuzz_targets/decode_buffer.rs
+index 3888446..e59a6e8 100644
+--- a/crates/zune-png/fuzz/fuzz_targets/decode_buffer.rs
++++ b/crates/zune-png/fuzz/fuzz_targets/decode_buffer.rs
+@@ -4,7 +4,8 @@ use libfuzzer_sys::fuzz_target;
+ 
+ fuzz_target!(|data: &[u8]| {
+     use zune_core::bytestream::ZCursor;
+-    let opts = zune_core::options::DecoderOptions::new_fast();
++    const MAX_DECODE_BYTES: usize = 64 * 1024 * 1024;
++    let opts = zune_core::options::DecoderOptions::new_fast().inflate_set_limit(MAX_DECODE_BYTES);
+ 
+     let data = ZCursor::new(data);
+     let mut decoder = zune_png::PngDecoder::new_with_options(data, opts);
+diff --git a/crates/zune-png/src/decoder.rs b/crates/zune-png/src/decoder.rs
+index d3de019..6eea7ec 100644
+--- a/crates/zune-png/src/decoder.rs
++++ b/crates/zune-png/src/decoder.rs
+@@ -869,8 +869,18 @@ impl<T: ZByteReaderTrait> PngDecoder<T> {
+         let info = &self.png_info;
+         let bytes = if info.depth == 16 { 2 } else { 1 };
+ 
+-        let out_n = self.colorspace().unwrap().num_components();
+-        let new_len = info.width * info.height * out_n;
++        let Some(output_size) = self.output_buffer_size() else {
++            return Err(PngDecodeErrors::GenericStatic(
++                "Could not compute PNG output buffer size",
++            ));
++        };
++        if output_size > self.options.inflate_get_limit() {
++            return Err(PngDecodeErrors::Generic(format!(
++                "Decoded PNG output size {output_size} exceeds configured limit {}",
++                self.options.inflate_get_limit()
++            )));
++        }
++        let new_len = output_size / bytes;
+ 
+         let mut out_u8: Vec<u8> = vec![0; new_len * usize::from(info.depth != 16)];
+         let mut out_u16: Vec<u16> = vec![0; new_len * usize::from(info.depth == 16)];
+diff --git a/crates/zune-png/src/streaming.rs b/crates/zune-png/src/streaming.rs
+index a92d7ce..d25c511 100644
+--- a/crates/zune-png/src/streaming.rs
++++ b/crates/zune-png/src/streaming.rs
+@@ -553,6 +553,13 @@ where
+             .checked_mul(bytes)
+             .ok_or(PngDecodeErrors::GenericStatic("Dimensions overflow"))?;
+ 
++        if result > self.options.inflate_get_limit() {
++            return Err(PngDecodeErrors::Generic(format!(
++                "Decoded PNG frame size {result} exceeds configured limit {}",
++                self.options.inflate_get_limit()
++            )));
++        }
++
+         Ok(result)
+     }
+     /// Decode a single stream

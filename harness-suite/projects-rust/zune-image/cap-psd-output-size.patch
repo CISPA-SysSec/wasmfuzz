@@ -1,0 +1,54 @@
+diff --git a/crates/zune-psd/src/decoder.rs b/crates/zune-psd/src/decoder.rs
+index c41f782d..4a0a14e4 100644
+--- a/crates/zune-psd/src/decoder.rs
++++ b/crates/zune-psd/src/decoder.rs
+@@ -261,6 +261,11 @@ where
+         }
+ 
+         let required_length = self.required_len()?;
++        if required_length > self.options.inflate_get_limit() {
++            return Err(PSDDecodeErrors::Generic(
++                "Decoded PSD raster exceeds configured decoder size limit",
++            ));
++        }
+         let mut out = vec![0; required_length];
+         let new_length = self.decode_into(&mut out)?;
+         debug_assert!(new_length == required_length);
+@@ -389,14 +394,17 @@ where
+             self.decode_headers()?;
+         }
+ 
+-        let pixel_count = self.width * self.height;
+-        let bytes_per_sample = match self.depth {
+-            BitDepth::Eight => 1,
+-            BitDepth::Sixteen => 2,
+-            _ => return Err(PSDDecodeErrors::Generic("Unsupported bit depth")),
+-        };
++        let pixel_count = self
++            .width
++            .checked_mul(self.height)
++            .ok_or(PSDDecodeErrors::Generic("Dimension overflow"))?;
+ 
+-        let required_len = pixel_count * self.channel_count * bytes_per_sample;
++        let required_len = self.required_len()?;
++        if required_len > self.options.inflate_get_limit() {
++            return Err(PSDDecodeErrors::Generic(
++                "Decoded PSD raster exceeds configured decoder size limit",
++            ));
++        }
+ 
+         if output.len() < required_len {
+             return Err(PSDDecodeErrors::Generic("Output buffer too small"));
+@@ -406,7 +414,11 @@ where
+ 
+         match (self.compression, self.depth) {
+             (CompressionMethod::RLE, BitDepth::Eight) => {
+-                let skipped = self.height * self.channel_count * 2;
++                let skipped = self
++                    .height
++                    .checked_mul(self.channel_count)
++                    .and_then(|v| v.checked_mul(2))
++                    .ok_or(PSDDecodeErrors::Generic("RLE header size overflow"))?;
+                 self.stream.skip(skipped)?;
+ 
+                 for channel in 0..self.channel_count {

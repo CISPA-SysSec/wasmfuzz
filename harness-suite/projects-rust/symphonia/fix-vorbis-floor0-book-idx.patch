@@ -1,0 +1,15 @@
+diff --git a/symphonia-codec-vorbis/src/floor.rs b/symphonia-codec-vorbis/src/floor.rs
+index 7dee33a..667cc40 100644
+--- a/symphonia-codec-vorbis/src/floor.rs
++++ b/symphonia-codec-vorbis/src/floor.rs
+@@ -219,6 +219,10 @@ impl Floor for Floor0 {
+             let floor_book_idx_bits = ilog(u32::from(self.setup.floor0_number_of_books));
+             let floor_book_idx = io_try_or_ret!(bs.read_bits_leq32(floor_book_idx_bits)) as usize;
+ 
++            if floor_book_idx >= usize::from(self.setup.floor0_number_of_books) {
++                return decode_error("vorbis: floor0, invalid codebook list index");
++            }
++
+             // Get the actual codebook index from the floor's codebook list.
+             let codebook_idx = self.setup.floor0_book_list[floor_book_idx] as usize;
+ 

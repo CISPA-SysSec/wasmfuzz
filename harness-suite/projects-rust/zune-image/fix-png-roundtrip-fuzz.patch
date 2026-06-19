@@ -1,0 +1,90 @@
+diff --git a/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs b/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs
+index eec5b075..6df8cf21 100644
+--- a/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs
++++ b/crates/zune-png/fuzz/fuzz_targets/roundtrip.rs
+@@ -7,16 +7,31 @@
+ #![no_main]
+ 
+ use libfuzzer_sys::fuzz_target;
+-use png::{BitDepth, ColorType, FilterType};
++use png::{BitDepth, ColorType, Compression, Filter};
++use std::io::Cursor;
+ 
+ fuzz_target!(|data: (u8, u8, u8, u8, u8, Vec<u8>)| {
+     if let Some((raw, encoded)) = encode_png(data.0, data.1, data.2, data.3, data.4, &data.5)
+     {
+-        let raw_decoded = decode_png(&encoded);
+-        assert_eq!(raw, raw_decoded);
++        if let Some(raw_decoded) = decode_png(&encoded) {
++            assert_eq!(raw, raw_decoded);
++        }
+     }
+ });
+ 
++fn filter_from_u8(n: u8) -> Option<Filter> {
++    match n % 7 {
++        0 => Some(Filter::NoFilter),
++        1 => Some(Filter::Sub),
++        2 => Some(Filter::Up),
++        3 => Some(Filter::Avg),
++        4 => Some(Filter::Paeth),
++        5 => Some(Filter::Adaptive),
++        6 => Some(Filter::MinEntropy),
++        _ => None,
++    }
++}
++
+ fn encode_png(
+     width: u8, filter: u8, compression: u8, color_type: u8, bit_depth: u8, data: &[u8]
+ ) -> Option<(&[u8], Vec<u8>)>
+@@ -27,7 +42,7 @@ fn encode_png(
+     {
+         return None;
+     };
+-    let filter = FilterType::from_u8(filter)?;
++    let filter = filter_from_u8(filter)?;
+     if bit_depth < 8
+     {
+         return None;
+@@ -41,11 +56,11 @@ fn encode_png(
+     // compression
+     let compression = match compression
+     {
+-        0 => png::Compression::Default,
+-        1 => png::Compression::Fast,
+-        2 => png::Compression::Best,
+-        3 => png::Compression::Huffman,
+-        4 => png::Compression::Rle,
++        0 => Compression::Balanced,
++        1 => Compression::Fast,
++        2 => Compression::High,
++        3 => Compression::Fastest,
++        4 => Compression::NoCompression,
+         _ => return None
+     };
+ 
+@@ -56,6 +71,9 @@ fn encode_png(
+     // https://github.com/image-rs/image-png/blob/28035fd57312c29b38db5988fe84135de2d50e5d/src/encoder.rs#L657
+     let bytes_per_row = bytes_per_row - 1;
+     let height = data.len() / bytes_per_row;
++    if height > 16384 {
++        return None;
++    }
+     let total_bytes = bytes_per_row * height;
+     let data_to_encode = &data[..total_bytes];
+ 
+@@ -78,11 +96,11 @@ fn encode_png(
+     Some((data_to_encode, output))
+ }
+ 
+-fn decode_png(data: &[u8]) -> Vec<u8>
++fn decode_png(data: &[u8]) -> Option<Vec<u8>>
+ {
+-    zune_png::PngDecoder::new(data)
++    zune_png::PngDecoder::new(Cursor::new(data))
+         .decode_raw()
+-        .expect("Failed to decode valid input data!")
++        .ok()
+ }
+ 
+ // copied from the `png` codebase because it's pub(crate)

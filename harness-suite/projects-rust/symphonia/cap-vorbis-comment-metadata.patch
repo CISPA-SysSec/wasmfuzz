@@ -1,0 +1,56 @@
+diff --git a/symphonia-metadata/src/embedded/vorbis.rs b/symphonia-metadata/src/embedded/vorbis.rs
+index ab3126b..bf78cdf 100644
+--- a/symphonia-metadata/src/embedded/vorbis.rs
++++ b/symphonia-metadata/src/embedded/vorbis.rs
+@@ -34,6 +34,11 @@ pub const VORBIS_COMMENT_METADATA_INFO: MetadataInfo = MetadataInfo {
+     long_name: "Vorbis Comment",
+ };
+ 
++/// Upper bound for one Vorbis vendor/comment string payload allocation.
++const MAX_VORBIS_COMMENT_BYTES: usize = 32 * 1024 * 1024;
++/// Upper bound for declared Vorbis comment entries.
++const MAX_VORBIS_COMMENT_ENTRIES: usize = 1_000_000;
++
+ lazy_static! {
+     static ref VORBIS_COMMENT_MAP: RawTagParserMap = {
+         let mut m: RawTagParserMap = HashMap::new();
+@@ -372,26 +377,33 @@ pub fn read_vorbis_comment<B: ReadBytes>(
+     side_data: &mut Vec<MetadataSideData>,
+ ) -> Result<()> {
+     // Read the vendor string length in bytes.
+-    let vendor_len = reader.read_u32()?;
++    let vendor_len = reader.read_u32()? as usize;
++    if vendor_len > MAX_VORBIS_COMMENT_BYTES {
++        return decode_error("meta (vorbis): vendor string length exceeds limit");
++    }
+ 
+     // Ignore the vendor string.
+-    reader.ignore_bytes(u64::from(vendor_len))?;
++    reader.ignore_bytes(vendor_len as u64)?;
+ 
+     // Map of chapter number to a vector of chapter information.
+     let mut chapters: BTreeMap<u32, Vec<ChapterInfo>> = Default::default();
+ 
+     // Read the number of comments.
+     let num_comments = reader.read_u32()? as usize;
++    if num_comments > MAX_VORBIS_COMMENT_ENTRIES {
++        return decode_error("meta (vorbis): comment count exceeds limit");
++    }
+ 
+     // Read each comment.
+     for _ in 0..num_comments {
+         // Read the comment string length in bytes.
+-        let comment_length = reader.read_u32()?;
+-
+-        // TODO: Apply a limit.
++        let comment_length = reader.read_u32()? as usize;
++        if comment_length > MAX_VORBIS_COMMENT_BYTES {
++            return decode_error("meta (vorbis): comment length exceeds limit");
++        }
+ 
+         // Read the comment string.
+-        let mut comment_data = vec![0; comment_length as usize];
++        let mut comment_data = vec![0; comment_length];
+         reader.read_buf_exact(&mut comment_data)?;
+ 
+         // Parse the Vorbis comment and handle the parsed output.

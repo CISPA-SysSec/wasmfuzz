@@ -1,0 +1,75 @@
+diff --git a/crates/zune-core/src/bytestream/reader/no_std_readers.rs b/crates/zune-core/src/bytestream/reader/no_std_readers.rs
+index 13670ea4..11bf8512 100644
+--- a/crates/zune-core/src/bytestream/reader/no_std_readers.rs
++++ b/crates/zune-core/src/bytestream/reader/no_std_readers.rs
+@@ -71,12 +71,16 @@ impl<T: AsRef<[u8]>>  ZCursor<T> {
+     }
+ 
+     pub (crate) fn read_const_bytes_impl<const N: usize>(&mut self, buf: &mut [u8; N]) -> Result<(), ZByteIoError> {
+-        if self.position + N <= self.stream.as_ref().len() {
++        let end = self
++            .position
++            .checked_add(N)
++            .ok_or(ZByteIoError::Generic("Read position overflow"))?;
++        if end <= self.stream.as_ref().len() {
+             // we are in bounds
+             let reference = self.stream.as_ref();
+             let position = self.position;
+-            if let Some(buf_ref) = reference.get(position..position + N) {
+-                self.position += N;
++            if let Some(buf_ref) = reference.get(position..end) {
++                self.position = end;
+                 buf.copy_from_slice(buf_ref);
+                 return Ok(());
+             }
+@@ -85,13 +89,14 @@ impl<T: AsRef<[u8]>>  ZCursor<T> {
+     }
+ 
+     pub (crate) fn read_const_bytes_no_error_impl<const N: usize>(&mut self, buf: &mut [u8; N]) {
+-        if self.position + N <= self.stream.as_ref().len() {
+-            // we are in bounds
+-            let reference = self.stream.as_ref();
+-            let position = self.position;
+-            if let Some(buf_ref) = reference.get(position..position + N) {
+-                self.position += N;
+-                buf.copy_from_slice(buf_ref);
++        if let Some(end) = self.position.checked_add(N) {
++            if end <= self.stream.as_ref().len() {
++                let reference = self.stream.as_ref();
++                let position = self.position;
++                if let Some(buf_ref) = reference.get(position..end) {
++                    self.position = end;
++                    buf.copy_from_slice(buf_ref);
++                }
+             }
+         }
+     }
+@@ -108,13 +113,23 @@ impl<T: AsRef<[u8]>>  ZCursor<T> {
+         let stream_end = self.stream.as_ref().len();
+ 
+         let start = core::cmp::min(self.position, stream_end);
+-        let end = core::cmp::min(self.position + buf.len(), stream_end);
+-
+-        let slice = self.stream.as_ref().get(start..end).unwrap();
++        let end_exclusive = self
++            .position
++            .checked_add(buf.len())
++            .ok_or(ZByteIoError::Generic("Read position overflow"))?;
++        let end = core::cmp::min(end_exclusive, stream_end);
++
++        if start >= end {
++            return Ok(0);
++        }
++        let slice = self
++            .stream
++            .as_ref()
++            .get(start..end)
++            .ok_or(ZByteIoError::Generic("Invalid peek range"))?;
+         buf[..slice.len()].copy_from_slice(slice);
+-        let len = slice.len();
+ 
+-        Ok(len)
++        Ok(slice.len())
+     }
+ 
+     #[inline(always)]

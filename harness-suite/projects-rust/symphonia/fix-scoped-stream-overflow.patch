@@ -1,0 +1,40 @@
+diff --git a/symphonia-core/src/io/scoped_stream.rs b/symphonia-core/src/io/scoped_stream.rs
+index 6da24fd..9e85e05 100644
+--- a/symphonia-core/src/io/scoped_stream.rs
++++ b/symphonia-core/src/io/scoped_stream.rs
+@@ -27,7 +27,24 @@ impl<B: ReadBytes> ScopedStream<B> {
+     /// Instantiates a new `ScopedStream` with an upper limit on the number of bytes that can be
+     /// read from the inner source.
+     pub fn new(inner: B, len: u64) -> Self {
+-        ScopedStream { start: inner.pos(), inner, len, read: 0 }
++        let start = inner.pos();
++        // Hostile or inconsistent callers may pass a `len` that wraps `start + len`.
++        let len = match start.checked_add(len) {
++            Some(_) => len,
++            None => u64::MAX - start,
++        };
++        ScopedStream { start, inner, len, read: 0 }
++    }
++
++    #[inline]
++    fn scope_bounds(&self) -> (u64, u64) {
++        let end = self.start.saturating_add(self.len);
++        if end >= self.start {
++            (self.start, end)
++        }
++        else {
++            (self.start, self.start)
++        }
+     }
+ 
+     /// Returns an immutable reference to the inner stream.
+@@ -177,7 +194,8 @@ impl<B: ReadBytes + SeekBuffered> SeekBuffered for ScopedStream<B> {
+     #[inline(always)]
+     fn seek_buffered(&mut self, pos: u64) -> u64 {
+         // Clamp the seekable position to within the bounds of the ScopedStream.
+-        self.inner.seek_buffered(pos.clamp(self.start, self.start + self.len))
++        let (lo, hi) = self.scope_bounds();
++        self.inner.seek_buffered(pos.clamp(lo, hi))
+     }
+ 
+     #[inline(always)]

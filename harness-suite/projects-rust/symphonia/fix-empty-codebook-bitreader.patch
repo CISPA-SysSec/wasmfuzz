@@ -1,0 +1,37 @@
+diff --git a/symphonia-core/src/io/bit.rs b/symphonia-core/src/io/bit.rs
+index 1f5a9a5..1899e63 100644
+--- a/symphonia-core/src/io/bit.rs
++++ b/symphonia-core/src/io/bit.rs
+@@ -15,6 +15,10 @@ fn end_of_bitstream_error<T>() -> io::Result<T> {
+     Err(io::Error::other("unexpected end of bitstream"))
+ }
+ 
++fn empty_codebook_error<T>() -> io::Result<T> {
++    Err(io::Error::other("empty codebook"))
++}
++
+ pub mod vlc {
+     //! The `vlc` module provides support for decoding variable-length codes (VLC).
+ 
+@@ -772,6 +776,10 @@ pub trait ReadBitsLtr: private::FetchBitsLtr {
+         &mut self,
+         codebook: &vlc::Codebook<E>,
+     ) -> io::Result<(E::ValueType, u32)> {
++        if codebook.table.is_empty() {
++            return empty_codebook_error();
++        }
++
+         // Attempt to refill the bit buffer with enough bits for the longest codeword in the
+         // codebook. However, this does not mean the bit buffer will have enough bits to decode a
+         // codeword.
+@@ -1212,6 +1220,10 @@ pub trait ReadBitsRtl: private::FetchBitsRtl {
+         &mut self,
+         codebook: &vlc::Codebook<E>,
+     ) -> io::Result<(E::ValueType, u32)> {
++        if codebook.table.is_empty() {
++            return empty_codebook_error();
++        }
++
+         // Attempt to refill the bit buffer with enough bits for the longest codeword in the
+         // codebook. However, this does not mean the bit buffer will have enough bits to decode a
+         // codeword.

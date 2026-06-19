@@ -1,0 +1,17 @@
+diff --git a/symphonia-format-ogg/src/physical.rs b/symphonia-format-ogg/src/physical.rs
+index 005a291..0dea7f1 100644
+--- a/symphonia-format-ogg/src/physical.rs
++++ b/symphonia-format-ogg/src/physical.rs
+@@ -173,7 +173,11 @@ fn scan_stream_end(
+     streams: &mut BTreeMap<u32, LogicalStream>,
+     byte_range_end: u64,
+ ) -> Option<u64> {
+-    let scoped_len = byte_range_end - reader.pos();
++    let pos = reader.pos();
++    if pos >= byte_range_end {
++        return None;
++    }
++    let scoped_len = byte_range_end - pos;
+ 
+     let mut scoped_reader = ScopedStream::new(reader, scoped_len);
+ 

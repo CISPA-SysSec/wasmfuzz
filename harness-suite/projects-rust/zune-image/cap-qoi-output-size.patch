@@ -1,0 +1,88 @@
+diff --git a/crates/zune-qoi/src/decoder.rs b/crates/zune-qoi/src/decoder.rs
+index 04e2902f..cb9c96ed 100644
+--- a/crates/zune-qoi/src/decoder.rs
++++ b/crates/zune-qoi/src/decoder.rs
+@@ -10,7 +10,7 @@ use alloc::vec::Vec;
+ use alloc::{format, vec};
+ 
+ use zune_core::bit_depth::BitDepth;
+-use zune_core::bytestream::{ZByteReaderTrait, ZReader};
++use zune_core::bytestream::{ZByteReaderTrait, ZReader, ZSeekFrom};
+ use zune_core::colorspace::ColorSpace;
+ use zune_core::log::{error, trace};
+ use zune_core::options::DecoderOptions;
+@@ -194,14 +194,19 @@ where
+     /// # Panics
+     /// In case `width*height*colorspace` calculation may overflow a usize
+     pub fn output_buffer_size(&self) -> Option<usize> {
+-        if self.decoded_headers {
+-            self.width
+-                .checked_mul(self.height)
+-                .unwrap()
+-                .checked_mul(self.colorspace.num_components())
+-        } else {
+-            None
++        if !self.decoded_headers {
++            return None;
+         }
++        let wh = self.width.checked_mul(self.height)?;
++        wh.checked_mul(self.colorspace.num_components())
++    }
++
++    fn qoi_payload_bytes_remaining(&mut self) -> Result<usize, QoiErrors> {
++        let cur = self.stream.position()?;
++        let stream_end = self.stream.seek(ZSeekFrom::End(0))?;
++        self.stream.seek(ZSeekFrom::Start(cur))?;
++        let remaining = stream_end.saturating_sub(cur);
++        usize::try_from(remaining).map_err(|_| QoiErrors::GenericStatic("stream length overflow"))
+     }
+ 
+     /// Decode the bytes of a QOI image data, returning the
+@@ -223,7 +228,28 @@ where
+         if !self.decoded_headers {
+             self.decode_headers()?;
+         }
+-        let mut output = vec![0; self.output_buffer_size().unwrap()];
++        let Some(output_size) = self.output_buffer_size() else {
++            return Err(QoiErrors::GenericStatic(
++                "Could not compute QOI output buffer size"
++            ));
++        };
++        if output_size > self.options.inflate_get_limit() {
++            return Err(QoiErrors::Generic(format!(
++                "Decoded QOI output size {output_size} exceeds configured limit {}",
++                self.options.inflate_get_limit()
++            )));
++        }
++        let pixels = self
++            .width
++            .checked_mul(self.height)
++            .ok_or(QoiErrors::GenericStatic("QOI dimensions overflow"))?;
++        let min_payload = pixels.div_ceil(64).saturating_add(8);
++        let avail = self.qoi_payload_bytes_remaining()?;
++        if avail < min_payload {
++            return Err(QoiErrors::InsufficientData(min_payload, avail));
++        }
++
++        let mut output = vec![0; output_size];
+ 
+         self.decode_into(&mut output)?;
+ 
+@@ -248,11 +274,13 @@ where
+             self.decode_headers()?;
+         }
+ 
+-        if pixels.len() < self.output_buffer_size().unwrap() {
+-            return Err(QoiErrors::InsufficientData(
+-                self.output_buffer_size().unwrap(),
+-                pixels.len()
++        let Some(expected) = self.output_buffer_size() else {
++            return Err(QoiErrors::GenericStatic(
++                "Could not compute QOI output buffer size"
+             ));
++        };
++        if pixels.len() < expected {
++            return Err(QoiErrors::InsufficientData(expected, pixels.len()));
+         }
+ 
+         match self.colorspace.num_components() {

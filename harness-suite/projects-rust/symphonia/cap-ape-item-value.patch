@@ -1,0 +1,23 @@
+diff --git a/symphonia-metadata/src/ape.rs b/symphonia-metadata/src/ape.rs
+index aab7982..c567cd2 100644
+--- a/symphonia-metadata/src/ape.rs
++++ b/symphonia-metadata/src/ape.rs
+@@ -161,6 +161,8 @@ const APEV1_METADATA_INFO: MetadataInfo =
+     MetadataInfo { metadata: METADATA_ID_APEV1, short_name: "apev1", long_name: "APEv1" };
+ const APEV2_METADATA_INFO: MetadataInfo =
+     MetadataInfo { metadata: METADATA_ID_APEV2, short_name: "apev2", long_name: "APEv2" };
++/// Upper bound for one APE item payload to avoid hostile huge allocations.
++const MAX_APE_ITEM_VALUE_BYTES: usize = 32 * 1024 * 1024;
+ 
+ /// The APE tag version.
+ #[derive(PartialEq, Eq)]
+@@ -251,6 +253,9 @@ impl ApeItem {
+     fn read<B: ReadBytes>(reader: &mut B, header: &ApeHeader) -> Result<ApeItem> {
+         // The length of the value in bytes.
+         let len = reader.read_u32()? as usize;
++        if len > MAX_APE_ITEM_VALUE_BYTES {
++            return decode_error("ape: item value length exceeds limit");
++        }
+ 
+         // Read flags.
+         let flags = match header.version {

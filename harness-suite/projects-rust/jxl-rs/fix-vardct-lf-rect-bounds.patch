@@ -1,0 +1,55 @@
+Subject: [PATCH] bound VarDCT LF plane rect extraction
+---
+diff --git a/jxl/src/frame/group.rs b/jxl/src/frame/group.rs
+index b60a1ef..36edad8 100644
+--- a/jxl/src/frame/group.rs
++++ b/jxl/src/frame/group.rs
+@@ -465,6 +465,14 @@ pub fn decode_vardct_group(
+             });
+ 
+             let [lf_x, lf_y, lf_b] = lf_planes.each_ref();
++            for (plane, rect) in [lf_x, lf_y, lf_b].into_iter().zip(r) {
++                let size = plane.size();
++                if rect.origin.0.saturating_add(rect.size.0) > size.0
++                    || rect.origin.1.saturating_add(rect.size.1) > size.1
++                {
++                    return Err(Error::HFBlockOutOfBounds);
++                }
++            }
+             Some([
+                 lf_x.get_rect(r[0]),
+                 lf_y.get_rect(r[1]),
+@@ -496,18 +504,30 @@ pub fn decode_vardct_group(
+                 None => None,
+                 Some(lf) => {
+                     let [lf_x, lf_y, lf_b] = lf.each_ref();
++                    let (w0, h0) = lf_x.size();
++                    let (w1, h1) = lf_y.size();
++                    let (w2, h2) = lf_b.size();
++                    if sbx[0] >= w0
++                        || sby[0] >= h0
++                        || sbx[1] >= w1
++                        || sby[1] >= h1
++                        || sbx[2] >= w2
++                        || sby[2] >= h2
++                    {
++                        return Err(Error::HFBlockOutOfBounds);
++                    }
+                     Some([
+                         lf_x.rect(Rect {
+                             origin: (sbx[0], sby[0]),
+-                            size: (lf_x.size().0 - sbx[0], lf_x.size().1 - sby[0]),
++                            size: (w0 - sbx[0], h0 - sby[0]),
+                         }),
+                         lf_y.rect(Rect {
+                             origin: (sbx[1], sby[1]),
+-                            size: (lf_y.size().0 - sbx[1], lf_y.size().1 - sby[1]),
++                            size: (w1 - sbx[1], h1 - sby[1]),
+                         }),
+                         lf_b.rect(Rect {
+                             origin: (sbx[2], sby[2]),
+-                            size: (lf_b.size().0 - sbx[2], lf_b.size().1 - sby[2]),
++                            size: (w2 - sbx[2], h2 - sby[2]),
+                         }),
+                     ])
+                 }

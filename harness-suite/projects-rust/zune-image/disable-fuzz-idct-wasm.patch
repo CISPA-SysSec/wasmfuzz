@@ -1,0 +1,22 @@
+diff --git a/crates/zune-jpeg/fuzz/Cargo.toml b/crates/zune-jpeg/fuzz/Cargo.toml
+index c1d258af..488dbd35 100644
+--- a/crates/zune-jpeg/fuzz/Cargo.toml
++++ b/crates/zune-jpeg/fuzz/Cargo.toml
+@@ -26,11 +26,12 @@ path = "fuzz_targets/decode_buffer.rs"
+ test = false
+ doc = false
+ 
+-[[bin]]
+-name = "fuzz_idct"
+-path = "fuzz_targets/fuzz_idct.rs"
+-test = false
+-doc = false
++# fuzz_idct targets arch-specific (neon, x86) impls - not applicable for wasm
++#[[bin]]
++#name = "fuzz_idct"
++#path = "fuzz_targets/fuzz_idct.rs"
++#test = false
++#doc = false
+ 
+ [[bin]]
+ name = "decode_incremental"

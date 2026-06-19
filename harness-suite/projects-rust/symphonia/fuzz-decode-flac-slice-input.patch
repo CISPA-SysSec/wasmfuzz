@@ -1,0 +1,13 @@
+diff --git a/symphonia/fuzz/fuzz_targets/decode_flac.rs b/symphonia/fuzz/fuzz_targets/decode_flac.rs
+index 3c88c28..4a325b3 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_flac.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_flac.rs
+@@ -6,7 +6,7 @@ use symphonia::core::codecs::audio::{
+ use symphonia::default::codecs::FlacDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     let mut codec_params = AudioCodecParameters::new();
+     codec_params.for_codec(CODEC_ID_FLAC);
+ 

@@ -1,0 +1,141 @@
+diff --git a/symphonia-format-caf/src/chunks.rs b/symphonia-format-caf/src/chunks.rs
+index 63ec093..994fbda 100644
+--- a/symphonia-format-caf/src/chunks.rs
++++ b/symphonia-format-caf/src/chunks.rs
+@@ -6,7 +6,7 @@
+ // file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ 
+ use log::{debug, error, info, warn};
+-use std::{convert::TryFrom, fmt, mem::size_of, str};
++use std::{fmt, mem::size_of, str};
+ use symphonia_core::{
+     audio::{AmbisonicBFormat, ChannelLabel, Channels, Position, layouts},
+     codecs::audio::{AudioCodecId, well_known::*},
+@@ -58,6 +58,22 @@ const CHANNEL_LABEL_DISCRETE_65535: u32 = (1 << 16) | 65535;
+ const CHANNEL_LABEL_HOA_ACN_0: u32 = (2 << 16) | 0;
+ const CHANNEL_LABEL_HOA_ACN_65024: u32 = (2 << 16) | 65024;
+ 
++/// Maximum payload size for a `kuki` (magic cookie) chunk.
++const MAX_MAGIC_COOKIE_BYTES: i64 = 32 * 1024 * 1024;
++
++/// Maximum size of one CAF audio packet in variable-length modes (packet table + `next_packet`).
++pub(crate) const MAX_CAF_PACKET_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
++
++#[inline]
++pub(crate) fn limit_caf_packet_size(size: u64) -> Result<()> {
++    if size > MAX_CAF_PACKET_PAYLOAD_BYTES {
++        decode_error("caf: packet size exceeds limit")
++    }
++    else {
++        Ok(())
++    }
++}
++
+ #[derive(Debug)]
+ pub enum Chunk {
+     AudioDescription(AudioDescription),
+@@ -94,12 +110,11 @@ impl Chunk {
+                 Chunk::PacketTable(PacketTable::read(reader, audio_description, chunk_size)?)
+             }
+             b"kuki" => {
+-                if let Ok(chunk_size) = usize::try_from(chunk_size) {
+-                    Chunk::MagicCookie(reader.read_boxed_slice_exact(chunk_size)?)
+-                }
+-                else {
++                if chunk_size < 0 || chunk_size > MAX_MAGIC_COOKIE_BYTES {
+                     return invalid_chunk_size_error("Magic Cookie", chunk_size);
+                 }
++                let sz = chunk_size as usize;
++                Chunk::MagicCookie(reader.read_boxed_slice_exact(sz)?)
+             }
+             b"free" => {
+                 if chunk_size < 0 {
+@@ -153,6 +168,10 @@ impl AudioDescription {
+         let bytes_per_packet = reader.read_be_u32()?;
+         let frames_per_packet = reader.read_be_u32()?;
+ 
++        if bytes_per_packet > 0 {
++            limit_caf_packet_size(u64::from(bytes_per_packet))?;
++        }
++
+         let channels_per_frame = reader.read_be_u32()?;
+         if channels_per_frame == 0 {
+             return decode_error("caf: channels per frame must be not be zero");
+@@ -478,6 +497,33 @@ impl PacketTable {
+             return decode_error("caf: invalid number of packets in the packet table");
+         }
+ 
++        /// Hard cap on packet-table rows so a bogus `total_packets` cannot force billions of
++        /// iterations or unbounded `Vec` growth.
++        pub const MAX_PACKET_TABLE_ENTRIES: i64 = 16 * 1024 * 1024;
++
++        if total_packets > MAX_PACKET_TABLE_ENTRIES {
++            error!(
++                "packet table entry count ({total_packets}) exceeds limit ({MAX_PACKET_TABLE_ENTRIES})"
++            );
++            return decode_error("caf: packet table has too many entries");
++        }
++
++        let data_budget = chunk_size - 24;
++        let min_bytes_per_packet: i64 = match (desc.bytes_per_packet, desc.frames_per_packet) {
++            // Two variable-length integers per packet.
++            (0, 0) => 2,
++            // One variable-length integer per packet.
++            (0, _) | (_, 0) => 1,
++            (_, _) => 0,
++        };
++
++        if min_bytes_per_packet > 0 && total_packets > 0 {
++            let need = (total_packets as u128).saturating_mul(min_bytes_per_packet as u128);
++            if need > data_budget.max(0) as u128 {
++                return decode_error("caf: packet table exceeds chunk size");
++            }
++        }
++
+         let valid_frames = reader.read_be_i64()?;
+         if valid_frames < 0 {
+             error!("invalid number of frames in the packet table ({valid_frames})");
+@@ -499,6 +545,7 @@ impl PacketTable {
+             (0, 0) => {
+                 for _ in 0..total_packets {
+                     let size = read_variable_length_integer(reader)?;
++                    limit_caf_packet_size(size)?;
+                     let frames = Duration::from(read_variable_length_integer(reader)?);
+                     packets.push(CafPacket {
+                         size,
+@@ -516,6 +563,7 @@ impl PacketTable {
+             (0, frames_per_packet) => {
+                 for _ in 0..total_packets {
+                     let size = read_variable_length_integer(reader)?;
++                    limit_caf_packet_size(size)?;
+                     let frames = Duration::from(frames_per_packet);
+                     packets.push(CafPacket {
+                         size,
+@@ -533,6 +581,7 @@ impl PacketTable {
+             (bytes_per_packet, 0) => {
+                 for _ in 0..total_packets {
+                     let size = bytes_per_packet as u64;
++                    limit_caf_packet_size(size)?;
+                     let frames = Duration::from(read_variable_length_integer(reader)?);
+                     packets.push(CafPacket {
+                         size,
+diff --git a/symphonia-format-caf/src/demuxer.rs b/symphonia-format-caf/src/demuxer.rs
+index 19ceb28..406cbbd 100644
+--- a/symphonia-format-caf/src/demuxer.rs
++++ b/symphonia-format-caf/src/demuxer.rs
+@@ -141,6 +141,7 @@ impl FormatReader for CafReader<'_> {
+                     return Ok(None);
+                 };
+ 
++                limit_caf_packet_size(bytes_to_read)?;
+                 let buf = self.reader.read_boxed_slice(bytes_to_read as usize)?;
+ 
+                 Ok(Some(Packet::new(0, pts, dur, buf)))
+@@ -148,6 +149,7 @@ impl FormatReader for CafReader<'_> {
+             PacketInfo::VariableAudioPacket { packets, current_packet_index } => {
+                 if let Some(packet) = packets.get(*current_packet_index) {
+                     *current_packet_index += 1;
++                    limit_caf_packet_size(packet.size)?;
+                     let buffer = self.reader.read_boxed_slice(packet.size as usize)?;
+                     Ok(Some(Packet::new(0, packet.start_frame, packet.frames, buffer)))
+                 }

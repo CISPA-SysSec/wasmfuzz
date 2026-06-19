@@ -1,6 +1,6 @@
 --- a/src/decoder/image.rs
 +++ b/src/decoder/image.rs
-@@ -911,6 +911,10 @@
+@@ -911,12 +911,41 @@ impl Image {
          let chunk_dims = self.chunk_dimensions()?;
          let data_dims = self.chunk_data_dimensions(chunk_index)?;
  
@@ -11,3 +11,37 @@
          let chunk_row_bytes: usize = layout.tiff_row_bytes;
          let data_row_bytes: usize = layout.chunk_row_bytes(data_dims.0)?;
  
+-        // TODO: Should these return errors instead?
+-        assert!(layout.minimum_row_stride >= data_row_bytes);
+-        assert!(buf.len() >= layout.row_stride * (data_dims.1 as usize - 1) + data_row_bytes);
++        if layout.minimum_row_stride < data_row_bytes {
++            return Err(TiffError::FormatError(
++                TiffFormatError::InconsistentSizesEncountered,
++            ));
++        }
++
++        if layout.row_stride == 0 {
++            return Err(TiffError::FormatError(
++                TiffFormatError::InconsistentSizesEncountered,
++            ));
++        }
++
++        let height = data_dims.1 as usize;
++        let required_chunk_bytes = if height == 0 {
++            data_row_bytes
++        } else {
++            layout
++                .row_stride
++                .checked_mul(height - 1)
++                .and_then(|v| v.checked_add(data_row_bytes))
++                .ok_or(TiffError::LimitsExceeded)?
++        };
++        if buf.len() < required_chunk_bytes {
++            return Err(TiffError::UsageError(UsageError::InsufficientOutputBufferSize {
++                needed: required_chunk_bytes,
++                provided: buf.len(),
++            }));
++        }
+ 
+         let is_all_bits = samples == data_samples;
+         let is_output_chunk_rows = layout.row_stride == chunk_row_bytes;

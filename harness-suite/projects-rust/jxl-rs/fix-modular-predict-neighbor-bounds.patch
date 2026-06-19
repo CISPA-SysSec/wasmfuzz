@@ -1,0 +1,46 @@
+Subject: [PATCH] bound modular palette neighbor pixel lookups
+---
+diff --git a/jxl/src/frame/modular/predict.rs b/jxl/src/frame/modular/predict.rs
+index d5907c3..dd3b49b 100644
+--- a/jxl/src/frame/modular/predict.rs
++++ b/jxl/src/frame/modular/predict.rs
+@@ -136,6 +136,11 @@ impl PredictionData {
+         )
+     }
+ 
++    #[inline]
++    fn neighbor_pixel(row: &[i32], x: usize, fallback: i32) -> i32 {
++        row.get(x).copied().unwrap_or(fallback)
++    }
++
+     #[allow(clippy::too_many_arguments)]
+     pub fn get_with_neighbors(
+         rect: &Image<i32>,
+@@ -208,7 +213,11 @@ impl PredictionData {
+         let leftleft = if x > 1 {
+             rect.row(y)[x - 2]
+         } else if let Some(l) = rect_left {
+-            l.row(y)[xsize + x - 2]
++            if xsize + x >= 2 {
++                Self::neighbor_pixel(l.row(y), xsize + x - 2, left)
++            } else {
++                left
++            }
+         } else {
+             left
+         };
+@@ -229,12 +238,12 @@ impl PredictionData {
+             }
+         } else if y > 0 {
+             if let Some(r) = rect_right {
+-                r.row(y - 1)[x + 2 - rect.size().0]
++                Self::neighbor_pixel(r.row(y - 1), x + 2 - rect.size().0, topright)
+             } else {
+                 topright
+             }
+         } else if let Some(tr) = rect_top_right {
+-            tr.row(ysize - 1)[x + 2 - rect.size().0]
++            Self::neighbor_pixel(tr.row(ysize - 1), x + 2 - rect.size().0, topright)
+         } else {
+             topright
+         };

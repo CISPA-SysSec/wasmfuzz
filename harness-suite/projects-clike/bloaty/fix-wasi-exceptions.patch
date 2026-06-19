@@ -1,0 +1,101 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3a30979..93a742a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -327,7 +327,7 @@ list(APPEND LIBBLOATY_LIBS Threads::Threads)
+ 
+ if(DEFINED ENV{LIB_FUZZING_ENGINE})
+   message("LIB_FUZZING_ENGINE set, building fuzz_target instead of Bloaty")
+-  add_executable(fuzz_target tests/fuzz_target.cc)
++  add_executable(fuzz_target tests/fuzz_target.cc tests/wasmfuzz_eh.cc)
+   target_link_libraries(fuzz_target ${LIBBLOATY_LIBS} $ENV{LIB_FUZZING_ENGINE})
+ else()
+   add_executable(bloaty src/main.cc)
+diff --git a/tests/fuzz_target.cc b/tests/fuzz_target.cc
+index cbddb0d..3495da3 100644
+--- a/tests/fuzz_target.cc
++++ b/tests/fuzz_target.cc
+@@ -12,6 +12,15 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#ifdef __wasi__
++#include <cstdio>
++#include <exception>
++
++extern "C" void wasmfuzz_exit_testcase()
++    __attribute__((__noreturn__))
++    __attribute__((__import_module__("wasmfuzz"), __import_name__("exit_testcase")));
++#endif
++
+ #include <string_view>
+ 
+ #include "bloaty.h"
+@@ -60,6 +69,9 @@ void RunBloaty(const InputFileFactory& factory,
+ }  // namespace bloaty
+ 
+ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
++#ifdef __wasi__
++  try {
++#endif
+   const char *data2 = reinterpret_cast<const char*>(data);
+   bloaty::StringPieceInputFileFactory factory(string_view(data2, size));
+ 
+@@ -71,5 +83,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+   RunBloaty(factory, "inlines");
+   RunBloaty(factory, "armembers");
+ 
++#ifdef __wasi__
++  } catch (const std::exception& e) {
++    std::printf("exception: %s\n", e.what());
++    wasmfuzz_exit_testcase();
++  } catch (...) {
++    std::printf("unknown exception\n");
++    wasmfuzz_exit_testcase();
++  }
++#endif
++
+   return 0;
+ }
+diff --git a/tests/wasmfuzz_eh.cc b/tests/wasmfuzz_eh.cc
+new file mode 100644
+index 0000000..ebcf0ca
+--- /dev/null
++++ b/tests/wasmfuzz_eh.cc
+@@ -0,0 +1,36 @@
++#ifdef __wasi__
++
++#include <cstdio>
++#include <exception>
++
++extern "C" void wasmfuzz_exit_testcase()
++    __attribute__((__noreturn__))
++    __attribute__((__import_module__("wasmfuzz"), __import_name__("exit_testcase")));
++
++[[noreturn]] static void wasmfuzz_on_terminate() {
++  if (auto eptr = std::current_exception()) {
++    try {
++      std::rethrow_exception(eptr);
++    } catch (const std::exception& e) {
++      std::printf("exception: %s\n", e.what());
++    } catch (...) {
++      std::printf("unknown exception\n");
++    }
++  } else {
++    std::printf("terminate without active exception\n");
++  }
++  wasmfuzz_exit_testcase();
++}
++
++struct WasmfuzzEhInit {
++  WasmfuzzEhInit() { std::set_terminate(wasmfuzz_on_terminate); }
++};
++
++static WasmfuzzEhInit wasmfuzz_eh_init;
++
++extern "C" void abort(void) {
++  std::printf("abort() called\n");
++  wasmfuzz_exit_testcase();
++}
++
++#endif

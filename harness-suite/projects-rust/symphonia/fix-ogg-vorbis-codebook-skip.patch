@@ -1,0 +1,64 @@
+diff --git a/symphonia-format-ogg/src/mappings/vorbis.rs b/symphonia-format-ogg/src/mappings/vorbis.rs
+index 6159675..3e9eb6d 100644
+--- a/symphonia-format-ogg/src/mappings/vorbis.rs
++++ b/symphonia-format-ogg/src/mappings/vorbis.rs
+@@ -478,6 +478,10 @@ pub fn skip_codebook(bs: &mut BitReaderRtl<'_>) -> Result<()> {
+     // Read and unpack vector quantization (VQ) lookup table.
+     let lookup_type = bs.read_bits_leq32(4)?;
+ 
++    if codebook_dimensions == 0 && (lookup_type & 0xf) != 0 {
++        return decode_error("ogg (vorbis): zero-dimension codebook with VQ lookup");
++    }
++
+     match lookup_type & 0xf {
+         0 => (),
+         1 | 2 => {
+@@ -488,8 +492,11 @@ pub fn skip_codebook(bs: &mut BitReaderRtl<'_>) -> Result<()> {
+ 
+             // Lookup type is either 1 or 2 as per outer match.
+             let lookup_values = match lookup_type {
+-                1 => lookup1_values(codebook_entries, codebook_dimensions),
+-                2 => codebook_entries * u32::from(codebook_dimensions),
++                1 => lookup1_values(codebook_entries, codebook_dimensions)?,
++                2 => match codebook_entries.checked_mul(u32::from(codebook_dimensions)) {
++                    Some(v) => v,
++                    None => return decode_error("ogg (vorbis): codebook lookup size overflow"),
++                },
+                 _ => unreachable!(),
+             };
+ 
+@@ -718,14 +725,25 @@ pub fn ilog(x: u32) -> u32 {
+ }
+ 
+ #[inline(always)]
+-fn lookup1_values(entries: u32, dimensions: u16) -> u32 {
+-    // (value ^ dimensions) <= entries
+-    // [(value ^ dimensions) ^ (1 / dimensions)] = lower[entries ^ (1 / dimensions)]
+-    // value = lower[entries ^ (1 / dimensions)]
+-    let value = (entries as f32).powf(1.0f32 / f32::from(dimensions)).floor() as u32;
+-
+-    assert!(value.pow(u32::from(dimensions)) <= entries);
+-    assert!((value + 1).pow(u32::from(dimensions)) > entries);
++fn lookup1_values(entries: u32, dimensions: u16) -> Result<u32> {
++    if dimensions == 0 {
++        return decode_error("ogg (vorbis): invalid codebook dimensions for lookup");
++    }
+ 
+-    value
++    let d = u32::from(dimensions);
++    let mut x = 1u32;
++    loop {
++        let xpow = match x.checked_pow(d) {
++            Some(p) => p,
++            None => return decode_error("ogg (vorbis): codebook lookup size overflow"),
++        };
++        if xpow > entries {
++            break;
++        }
++        x = x.saturating_add(1);
++        if x == u32::MAX {
++            return decode_error("ogg (vorbis): invalid codebook lookup size");
++        }
++    }
++    Ok(x - 1)
+ }

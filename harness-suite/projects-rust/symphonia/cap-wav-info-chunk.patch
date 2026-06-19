@@ -1,0 +1,17 @@
+diff --git a/symphonia-format-riff/src/wave/chunks.rs b/symphonia-format-riff/src/wave/chunks.rs
+index 41d9314..41db401 100644
+--- a/symphonia-format-riff/src/wave/chunks.rs
++++ b/symphonia-format-riff/src/wave/chunks.rs
+@@ -598,7 +598,11 @@ pub struct InfoChunk {
+ 
+ impl ParseChunk for InfoChunk {
+     fn parse<B: ReadBytes>(reader: &mut B, tag: [u8; 4], len: u32) -> Result<InfoChunk> {
+-        // TODO: Apply limit.
++        // Hard cap: malicious INFO sub-chunks must not force multi-gigabyte allocations.
++        const MAX_RIFF_INFO_CHUNK_BYTES: u32 = 32 * 1024 * 1024;
++        if len > MAX_RIFF_INFO_CHUNK_BYTES {
++            return decode_error("wav: info chunk length exceeds limit");
++        }
+         let buf = reader.read_boxed_slice_exact(len as usize)?;
+         Ok(InfoChunk { tag, buf })
+     }

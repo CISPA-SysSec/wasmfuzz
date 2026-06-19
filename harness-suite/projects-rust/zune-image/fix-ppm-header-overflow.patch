@@ -1,0 +1,77 @@
+diff --git a/crates/zune-ppm/src/decoder.rs b/crates/zune-ppm/src/decoder.rs
+index 1ed517cf..b82a6075 100644
+--- a/crates/zune-ppm/src/decoder.rs
++++ b/crates/zune-ppm/src/decoder.rs
+@@ -12,7 +12,7 @@ use alloc::{format, vec};
+ use core::fmt::{Debug, Formatter};
+ 
+ use zune_core::bit_depth::{BitDepth, BitType, ByteEndian};
+-use zune_core::bytestream::{ZByteIoError, ZByteReaderTrait, ZReader};
++use zune_core::bytestream::{ZByteIoError, ZByteReaderTrait, ZReader, ZSeekFrom};
+ use zune_core::colorspace::ColorSpace;
+ use zune_core::log::trace;
+ use zune_core::options::DecoderOptions;
+@@ -427,10 +427,15 @@ where
+             let byte = self.reader.read_u8();
+ 
+             if byte.is_ascii_digit() {
+-                // if it overflows, we have bigger problems.
++                let digit = usize::from(byte - b'0');
+                 value = value
+-                    .wrapping_mul(10_usize)
+-                    .wrapping_add(usize::from(byte - b'0'))
++                    .checked_mul(10)
++                    .and_then(|v| v.checked_add(digit))
++                    .ok_or_else(|| {
++                        PPMDecodeErrors::InvalidHeader(
++                            "Integer overflow while parsing PPM header field".to_string()
++                        )
++                    })?;
+             } else {
+                 // rewind to the previous byte
+                 self.reader.rewind(1)?;
+@@ -440,6 +445,17 @@ where
+         Ok(value)
+     }
+ 
++    /// Bytes left in the input from the current read position to end-of-stream.
++    fn input_raster_bytes_remaining(&mut self) -> Result<usize, PPMDecodeErrors> {
++        let cur = self.reader.position()?;
++        let stream_end = self.reader.seek(ZSeekFrom::End(0))?;
++        self.reader.seek(ZSeekFrom::Start(cur))?;
++        let remaining = stream_end.saturating_sub(cur);
++        usize::try_from(remaining).map_err(|_| {
++            PPMDecodeErrors::GenericStatic("Stream length does not fit in usize")
++        })
++    }
++
+     /// Return the image bit depth or none if headers
+     /// are not decoded.
+     ///
+@@ -537,9 +553,23 @@ where
+                 "Zero dimensions not allowed"
+             ));
+         }
+-        // okay check if the stream is large enough for the bit depth
+-        let size =
+-            self.width * self.height * self.colorspace.num_components() * self.bit_depth.size_of();
++        let components = self.colorspace.num_components();
++        let bytes_per_component = self.bit_depth.size_of();
++        let size = self
++            .width
++            .checked_mul(self.height)
++            .and_then(|n| n.checked_mul(components))
++            .and_then(|n| n.checked_mul(bytes_per_component))
++            .ok_or(PPMDecodeErrors::GenericStatic(
++                "Decoded image dimensions overflow buffer size computation"
++            ))?;
++
++        let available = self.input_raster_bytes_remaining()?;
++        if size > available {
++            return Err(PPMDecodeErrors::IoErrors(ZByteIoError::NotEnoughBytes(
++                available, size
++            )));
++        }
+ 
+         match self.bit_depth.bit_type() {
+             BitType::U8 => {

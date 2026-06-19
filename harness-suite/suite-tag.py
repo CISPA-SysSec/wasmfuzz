@@ -314,6 +314,7 @@ lod = [
     "lewton-parse_ogg",
     # "libarchive-ossfuzz", "libarchive-upstream", # TODO: OOMs with non-snapshot fuzzing
     "libpng-read",
+    "libheif-box", "libheif-file",
     "libsndfile", "libtiff-read_rgba", "libwebp-dwebp",
     "openjpeg-opj_decompress_J2K", # "openjpeg-opj_decompress_JP2",
     "openssl-acert", # "openssl-crl", "openssl-x509",  # openthread? # jbig2dec? # mbedtls?

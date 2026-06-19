@@ -1,0 +1,35 @@
+diff --git a/crates/zune-hdr/src/decoder.rs b/crates/zune-hdr/src/decoder.rs
+index 76aebeef..8415ed41 100644
+--- a/crates/zune-hdr/src/decoder.rs
++++ b/crates/zune-hdr/src/decoder.rs
+@@ -14,7 +14,7 @@ use core::iter::Iterator;
+ use core::option::Option::{self, *};
+ use core::result::Result::{self, *};
+ 
+-use zune_core::bytestream::{ZByteReaderTrait, ZReader};
++use zune_core::bytestream::{ZByteIoError, ZByteReaderTrait, ZReader};
+ use zune_core::colorspace::ColorSpace;
+ use zune_core::log::trace;
+ use zune_core::options::DecoderOptions;
+@@ -247,7 +247,20 @@ where
+     ///   error occurred during decoding.
+     pub fn decode(&mut self) -> Result<Vec<f32>, HdrDecodeErrors> {
+         self.decode_headers()?;
+-        let mut buffer = vec![0.0f32; self.width * self.height * 3];
++        let Some(elem_count) = self.output_buffer_size() else {
++            return Err(HdrDecodeErrors::Generic(
++                "Could not compute HDR output buffer size",
++            ));
++        };
++        let byte_size = elem_count
++            .checked_mul(core::mem::size_of::<f32>())
++            .ok_or(HdrDecodeErrors::Generic("HDR output size overflow"))?;
++        if byte_size > self.options.inflate_get_limit() {
++            return Err(HdrDecodeErrors::IoErrors(ZByteIoError::from(
++                "Decoded HDR output exceeds configured decoder limit",
++            )));
++        }
++        let mut buffer = vec![0.0f32; elem_count];
+ 
+         self.decode_into(&mut buffer)?;
+ 
