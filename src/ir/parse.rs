@@ -43,9 +43,14 @@ pub(crate) struct ModuleSpec {
     pub exported_funcs: HashMap<String, u32>,
     pub functions: Vec<FuncSpec>,
     pub memory_initializers: Vec<(Vec<u8>, usize)>,
-    pub scuffed_func_table_initializers: Vec<(Vec<u32>, usize)>,
+    // declared table sizes (module-defined tables only), one per table index
+    pub func_table_sizes: Vec<u32>,
+    // active element segments: (table_index, offset, func_indices)
+    pub func_table_inits: Vec<(u32, usize, Vec<u32>)>,
     pub globals: Vec<Value>,
     pub initial_mem_pages: usize,
+    // module-declared memory max in pages; memory.grow past this returns -1
+    pub initial_mem_pages_max: Option<u32>,
     pub start_func: Option<u32>,
 }
 
@@ -361,8 +366,10 @@ impl ModuleSpec {
             exported_funcs: HashMap::default(),
             functions: import_funcs, // will be extended later
             initial_mem_pages: 0,
+            initial_mem_pages_max: None,
             memory_initializers: Vec::new(),
-            scuffed_func_table_initializers: Vec::new(),
+            func_table_sizes: Vec::new(),
+            func_table_inits: Vec::new(),
             globals: Vec::new(),
             start_func: None,
         };
@@ -404,34 +411,45 @@ impl ModuleSpec {
                 Payload::ElementSection(_elements) => {
                     for el in _elements {
                         let el = el?;
+                        let mut funcs = Vec::new();
+                        match el.items {
+                            wasmparser::ElementItems::Functions(reader) => {
+                                for func_index in reader.into_iter() {
+                                    funcs.push(func_index?);
+                                }
+                            }
+                            wasmparser::ElementItems::Expressions(_ty, reader) => {
+                                for expr in reader.into_iter() {
+                                    let mut r = expr?.get_operators_reader();
+                                    match r.read()? {
+                                        Operator::RefFunc { function_index } => {
+                                            funcs.push(function_index)
+                                        }
+                                        // ref.null: u32::MAX sentinel, calling it traps
+                                        Operator::RefNull { .. } => funcs.push(u32::MAX),
+                                        other => unimplemented!("elem expr item: {other:?}"),
+                                    }
+                                    assert!(matches!(r.read()?, Operator::End));
+                                }
+                            }
+                        }
                         match el.kind {
                             wasmparser::ElementKind::Active {
                                 table_index,
                                 offset_expr,
                             } => {
-                                assert_eq!(table_index, None);
+                                let table_index = table_index.unwrap_or(0);
                                 let mut r = offset_expr.get_operators_reader();
                                 let val = op_to_const(r.read()?);
                                 assert!(matches!(r.read()?, wasmparser::Operator::End));
-                                let offset = val.as_i32();
-                                spec.scuffed_func_table_initializers
-                                    .push((Vec::new(), offset as usize));
+                                let offset = val.as_i32() as usize;
+                                spec.func_table_inits.push((table_index, offset, funcs));
                             }
+                            // passive/declared segments need table.init (unimplemented)
                             wasmparser::ElementKind::Declared => {}
                             wasmparser::ElementKind::Passive => {}
                         }
-                        match el.items {
-                            wasmparser::ElementItems::Functions(reader) => {
-                                for func_index in reader.into_iter() {
-                                    spec.scuffed_func_table_initializers[0]
-                                        .0
-                                        .push(func_index.unwrap());
-                                }
-                            }
-                            wasmparser::ElementItems::Expressions(..) => unimplemented!(),
-                        }
                     }
-                    // for funcref tables? not implemented
                 }
                 Payload::ExportSection(exports) => {
                     for export in exports {
@@ -454,12 +472,16 @@ impl ModuleSpec {
                 Payload::ImportSection(_) => {}
                 Payload::TableSection(tables) => {
                     for table in tables {
-                        let _table = table?;
+                        let table = table?;
+                        spec.func_table_sizes.push(table.ty.initial as u32);
                     }
                 }
                 Payload::MemorySection(memories) => {
                     for memory in memories {
-                        spec.initial_mem_pages = memory?.initial as usize;
+                        let memory = memory?;
+                        spec.initial_mem_pages = memory.initial as usize;
+                        // only a single memory is modelled: last one wins
+                        spec.initial_mem_pages_max = memory.maximum.map(|m| m as u32);
                     }
                 }
                 Payload::StartSection { func, .. } => {
@@ -471,6 +493,21 @@ impl ModuleSpec {
             }
         }
         Ok(spec)
+    }
+
+    pub(crate) fn func_type(&self, func_idx: u32) -> &wasmparser::FuncType {
+        &self.types[self.func_tyidxs[func_idx as usize] as usize]
+    }
+
+    // structural signature id: index of the first matching type-section entry.
+    // call_indirect compares the call site against the slot's id; u32::MAX is
+    // the uninitialized-slot sentinel and never a real id.
+    pub(crate) fn canonical_type_id(&self, ty: &wasmparser::FuncType) -> u32 {
+        self.types
+            .iter()
+            .position(|t| t == ty)
+            .map(|i| i as u32)
+            .unwrap_or(u32::MAX - 1)
     }
 
     pub(crate) fn format_location(&self, loc: crate::ir::Location) -> String {

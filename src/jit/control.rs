@@ -396,12 +396,16 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             let sigref = state.import_signature(sig, bcx);
             let table_len;
             let table_ptr;
+            let sig_ptr_raw;
             {
                 let table = &state.vmctx.tables[*table_index as usize];
                 table_ptr = table.as_ptr();
                 table_len = table.len();
+                sig_ptr_raw = state.vmctx.table_sigs[*table_index as usize].as_ptr();
             }
+            let expected_sig = state.spec.canonical_type_id(function_ty) as i64;
             let ptr = state.host_ptr(bcx, table_ptr);
+            let sig_ptr = state.host_ptr(bcx, sig_ptr_raw);
             // bounds check
             let bounds = bcx.ins().iconst(I32, table_len as i64);
             let oob = bcx
@@ -412,6 +416,19 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 .trapnz(oob, state.trap_abort(AbortCode::TableOutOfBounds));
 
             let callee_idx = bcx.ins().sextend(I64, callee_idx);
+
+            // signature check: a mismatch (or the u32::MAX empty-slot sentinel)
+            // traps before we dispatch to a bad pointer
+            let sig_offset = bcx.ins().imul_imm(callee_idx, 4);
+            let sig_addr = bcx.ins().iadd(sig_ptr, sig_offset);
+            let slot_sig = bcx.ins().load(I32, ir::MemFlags::trusted(), sig_addr, 0);
+            let want_sig = bcx.ins().iconst(I32, expected_sig);
+            let sig_mismatch = bcx.ins().icmp(IntCC::NotEqual, slot_sig, want_sig);
+            bcx.ins().trapnz(
+                sig_mismatch,
+                state.trap_abort(AbortCode::IndirectCallTypeMismatch),
+            );
+
             let callee_offset = bcx.ins().imul_imm(callee_idx, 8);
             let ptr = bcx.ins().iadd(ptr, callee_offset);
             let callee = bcx

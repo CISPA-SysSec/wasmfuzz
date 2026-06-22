@@ -13,14 +13,19 @@ pub(crate) unsafe extern "C" fn builtin_memory_size(vmctx: *mut VMContext) -> u3
 pub(crate) unsafe extern "C" fn builtin_memory_grow(delta: u32, vmctx: *mut VMContext) -> u32 {
     unsafe {
         let vmctx = &mut *vmctx;
-        if vmctx.heap_pages.saturating_add(delta) > vmctx.heap_pages_limit_hard {
+        let new_pages = vmctx.heap_pages.saturating_add(delta);
+        // growing past the module-declared max fails (-1) without trapping
+        if new_pages > vmctx.heap_pages_limit_module {
+            return u32::MAX;
+        }
+        if new_pages > vmctx.heap_pages_limit_hard {
             println!(
                 "builtin_memory_grow({}) exceeds hard limit. current_size={}",
                 delta, vmctx.heap_pages
             );
             return u32::MAX;
         }
-        if vmctx.heap_pages.saturating_add(delta) > vmctx.heap_pages_limit_soft {
+        if new_pages > vmctx.heap_pages_limit_soft {
             raise_trap(TrapReason::OutOfMemory);
         }
         vmctx.builtin_consume_fuel(delta as u64);

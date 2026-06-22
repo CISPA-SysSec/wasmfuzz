@@ -40,6 +40,8 @@ pub(crate) enum AbortCode {
     UnreachableReached,
     // Wasm-related traps
     TableOutOfBounds,
+    // call_indirect through an empty/ref.null slot or a signature mismatch
+    IndirectCallTypeMismatch,
     Unimplemented,
     // Cranelift traps
     StackOverflow,

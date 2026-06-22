@@ -5,6 +5,21 @@ use cranelift::prelude::InstBuilder;
 use cranelift::{frontend::FunctionBuilder, prelude::types::I32};
 use wasmparser::MemArg;
 
+// add the static memarg offset as a full pointer-width add (so a large offset
+// faults in the guard region instead of wrapping); zero offset stays a no-op
+fn fold_static_offset(
+    addr: ir::Value,
+    offset: u64,
+    state: &mut FuncTranslator,
+    bcx: &mut FunctionBuilder,
+) -> ir::Value {
+    if offset == 0 {
+        return addr;
+    }
+    let off = bcx.ins().iconst(state.ptr_ty(), offset as i64);
+    bcx.ins().iadd(addr, off)
+}
+
 fn translate_load(
     imm: &MemArg,
     opcode: ir::Opcode,
@@ -20,10 +35,10 @@ fn translate_load(
     let base = state.get_heap_base(bcx);
     let addr = bcx.ins().uextend(state.ptr_ty(), addr32);
     let addr = bcx.ins().iadd(base, addr);
+    let addr = fold_static_offset(addr, imm.offset, state, bcx);
     let mut flags = ir::MemFlags::new();
     flags.set_endianness(ir::Endianness::Little);
-    // NOTE: We're not verifying load bounds with imm.offset!
-    let offset = ir::immediates::Offset32::new(imm.offset as i32);
+    let offset = ir::immediates::Offset32::new(0);
     let (load, dfg) = bcx.ins().Load(opcode, result_ty, flags, offset, addr);
     let val = dfg.first_result(load);
 
@@ -52,9 +67,10 @@ fn translate_store(
     let base = state.get_heap_base(bcx);
     let addr = bcx.ins().uextend(state.ptr_ty(), addr32);
     let addr = bcx.ins().iadd(base, addr);
+    let addr = fold_static_offset(addr, imm.offset, state, bcx);
     let mut flags = ir::MemFlags::new();
     flags.set_endianness(ir::Endianness::Little);
-    let offset = ir::immediates::Offset32::new(imm.offset as i32);
+    let offset = ir::immediates::Offset32::new(0);
 
     state.iter_passes(bcx, |pass, ctx| {
         pass.instrument_memory_store(addr32, imm.offset as u32, val, val_ty, opcode, ctx)

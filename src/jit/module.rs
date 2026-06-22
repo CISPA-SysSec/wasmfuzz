@@ -61,6 +61,7 @@ impl TrapKind {
             Self::Abort(AbortCode::HeapOutOfBounds) => "abort/heap-oob".red(),
             Self::Abort(AbortCode::StackOverflow) => "abort/stack-overflow".red(),
             Self::Abort(AbortCode::IntegerDivisionByZero) => "abort/div-zero".red(),
+            Self::Abort(AbortCode::IndirectCallTypeMismatch) => "abort/call-indirect-sig".red(),
             Self::Abort(_) => "abort/unk".red(),
             Self::SwarmShortCircuit(_) => "swarm-short-circuit".green(),
             Self::OutOfFuel(_) => "out-of-fuel".cyan(),
@@ -284,10 +285,14 @@ impl<'s> ModuleTranslator<'s> {
             .finalize_definitions()
             .expect("failed to finalize definition");
 
-        for (tablei, (table, offset)) in spec.scuffed_func_table_initializers.iter().enumerate() {
-            for (i, f) in table.iter().enumerate() {
+        for (table_index, offset, funcs) in spec.func_table_inits.iter() {
+            for (i, f) in funcs.iter().enumerate() {
+                // ref.null slot: leave the sentinel so a call through it traps
+                if *f == u32::MAX {
+                    continue;
+                }
                 let ptr = self.module.get_finalized_function(self.func_ids[f]);
-                self.vmctx.tables[tablei][i + *offset] = ptr as usize;
+                self.vmctx.tables[*table_index as usize][i + *offset] = ptr as usize;
             }
         }
 

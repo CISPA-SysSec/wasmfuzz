@@ -122,8 +122,4 @@ opt-level = 3
 debug = true
 
 [dev-dependencies]
-criterion = "0.8.2"
-
-[[bench]]
-name = "union_bitboxes"
-harness = false
+wast = "249"

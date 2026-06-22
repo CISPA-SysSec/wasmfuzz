@@ -68,6 +68,8 @@ pub(crate) enum Subcommand {
         input_size_limit: Option<usize>,
         #[clap(long)]
         memory_limit_pages: Option<u32>,
+        #[clap(long, default_value = "2000000000")]
+        instruction_limit: u64,
     },
     /// Check the system configuration and WebAssembly module for potential issues.
     Doctor {
@@ -259,6 +261,7 @@ pub(crate) fn main() {
             run_from_snapshot,
             input_size_limit,
             memory_limit_pages,
+            instruction_limit,
         } => {
             let inputs = gather_inputs_paths(&None, &inputs, true);
             let mod_spec = parse_program(&program);
@@ -272,7 +275,7 @@ pub(crate) fn main() {
                     ..TracingOptions::default()
                 })
                 .verbose(verbose_jit)
-                .instruction_limit(Some(2_000_000_000))
+                .instruction_limit(Some(instruction_limit))
                 .optimize_for_compilation_time(inputs.len() <= 10)
                 .run_from_snapshot(*run_from_snapshot)
                 .memory_limit_pages(memory_limit_pages)

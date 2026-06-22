@@ -22,9 +22,15 @@ pub(crate) struct VMContext {
     pub heap_snapshot_is_initial: bool,
     pub heap_pages_limit_soft: u32,
     pub heap_pages_limit_hard: u32,
+    // module-declared memory max in pages; grow past this returns -1.
+    // independent of the fuzzer soft/hard caps. u32::MAX means no max.
+    pub heap_pages_limit_module: u32,
     pub globals: Box<[u64]>,
     pub globals_snapshot: Vec<u64>,
     pub tables: Vec<Box<[usize]>>,
+    // per-slot signature ids, parallel to `tables`; u32::MAX when uninitialized.
+    // call_indirect checks these to reject mismatched/empty slots.
+    pub table_sigs: Vec<Box<[u32]>>,
     pub debugstrs: Vec<String>,
     pub input_ptr: u32,
     pub input_size: usize,
@@ -44,23 +50,53 @@ impl VMContext {
             .map(|v| v.as_bits())
             .collect::<Box<[_]>>();
 
-        // These tables need to be backfilled with each function's code pointer
-        let tables = module
-            .scuffed_func_table_initializers
-            .iter()
-            // trapped at unknown pc 0xdeadf00f: call_indirect to
-            .map(|(table, offset)| vec![0xdeadf00fusize; table.len() + *offset].into_boxed_slice())
+        // one function table per declared table, sized to the declared minimum
+        // but grown if an element segment reaches further (covers the
+        // no-TableSection / imported-table cases). slots default to the
+        // 0xdeadf00f sentinel so calling an uninitialized one traps.
+        let mut table_sizes: Vec<usize> =
+            module.func_table_sizes.iter().map(|&n| n as usize).collect();
+        for (table_index, offset, funcs) in &module.func_table_inits {
+            let needed = offset + funcs.len();
+            let idx = *table_index as usize;
+            if idx >= table_sizes.len() {
+                table_sizes.resize(idx + 1, 0);
+            }
+            table_sizes[idx] = table_sizes[idx].max(needed);
+        }
+        let tables: Vec<Box<[usize]>> = table_sizes
+            .into_iter()
+            .map(|len| vec![0xdeadf00fusize; len].into_boxed_slice())
             .collect();
 
+        // signature ids parallel to `tables`; ref.null slots stay u32::MAX
+        let mut table_sigs: Vec<Box<[u32]>> = tables
+            .iter()
+            .map(|t| vec![u32::MAX; t.len()].into_boxed_slice())
+            .collect();
+        for (table_index, offset, funcs) in &module.func_table_inits {
+            for (i, f) in funcs.iter().enumerate() {
+                if *f == u32::MAX {
+                    continue;
+                }
+                table_sigs[*table_index as usize][offset + i] =
+                    module.canonical_type_id(module.func_type(*f));
+            }
+        }
+
+        // 8 GiB + 1-page guard region: a wasm32 effective address is
+        // addr32 (<4 GiB) + static offset (<4 GiB) + access width, so the full
+        // span must be reserved for large-offset OOB accesses to fault
+        let guard_mapping_size = (1usize << 33) + (1 << 16);
         let mut heap_alloc: Box<dyn ResettableMapping> = if RestoreDirtyLKMMapping::is_available() {
             Box::new(RestoreDirtyLKMMapping::new(
                 module.initial_mem_pages << 16,
-                1 << 32,
+                guard_mapping_size,
             ))
         } else {
             Box::new(CowResetMapping::new(
                 module.initial_mem_pages << 16,
-                1 << 32,
+                guard_mapping_size,
             ))
         };
 
@@ -77,6 +113,7 @@ impl VMContext {
             heap_pages: module.initial_mem_pages as u32,
             heap_pages_limit_soft: crate::MEMORY_PAGES_LIMIT,
             heap_pages_limit_hard: crate::MEMORY_PAGES_LIMIT,
+            heap_pages_limit_module: module.initial_mem_pages_max.unwrap_or(u32::MAX),
             fuel: 0,
             fuel_init: u32::MAX as u64,
             heap_pages_snapshot: module.initial_mem_pages as u32,
@@ -85,6 +122,7 @@ impl VMContext {
             globals_snapshot: globals.to_vec(),
             globals,
             tables,
+            table_sigs,
             host_ptrs: 0xf00dcafe as *const _,
             host_ptrs_backing: RefCell::new(Vec::new()),
             debugstrs: Vec::new(),
@@ -147,6 +185,7 @@ impl VMContext {
             .map(|v| v.as_bits())
             .collect::<Box<[_]>>();
         self.globals_snapshot.copy_from_slice(&globals);
+        self.heap_pages_limit_module = from.initial_mem_pages_max.unwrap_or(u32::MAX);
 
         // Initialize memory and snapshot
         self.heap_alloc.resize(from.initial_mem_pages << 16);
