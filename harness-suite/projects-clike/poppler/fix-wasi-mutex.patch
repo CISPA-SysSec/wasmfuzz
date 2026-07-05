@@ -1,0 +1,271 @@
+diff --git a/poppler/Annot.h b/poppler/Annot.h
+index 4db6af6..522c3ef 100644
+--- a/poppler/Annot.h
++++ b/poppler/Annot.h
+@@ -58,7 +58,7 @@
+ 
+ #include <array>
+ #include <memory>
+-#include <mutex>
++#include "PopplerMutex.h"
+ #include <vector>
+ 
+ #include "AnnotStampImageHelper.h"
+@@ -829,7 +829,7 @@ protected:
+     bool ok;
+ 
+     bool hasRef;
+-    mutable std::recursive_mutex mutex;
++    mutable PopplerRecursiveMutex mutex;
+ 
+     bool hasBeenUpdated = false;
+     Ref updatedAppearanceStream = Ref::INVALID(); // {-1,-1} if updateAppearanceStream has never been called
+diff --git a/poppler/Array.h b/poppler/Array.h
+index b94caee..4a4c1cd 100644
+--- a/poppler/Array.h
++++ b/poppler/Array.h
+@@ -31,7 +31,7 @@
+ #define ARRAY_H
+ 
+ #include <atomic>
+-#include <mutex>
++#include "PopplerMutex.h"
+ #include <vector>
+ 
+ #include "poppler_private_export.h"
+@@ -80,7 +80,7 @@ public:
+ private:
+     XRef *xref; // the xref table for this PDF file
+     std::vector<Object> elems; // array of elements
+-    mutable std::recursive_mutex mutex;
++    mutable PopplerRecursiveMutex mutex;
+ };
+ 
+ //------------------------------------------------------------------------
+diff --git a/poppler/CairoFontEngine.h b/poppler/CairoFontEngine.h
+index 5230cf0..054d541 100644
+--- a/poppler/CairoFontEngine.h
++++ b/poppler/CairoFontEngine.h
+@@ -34,7 +34,7 @@
+ #define CAIROFONTENGINE_H
+ 
+ #include <memory>
+-#include <mutex>
++#include "PopplerMutex.h"
+ #include <vector>
+ 
+ #include <cairo-ft.h>
+@@ -124,7 +124,7 @@ public:
+ 
+ private:
+     FT_Library lib;
+-    mutable std::mutex mutex;
++    mutable PopplerMutex mutex;
+ 
+     // Cache of CairoFont for current document
+     // Most recently used is at the end of the vector.
+diff --git a/poppler/Catalog.h b/poppler/Catalog.h
+index b33f552..d5beb20 100644
+--- a/poppler/Catalog.h
++++ b/poppler/Catalog.h
+@@ -46,6 +46,7 @@
+ 
+ #include "poppler-config.h"
+ #include "poppler_private_export.h"
++#include "PopplerMutex.h"
+ #include "Object.h"
+ #include "Link.h"
+ #include "GfxState.h"
+@@ -325,7 +326,7 @@ private:
+     int catalogPdfMajorVersion = -1;
+     int catalogPdfMinorVersion = -1;
+ 
+-    mutable std::recursive_mutex mutex;
++    mutable PopplerRecursiveMutex mutex;
+ 
+ #if USE_CMS
+     GfxLCMSProfilePtr displayProfile;
+diff --git a/poppler/Dict.h b/poppler/Dict.h
+index df04a6f..d58cace 100644
+--- a/poppler/Dict.h
++++ b/poppler/Dict.h
+@@ -33,7 +33,7 @@
+ #define DICT_H
+ 
+ #include <atomic>
+-#include <mutex>
++#include "PopplerMutex.h"
+ #include <optional>
+ #include <string>
+ #include <vector>
+@@ -116,7 +116,7 @@ private:
+     XRef *xref; // the xref table for this PDF file
+     std::vector<DictEntry> entries;
+     std::atomic_bool sorted;
+-    mutable std::recursive_mutex mutex;
++    mutable PopplerRecursiveMutex mutex;
+ 
+     const DictEntry *find(std::string_view key) const;
+     DictEntry *find(std::string_view key);
+diff --git a/poppler/GlobalParams.cc b/poppler/GlobalParams.cc
+index 1b92f3c..efc12fd 100644
+--- a/poppler/GlobalParams.cc
++++ b/poppler/GlobalParams.cc
+@@ -1575,6 +1575,6 @@ bool GlobalParamsIniter::setCustomDataDir(const std::string &dir)
+     return false;
+ }
+ 
+-std::mutex GlobalParamsIniter::mutex;
++PopplerMutex GlobalParamsIniter::mutex;
+ int GlobalParamsIniter::count = 0;
+ std::string GlobalParamsIniter::customDataDir;
+diff --git a/poppler/GlobalParams.h b/poppler/GlobalParams.h
+index 5b0565c..a8145b4 100644
+--- a/poppler/GlobalParams.h
++++ b/poppler/GlobalParams.h
+@@ -48,7 +48,7 @@
+ #include <unordered_map>
+ #include <string>
+ #include <memory>
+-#include <mutex>
++#include "PopplerMutex.h"
+ #include <optional>
+ #include <utility>
+ #include <vector>
+@@ -221,9 +221,9 @@ private:
+ 
+     const UnicodeMap *utf8Map;
+ 
+-    mutable std::recursive_mutex mutex;
+-    mutable std::recursive_mutex unicodeMapCacheMutex;
+-    mutable std::recursive_mutex cMapCacheMutex;
++    mutable PopplerRecursiveMutex mutex;
++    mutable PopplerRecursiveMutex unicodeMapCacheMutex;
++    mutable PopplerRecursiveMutex cMapCacheMutex;
+ 
+     std::string popplerDataDir;
+ };
+@@ -240,7 +240,7 @@ public:
+     static bool setCustomDataDir(const std::string &dir);
+ 
+ private:
+-    static std::mutex mutex;
++    static PopplerMutex mutex;
+     static int count;
+ 
+     static std::string customDataDir;
+diff --git a/poppler/PDFDoc.h b/poppler/PDFDoc.h
+index 3b13973..ab2ac48 100644
+--- a/poppler/PDFDoc.h
++++ b/poppler/PDFDoc.h
+@@ -52,7 +52,7 @@
+ #define PDFDOC_H
+ 
+ #include <algorithm>
+-#include <mutex>
++#include "PopplerMutex.h"
+ 
+ #include "CryptoSignBackend.h"
+ 
+@@ -430,7 +430,7 @@ private:
+     int fopenErrno;
+ 
+     Goffset startXRefPos = -1; // offset of last xref table
+-    mutable std::recursive_mutex mutex;
++    mutable PopplerRecursiveMutex mutex;
+ };
+ 
+ #endif
+diff --git a/poppler/Page.h b/poppler/Page.h
+index 45ed187..aee790d 100644
+--- a/poppler/Page.h
++++ b/poppler/Page.h
+@@ -41,7 +41,7 @@
+ #define PAGE_H
+ 
+ #include <memory>
+-#include <mutex>
++#include "PopplerMutex.h"
+ 
+ #include "Object.h"
+ #include "PDFRectangle.h"
+@@ -250,7 +250,7 @@ private:
+     double duration; // page duration
+     int structParents; // integer key of page in structure parent tree
+     bool ok; // true if page is valid
+-    mutable std::recursive_mutex mutex;
++    mutable PopplerRecursiveMutex mutex;
+     // standalone widgets are special FormWidget's inside a Page that *are not*
+     // referenced from the Catalog's Field array. That means they are standlone,
+     // i.e. the PDF document does not have a FormField associated with them. We
+diff --git a/poppler/PopplerMutex.h b/poppler/PopplerMutex.h
+new file mode 100644
+index 0000000..692cb70
+--- /dev/null
++++ b/poppler/PopplerMutex.h
+@@ -0,0 +1,44 @@
++//========================================================================
++//
++// PopplerMutex.h - WASI-compatible mutex stubs for single-threaded builds
++//
++//========================================================================
++
++#ifndef POPPLER_MUTEX_H
++#define POPPLER_MUTEX_H
++
++#include <mutex>
++
++namespace poppler_mutex_detail {
++
++#ifdef __wasi__
++
++class RecursiveMutex
++{
++public:
++    void lock() noexcept {}
++    void unlock() noexcept {}
++    bool try_lock() noexcept { return true; }
++};
++
++class Mutex
++{
++public:
++    void lock() noexcept {}
++    void unlock() noexcept {}
++    bool try_lock() noexcept { return true; }
++};
++
++#else
++
++using RecursiveMutex = std::recursive_mutex;
++using Mutex = std::mutex;
++
++#endif
++
++} // namespace poppler_mutex_detail
++
++using PopplerRecursiveMutex = poppler_mutex_detail::RecursiveMutex;
++using PopplerMutex = poppler_mutex_detail::Mutex;
++
++#endif
+diff --git a/poppler/XRef.h b/poppler/XRef.h
+index f6ea3ae..c7c63ac 100644
+--- a/poppler/XRef.h
++++ b/poppler/XRef.h
+@@ -39,6 +39,7 @@
+ #define XREF_H
+ 
+ #include <functional>
++#include "PopplerMutex.h"
+ 
+ #include "poppler_private_export.h"
+ #include "Object.h"
+@@ -266,7 +267,7 @@ private:
+     Goffset mainXRefOffset; // position of the main XRef table/stream
+     bool scannedSpecialFlags; // true if scanSpecialFlags has been called
+     std::unique_ptr<BaseStream> strOwner; // ownership if any of str (can be null if others own the stream)
+-    mutable std::recursive_mutex mutex;
++    mutable PopplerRecursiveMutex mutex;
+     std::function<void()> xrefReconstructedCb;
+ 
+     RefRecursionChecker refsBeingFetched;

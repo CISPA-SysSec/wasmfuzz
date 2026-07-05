@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/libjxl/jxl-rs "$PROJECT/repo" e1fc42e19cb217410c0218fe37edd32c598c6adf
+git clone-rev.sh https://github.com/libjxl/jxl-rs "$PROJECT/repo" 041b060c9612aa3c7c194beb08a5ad931c7b6a09
 git -C "$PROJECT/repo" apply "$PROJECT/fuzz-decode-resource-limits.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/cap-untrusted-parse-dimensions.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-squeeze-empty-inputs.patch"
@@ -13,3 +13,7 @@ git -C "$PROJECT/repo" apply "$PROJECT/fix-entropy-restore-zero-rewind.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-extend-ref-frame-bounds.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-vardct-lf-rect-bounds.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-modular-predict-neighbor-bounds.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/fix-flush-output-grid-bounds.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/disable-simd.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/pr-811-fix-hangs.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/fix-fast-lossless-lz77-params.patch"

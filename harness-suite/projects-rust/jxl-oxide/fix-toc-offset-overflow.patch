@@ -1,0 +1,58 @@
+diff --git a/crates/jxl-frame/src/data/toc.rs b/crates/jxl-frame/src/data/toc.rs
+index 7aa67b6..0d9d40a 100644
+--- a/crates/jxl-frame/src/data/toc.rs
++++ b/crates/jxl-frame/src/data/toc.rs
+@@ -160,17 +160,22 @@ impl Toc {
+ }
+ 
+ impl Toc {
+-    pub(crate) fn adjust_offsets(&mut self, global_frame_offset: usize) {
++    pub(crate) fn adjust_offsets(&mut self, global_frame_offset: usize) -> Result<()> {
+         if global_frame_offset == 0 {
+-            return;
++            return Ok(());
+         }
+ 
+         for group in &mut self.groups {
+             group.offset = group
+                 .offset
+                 .checked_sub(global_frame_offset)
+-                .expect("group offset is smaller than global frame offset");
++                .ok_or_else(|| {
++                    jxl_bitstream::Error::ValidationFailed(
++                        "group offset is smaller than global frame offset",
++                    )
++                })?;
+         }
++        Ok(())
+     }
+ }
+ 
+@@ -214,8 +219,12 @@ impl Bundle<&crate::FrameHeader> for Toc {
+         let mut total_size = 0usize;
+         for &size in &sizes {
+             offsets.push(acc);
+-            acc += size as usize;
+-            total_size += size as usize;
++            acc = acc
++                .checked_add(size as usize)
++                .ok_or(jxl_bitstream::Error::ValidationFailed("group offset overflow"))?;
++            total_size = total_size
++                .checked_add(size as usize)
++                .ok_or(jxl_bitstream::Error::ValidationFailed("TOC total size overflow"))?;
+         }
+ 
+         let section_kinds = if entry_count == 1 {
+diff --git a/crates/jxl-frame/src/lib.rs b/crates/jxl-frame/src/lib.rs
+index 4ddbcc6..3717904 100644
+--- a/crates/jxl-frame/src/lib.rs
++++ b/crates/jxl-frame/src/lib.rs
+@@ -212,7 +212,7 @@ impl Bundle<FrameContext<'_>> for Frame {
+         }
+ 
+         let mut toc = Toc::parse(bitstream, &header)?;
+-        toc.adjust_offsets(base_offset);
++        toc.adjust_offsets(base_offset)?;
+         let data = toc.iter_bitstream_order().map(GroupData::from).collect();
+ 
+         let passes = &header.passes;

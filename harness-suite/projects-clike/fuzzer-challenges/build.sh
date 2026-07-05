@@ -4,8 +4,8 @@ source set-buildflags.sh
 
 cd "$PROJECT/repo"
 
-export CFLAGS="$CFLAGS $FUZZ_LDFLAGS"
-export CXXFLAGS="$CXXFLAGS $FUZZ_LDFLAGS"
+export CFLAGS="$CFLAGS $FUZZ_LDFLAGS -O0 -fno-lto"
+export CXXFLAGS="$CXXFLAGS $FUZZ_LDFLAGS -O0 -fno-lto"
 
 make compile
 # Note: test-u128 is hard to solve in WASM due to the u128 lowering.

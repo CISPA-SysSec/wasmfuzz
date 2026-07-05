@@ -1,0 +1,46 @@
+diff --git a/tools/cjxl_fuzzer.cc b/tools/cjxl_fuzzer.cc
+index 7243fc4..d9d6ef1 100644
+--- a/tools/cjxl_fuzzer.cc
++++ b/tools/cjxl_fuzzer.cc
+@@ -71,7 +71,11 @@ bool EncodeJpegXl(const FuzzSpec& spec, JxlMemoryManager* memory_manager) {
+   // Multi-threaded parallel runner. Limit to max 2 threads since the fuzzer
+   // itself is already multithreaded.
+   size_t num_threads =
++#if defined(__wasi__)
++      0;
++#else
+       std::min<size_t>(2, JxlThreadParallelRunnerDefaultNumWorkerThreads());
++#endif
+   auto runner = JxlThreadParallelRunnerMake(memory_manager, num_threads);
+   JxlEncoderPtr enc_ptr = JxlEncoderMake(memory_manager);
+   JxlEncoder* enc = enc_ptr.get();
+diff --git a/tools/djxl_fuzzer.cc b/tools/djxl_fuzzer.cc
+index 6f73dca..2389d32 100644
+--- a/tools/djxl_fuzzer.cc
++++ b/tools/djxl_fuzzer.cc
+@@ -91,7 +91,11 @@ bool DecodeJpegXl(const uint8_t* jxl, size_t size,
+   // Multi-threaded parallel runner. Limit to max 2 threads since the fuzzer
+   // itself is already multithreaded.
+   size_t num_threads =
++#if defined(__wasi__)
++      0;
++#else
+       std::min<size_t>(2, JxlThreadParallelRunnerDefaultNumWorkerThreads());
++#endif
+   auto runner = JxlThreadParallelRunnerMake(memory_manager, num_threads);
+ 
+   auto mt = std::make_unique<std::mt19937>(spec.random_seed);
+diff --git a/tools/streaming_fuzzer.cc b/tools/streaming_fuzzer.cc
+index de5df91..f6b0994 100644
+--- a/tools/streaming_fuzzer.cc
++++ b/tools/streaming_fuzzer.cc
+@@ -140,6 +140,9 @@ struct FuzzSpec {
+     spec.distance = lossless ? 0.0 : 0.01 + 0.00038132 * u16();
+ 
+     spec.num_threads = u8() & 0xF;
++#if defined(__wasi__)
++    spec.num_threads = 0;
++#endif
+ 
+     for (auto& int_opt : spec.int_options) {
+       int_opt.value = u8() % (int_opt.max - int_opt.min + 1) + int_opt.min;

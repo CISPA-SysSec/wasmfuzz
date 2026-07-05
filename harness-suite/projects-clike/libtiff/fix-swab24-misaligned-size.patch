@@ -1,0 +1,42 @@
+Subject: [PATCH] skip byte swap on misaligned buffer sizes
+---
+diff --git a/libtiff/tif_read.c b/libtiff/tif_read.c
+index c1440df..93719de 100644
+--- a/libtiff/tif_read.c
++++ b/libtiff/tif_read.c
+@@ -1750,27 +1750,31 @@ void _TIFFNoPostDecode(TIFF *tif, uint8_t *buf, tmsize_t cc)
+ void _TIFFSwab16BitData(TIFF *tif, uint8_t *buf, tmsize_t cc)
+ {
+     (void)tif;
+-    assert((cc & 1) == 0);
++    if ((cc & 1) != 0)
++        return;
+     TIFFSwabArrayOfShort((uint16_t *)buf, cc / 2);
+ }
+ 
+ void _TIFFSwab24BitData(TIFF *tif, uint8_t *buf, tmsize_t cc)
+ {
+     (void)tif;
+-    assert((cc % 3) == 0);
++    if (cc % 3 != 0)
++        return;
+     TIFFSwabArrayOfTriples((uint8_t *)buf, cc / 3);
+ }
+ 
+ void _TIFFSwab32BitData(TIFF *tif, uint8_t *buf, tmsize_t cc)
+ {
+     (void)tif;
+-    assert((cc & 3) == 0);
++    if ((cc & 3) != 0)
++        return;
+     TIFFSwabArrayOfLong((uint32_t *)buf, cc / 4);
+ }
+ 
+ void _TIFFSwab64BitData(TIFF *tif, uint8_t *buf, tmsize_t cc)
+ {
+     (void)tif;
+-    assert((cc & 7) == 0);
++    if ((cc & 7) != 0)
++        return;
+     TIFFSwabArrayOfDouble((double *)buf, cc / 8);
+ }

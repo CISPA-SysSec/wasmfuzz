@@ -1,0 +1,38 @@
+diff --git a/cpp/tests/fuzzing/fuzzer_init.h b/cpp/tests/fuzzing/fuzzer_init.h
+index bbf9120..a1b2c3d 100644
+--- a/cpp/tests/fuzzing/fuzzer_init.h
++++ b/cpp/tests/fuzzing/fuzzer_init.h
+@@ -2,9 +2,13 @@
+ #define FUZZER_INIT_H
+ 
+ #include <poppler-global.h>
++#ifndef __wasi__
+ #include <unistd.h>
+ #include <libgen.h>
+ #include <linux/limits.h>
++#else
++#include <limits.h>
++#endif
+ #include <string>
+ 
+ static void initialize_poppler_data_dir()
+@@ -13,6 +17,11 @@ static void initialize_poppler_data_dir()
+     if (initialized)
+         return;
+ 
++#ifdef __wasi__
++    // Generic font configuration does not require poppler-data at runtime.
++    initialized = true;
++    return;
++#else
+     char exe_path[PATH_MAX];
+     ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+     if (len != -1) {
+@@ -21,6 +30,7 @@ static void initialize_poppler_data_dir()
+         std::string data_dir = std::string(dir_path) + "/poppler-data";
+         poppler::set_data_dir(data_dir);
+     }
++#endif
+ 
+     initialized = true;
+ }

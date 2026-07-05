@@ -1,12 +1,10 @@
 diff --git a/lib/codebook.c b/lib/codebook.c
 --- a/lib/codebook.c
 +++ b/lib/codebook.c
-@@ -374,7 +374,10 @@ long vorbis_book_decode(codebook *book, oggpack_buffer *b){
- /* returns 0 on OK or -1 on eof *************************************/
- /* decode vector / dim granularity gaurding is done in the upper layer */
- long vorbis_book_decodevs_add(codebook *book,float *a,oggpack_buffer *b,int n){
--  if(book->used_entries>0){
-+  if(book->used_entries>0){
+@@ -407,6 +407,9 @@ long vorbis_book_decode(dec_codebook *book, oggpack_buffer *b){
+ long vorbis_book_decodevs_add(dec_codebook *book,float *a,oggpack_buffer *b,
+                               int n){
+   if(book->codelist){
 +    if(book->dim <= 0){
 +      return(-1);
 +    }

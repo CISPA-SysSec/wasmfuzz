@@ -1,0 +1,14 @@
+diff --git a/goo/gfile.cc b/goo/gfile.cc
+index 1111111..2222222 100644
+--- a/goo/gfile.cc
++++ b/goo/gfile.cc
+@@ -43,7 +43,9 @@
+ #    include <sys/stat.h>
+ #    include <fcntl.h>
+ #    include <cstring>
++#    ifndef __wasi__
+ #    include <pwd.h>
++#    endif
+ #endif // _WIN32
+ #include <cstdio>
+ #include <limits>

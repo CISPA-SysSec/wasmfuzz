@@ -1,0 +1,16 @@
+Subject: [PATCH] bounds-check modular flush_output grid index
+---
+diff --git a/jxl/src/frame/modular/mod.rs b/jxl/src/frame/modular/mod.rs
+index d643495..2fcce9c 100644
+--- a/jxl/src/frame/modular/mod.rs
++++ b/jxl/src/frame/modular/mod.rs
+@@ -989,6 +989,9 @@ impl FullModularImage {
+         }
+         let grid_is_none = self.buffer_info[buf_idx].grid_kind == ModularGridKind::None;
+         let grid_idx = if grid_is_none { 0 } else { group };
++        if grid_idx >= self.buffer_info[buf_idx].buffer_grid.len() {
++            return Err(Error::OutOfBounds(grid_idx));
++        }
+         if self.buffer_info[buf_idx].buffer_grid[grid_idx].get_status()
+             == BUFFER_STATUS_FINAL_RENDER
+         {

@@ -1,0 +1,13 @@
+--- a/src/reader.rs
++++ b/src/reader.rs
+@@ -731,9 +731,7 @@
+         if tag_size != 0 && tag_size < TAG_SIZE {
+             return Ok(None);
+         }
+-        let last_tag_offset = if tag_size != 0 {
+-            tag_size + entry
+-        } else {
++        let last_tag_offset = if tag_size != 0 { tag_size.safe_add(entry)? } else {
+             slice.len()
+         };
+         if last_tag_offset > slice.len() {

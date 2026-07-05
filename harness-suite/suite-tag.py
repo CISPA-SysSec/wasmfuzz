@@ -310,7 +310,7 @@ lod = [
     "graphite-font", #"image-script_png",
     "image-script_jpeg", "image-script_tiff",
     "image-script_ico", # "image-script_webp", # "image-script_guess",
-    "jxl-oxide-libfuzzer-decode", "jxl-rs-decode", "lcms-cms_transform_all",
+    "jxl-oxide-libfuzzer-decode", "jxl-rs-decode", "libjxl-djxl", "lcms-cms_transform_all",
     "lewton-parse_ogg",
     # "libarchive-ossfuzz", "libarchive-upstream", # TODO: OOMs with non-snapshot fuzzing
     "libpng-read",

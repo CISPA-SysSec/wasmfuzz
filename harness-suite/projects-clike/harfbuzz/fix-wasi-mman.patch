@@ -1,0 +1,14 @@
+diff --git a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -360,6 +360,10 @@
+ foreach check : check_headers
+   name = check[0]
+ 
++  if name == 'sys/mman.h' and host_machine.system() == 'wasi'
++    continue
++  endif
++
+   if cpp.has_header(name)
+     conf.set('HAVE_@0@'.format(name.to_upper().underscorify()), 1)
+   endif

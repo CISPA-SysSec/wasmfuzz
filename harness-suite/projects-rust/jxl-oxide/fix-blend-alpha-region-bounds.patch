@@ -1,0 +1,90 @@
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index c68fa3d..1163b9d 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -581,6 +581,17 @@ pub fn patch(
+     Ok(())
+ }
+ 
++fn blend_region_fits(
++    x: usize,
++    y: usize,
++    width: usize,
++    height: usize,
++    grid_width: usize,
++    grid_height: usize,
++) -> bool {
++    x.saturating_add(width) <= grid_width && y.saturating_add(height) <= grid_height
++}
++
+ fn blend_single(
+     mut base: MutableSubgrid<f32>,
+     new_grid: SharedSubgrid<f32>,
+@@ -594,30 +605,47 @@ fn blend_single(
+         height,
+     } = blend_params;
+ 
+-    let base_right = base_x.saturating_add(width);
+-    let base_bottom = base_y.saturating_add(height);
+-    let new_right = new_x.saturating_add(width);
+-    let new_bottom = new_y.saturating_add(height);
+-
+-    if base_right > base.width()
+-        || base_bottom > base.height()
+-        || new_right > new_grid.width()
+-        || new_bottom > new_grid.height()
++    if !blend_region_fits(base_x, base_y, width, height, base.width(), base.height())
++        || !blend_region_fits(new_x, new_y, width, height, new_grid.width(), new_grid.height())
+     {
+         return;
+     }
+ 
+-    let base_right = base_x.saturating_add(width);
+-    let base_bottom = base_y.saturating_add(height);
+-    let new_right = new_x.saturating_add(width);
+-    let new_bottom = new_y.saturating_add(height);
+-
+-    if base_right > base.width()
+-        || base_bottom > base.height()
+-        || new_right > new_grid.width()
+-        || new_bottom > new_grid.height()
+-    {
+-        return;
++    match mode {
++        BlendMode::Blend(BlendAlpha {
++            base: base_alpha,
++            new: Some(new_alpha),
++            ..
++        })
++        | BlendMode::MulAdd(BlendAlpha {
++            base: base_alpha,
++            new: Some(new_alpha),
++            ..
++        }) => {
++            if let Some(base_alpha) = base_alpha
++                && !blend_region_fits(
++                    base_x,
++                    base_y,
++                    width,
++                    height,
++                    base_alpha.width(),
++                    base_alpha.height(),
++                )
++            {
++                return;
++            }
++            if !blend_region_fits(
++                new_x,
++                new_y,
++                width,
++                height,
++                new_alpha.width(),
++                new_alpha.height(),
++            ) {
++                return;
++            }
++        }
++        _ => {}
+     }
+ 
+     match mode {

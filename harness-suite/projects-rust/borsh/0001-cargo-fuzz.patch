@@ -24,9 +24,9 @@ index 2a1e1907..6c62d1f7 100644
  [workspace]
 -members = ["borsh", "borsh-derive", "fuzz/fuzz-run", "benchmarks"]
 +members = ["borsh", "borsh-derive", "benchmarks"]
- 
- [workspace.package]
- # shared version of all public crates in the workspace
+ # benchmarks and fuzz need extra features to build, so keep them out of bare
+ # `cargo` invocations from the workspace root.
+ default-members = ["borsh", "borsh-derive"]
 diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
 new file mode 100644
 index 00000000..3f479181

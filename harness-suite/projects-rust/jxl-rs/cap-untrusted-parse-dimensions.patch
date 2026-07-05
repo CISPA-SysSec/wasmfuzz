@@ -242,22 +242,6 @@ index 82d091e..9b85dda 100644
                  *self.splines.borrow_mut() = s;
              }
  
-diff --git a/jxl/src/frame/group.rs b/jxl/src/frame/group.rs
-index b60a1ef..32cf8b4 100644
---- a/jxl/src/frame/group.rs
-+++ b/jxl/src/frame/group.rs
-@@ -223,7 +223,10 @@ fn dequant_and_transform_to_pixels<D: SimdDescriptor>(
-         {
-             let xs = covered_blocks_x(transform_type) as usize;
-             let ys = covered_blocks_y(transform_type) as usize;
--            let rect = lf_rects.as_ref().unwrap()[c];
-+            let rect = lf_rects
-+                .as_ref()
-+                .ok_or(Error::SectionTooShort)?
-+                [c];
-             for (y, lf) in lf.chunks_exact_mut(xs).enumerate().take(ys) {
-                 lf.copy_from_slice(&rect.row(y)[0..xs]);
-             }
 diff --git a/jxl/src/frame/render.rs b/jxl/src/frame/render.rs
 index 20a8271..009892f 100644
 --- a/jxl/src/frame/render.rs

@@ -1,7 +1,7 @@
 Subject: [PATCH] bound reference-frame blending and validate row lengths
 ---
 diff --git a/jxl/src/error.rs b/jxl/src/error.rs
-index e15b9ef..dd345e3 100644
+index 5519b6d..a78553c 100644
 --- a/jxl/src/error.rs
 +++ b/jxl/src/error.rs
 @@ -151,6 +151,8 @@ pub enum Error {
@@ -14,10 +14,10 @@ index e15b9ef..dd345e3 100644
      PatchesInvalidAlphaChannel(usize, usize),
      #[error("Invalid patch blend mode: {0}, limit is {1}")]
 diff --git a/jxl/src/features/blending.rs b/jxl/src/features/blending.rs
-index 24e7c1e..827b26f 100644
+index 34da7ff..6d77abd 100644
 --- a/jxl/src/features/blending.rs
 +++ b/jxl/src/features/blending.rs
-@@ -5,27 +5,44 @@
+@@ -5,10 +5,21 @@
  
  #![allow(clippy::needless_range_loop)]
  
@@ -29,33 +29,26 @@ index 24e7c1e..827b26f 100644
  
  use super::patches::{PatchBlendMode, PatchBlending};
  
-+fn check_blending_len<T: AsRef<[f32]>>(slice: &T, xsize: usize) -> Result<()> {
-+    let len = slice.as_ref().len();
++fn check_blending_len(slice: &[f32], xsize: usize) -> Result<()> {
++    let len = slice.len();
 +    if len != xsize {
 +        return Err(Error::BlendingBufferLengthMismatch(xsize, len));
 +    }
 +    Ok(())
 +}
 +
- #[inline]
+ #[inline(always)]
  fn maybe_clamp(v: f32, clamp: bool) -> f32 {
      if clamp { v.clamp(0.0, 1.0) } else { v }
- }
- 
--pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
-+pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]> + AsRef<[f32]>>(
-     bg: &mut [V],
-     fg: &[T],
-     color_blending: &PatchBlending,
+@@ -22,16 +33,22 @@ pub fn perform_blending(
      ec_blending: &[PatchBlending],
      extra_channel_info: &[ExtraChannelInfo],
+     tmp: &mut Vec<f32>,
 -) {
 +) -> Result<()> {
-     let has_alpha = extra_channel_info
-         .iter()
-         .any(|info| info.ec_type == ExtraChannel::Alpha);
+     // TODO(veluca): in many cases, the copy to temporary space seems redundant. Investigate more.
      let num_ec = extra_channel_info.len();
-     let xsize = bg[0].as_mut().len();
+     let xsize = bg[0].len();
 +    for slice in bg.iter() {
 +        check_blending_len(slice, xsize)?;
 +    }
@@ -63,111 +56,37 @@ index 24e7c1e..827b26f 100644
 +        check_blending_len(slice, xsize)?;
 +    }
  
-     let mut tmp = vec![vec![0.0f32; xsize]; 3 + num_ec];
+     // Fast path: if color is None (keep bg) and all ec are None, nothing to do.
+     if color_blending.mode == PatchBlendMode::None
+         && ec_blending.iter().all(|b| b.mode == PatchBlendMode::None)
+     {
+-        return;
++        return Ok(());
+     }
  
-@@ -259,6 +276,7 @@ pub fn perform_blending<T: AsRef<[f32]>, V: AsMut<[f32]>>(
+     // Fast path: Replace color + Replace/None ec -> copy fg directly to bg, no tmp needed.
+@@ -52,7 +69,7 @@ pub fn perform_blending(
+                     _ => unreachable!(),
+                 }
+             }
+-            return;
++            return Ok(());
+         }
+     }
+ 
+@@ -287,6 +304,7 @@ pub fn perform_blending(
      for i in 0..(3 + num_ec) {
-         bg[i].as_mut().copy_from_slice(&tmp[i]);
+         bg[i].copy_from_slice(&tmp[i * xsize..][..xsize]);
      }
 +    Ok(())
  }
  
  #[cfg(test)]
-@@ -340,7 +358,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             // Expected: output color is fg color
-             assert_all_almost_abs_eq(&bg_r, &fg_r, ABS_DELTA);
-@@ -377,7 +396,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             assert_all_almost_abs_eq(&bg_r, &expected_r, ABS_DELTA);
-             assert_all_almost_abs_eq(&bg_g, &expected_g, ABS_DELTA);
-@@ -439,7 +459,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             assert_all_almost_abs_eq(&bg_a, &[expected_a_val], ABS_DELTA);
-             assert_all_almost_abs_eq(&bg_r, &[expected_r_val], ABS_DELTA);
-@@ -503,7 +524,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             assert_all_almost_abs_eq(&bg_a, &[expected_a_val], ABS_DELTA);
-             assert_all_almost_abs_eq(&bg_r, &[expected_r_val], ABS_DELTA);
-@@ -567,7 +589,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             assert_all_almost_abs_eq(&bg_r, &[expected_r_val], ABS_DELTA);
-             assert_all_almost_abs_eq(&bg_g, &[expected_g_val], ABS_DELTA);
-@@ -604,7 +627,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             assert_all_almost_abs_eq(&bg_r, &expected_r, ABS_DELTA);
-             assert_all_almost_abs_eq(&bg_g, &expected_g, ABS_DELTA);
-@@ -698,7 +722,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             // Expected Color (Replace)
-             assert_all_almost_abs_eq(&bg_r, &fg_r, ABS_DELTA);
-@@ -738,7 +763,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             // Expected: output color is fg color due to fallback
-             assert_all_almost_abs_eq(&bg_r, &fg_r, ABS_DELTA);
-@@ -772,7 +798,8 @@ mod tests {
-                 &color_blending,
-                 &ec_blending,
-                 &extra_channel_info,
--            );
-+            )
-+            .unwrap();
- 
-             // Expect output slices to also be empty and unchanged.
-             assert_eq!(bg_r.len(), 0);
 diff --git a/jxl/src/features/patches.rs b/jxl/src/features/patches.rs
-index 61946d9..0a82a13 100644
+index 22cdb25..def0c08 100644
 --- a/jxl/src/features/patches.rs
 +++ b/jxl/src/features/patches.rs
-@@ -748,13 +748,17 @@ impl PatchesDictionary {
+@@ -750,14 +750,18 @@ impl PatchesDictionary {
              }
  
              let blending_idx = pos_idx * self.blendings_stride;
@@ -178,6 +97,7 @@ index 61946d9..0a82a13 100644
                  &self.blendings[blending_idx],
                  &self.blendings[blending_idx + 1..],
                  extra_channel_info,
+                 blending_scratch,
 -            );
 +            )
 +            .is_err()
@@ -188,95 +108,51 @@ index 61946d9..0a82a13 100644
      }
  }
 diff --git a/jxl/src/render/stages/blending.rs b/jxl/src/render/stages/blending.rs
-index d53eda7..a2dfc9e 100644
+index b5c4856..08238fc 100644
 --- a/jxl/src/render/stages/blending.rs
 +++ b/jxl/src/render/stages/blending.rs
-@@ -104,10 +104,33 @@ impl RenderPipelineInPlaceStage for BlendingStage {
-         }
+@@ -132,19 +132,26 @@ impl RenderPipelineInPlaceStage for BlendingStage {
  
-         let fg_x0: usize = fg_x0 as usize;
--        let fg_x1: usize = fg_x1 as usize;
-+        let mut fg_x1: usize = fg_x1 as usize;
-         let bg_x0: usize = bg_x0 as usize;
--        let bg_x1: usize = bg_x1 as usize;
-+        let mut bg_x1: usize = bg_x1 as usize;
-         let fg_y0: usize = fg_y0 as usize;
-+        let mut clamp_fg_x1 = fg_x1;
-+        if let Some(rf) = self.reference_frames[self.blending_info.source as usize].as_ref() {
-+            let (ref_w, ref_h) = rf.frame[0].size();
-+            if fg_y0 < ref_h && fg_x0 < ref_w {
-+                clamp_fg_x1 = clamp_fg_x1.min(ref_w);
-+            }
-+        }
-+        for i in 0..num_ec {
-+            if let Some(rf) = self.reference_frames[self.ec_blending_info[i].source as usize].as_ref()
-+            {
-+                let (ref_w, ref_h) = rf.frame[3 + i].size();
-+                if fg_y0 < ref_h && fg_x0 < ref_w {
-+                    clamp_fg_x1 = clamp_fg_x1.min(ref_w);
-+                }
-+            }
-+        }
-+        if clamp_fg_x1 <= fg_x0 {
-+            return;
-+        }
-+        if clamp_fg_x1 < fg_x1 {
-+            fg_x1 = clamp_fg_x1;
-+            bg_x1 = bg_x0 + (fg_x1 - fg_x0);
-+        }
+         let total_channels = 3 + num_ec;
  
-         // TODO(szabadka): Allocate a buffer for this when building the stage instead of when
-         // executing it.
-@@ -116,24 +139,25 @@ impl RenderPipelineInPlaceStage for BlendingStage {
-             .map(|s| &mut s[..xsize])
-             .collect::<Vec<&mut [f32]>>();
- 
--        let mut fg = vec![self.zeros.as_slice(); 3 + num_ec];
+-        let zeros_slice: &[f32] = self.zeros.as_slice();
 +        let fg_len = fg_x1 - fg_x0;
-+        let mut fg = vec![&self.zeros[..fg_len]; 3 + num_ec];
- 
-         for (c, fg_ptr) in fg.iter_mut().enumerate().take(3) {
--            if self.reference_frames[self.blending_info.source as usize].is_some() {
--                *fg_ptr = &(self.reference_frames[self.blending_info.source as usize]
--                    .as_ref()
--                    .unwrap()
--                    .frame[c]
--                    .row(fg_y0)[fg_x0..fg_x1]);
-+            if let Some(rf) = self.reference_frames[self.blending_info.source as usize].as_ref() {
++        let zeros_slice: &[f32] = &self.zeros[..fg_len];
+         let mut fg_buf: ChannelVec<&[f32]> = ChannelVec::new();
+         for _ in 0..total_channels {
+             fg_buf.push(zeros_slice);
+         }
+         if let Some(ref rf) = self.reference_frames[self.blending_info.source as usize] {
+             for (c, fg) in fg_buf.iter_mut().enumerate().take(3) {
+-                *fg = &rf.frame[c].row(fg_y0)[fg_x0..fg_x1];
 +                let (ref_w, ref_h) = rf.frame[c].size();
 +                if fg_y0 < ref_h && fg_x0 < fg_x1 && fg_x1 <= ref_w {
-+                    *fg_ptr = &rf.frame[c].row(fg_y0)[fg_x0..fg_x1];
++                    *fg = &rf.frame[c].row(fg_y0)[fg_x0..fg_x1];
 +                }
              }
          }
          for i in 0..num_ec {
--            if self.reference_frames[self.ec_blending_info[i].source as usize].is_some() {
--                fg[3 + i] = &(self.reference_frames[self.ec_blending_info[i].source as usize]
--                    .as_ref()
--                    .unwrap()
--                    .frame[3 + i]
--                    .row(fg_y0)[fg_x0..fg_x1]);
-+            if let Some(rf) =
-+                self.reference_frames[self.ec_blending_info[i].source as usize].as_ref()
-+            {
+             if let Some(ref rf) = self.reference_frames[self.ec_blending_info[i].source as usize] {
+-                fg_buf[3 + i] = &rf.frame[3 + i].row(fg_y0)[fg_x0..fg_x1];
 +                let (ref_w, ref_h) = rf.frame[3 + i].size();
 +                if fg_y0 < ref_h && fg_x0 < fg_x1 && fg_x1 <= ref_w {
-+                    fg[3 + i] = &rf.frame[3 + i].row(fg_y0)[fg_x0..fg_x1];
++                    fg_buf[3 + i] = &rf.frame[3 + i].row(fg_y0)[fg_x0..fg_x1];
 +                }
              }
          }
  
-@@ -144,13 +168,17 @@ impl RenderPipelineInPlaceStage for BlendingStage {
-             .map(PatchBlending::from)
-             .collect();
+@@ -158,14 +165,18 @@ impl RenderPipelineInPlaceStage for BlendingStage {
+ 
+         let state = state.unwrap().downcast_mut::<BlendingScratch>().unwrap();
  
 -        perform_blending(
 +        if perform_blending(
-             &mut slice!(&mut out, .., bg_x0..bg_x1),
-             &fg,
+             &mut bg_slices,
+             &fg_buf,
              &blending_info,
-             &ec_blending_info,
+             &self.ec_patch_blending_info[..num_ec],
              &self.extra_channels,
+             &mut state.scratch,
 -        );
 +        )
 +        .is_err()

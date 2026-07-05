@@ -1,0 +1,23 @@
+diff --git a/libheif/box.cc b/libheif/box.cc
+index 1111111..2222222 100644
+--- a/libheif/box.cc
++++ b/libheif/box.cc
+@@ -1723,6 +1723,10 @@ Box_iloc::~Box_iloc()
+ 
+ void Box_iloc::set_use_tmp_file(bool flag)
+ {
++#ifdef __wasi__
++  m_use_tmpfile = false;
++  (void) flag;
++#else
+   m_use_tmpfile = flag;
+   if (flag) {
+ #if !defined(_WIN32)
+@@ -1738,6 +1742,7 @@ void Box_iloc::set_use_tmp_file(bool flag)
+ #  endif
+ #endif
+   }
++#endif
+ }
+ 
+ 

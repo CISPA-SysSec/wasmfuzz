@@ -1,6 +1,6 @@
 set -e
 
-git clone-rev.sh  https://github.com/openssl/openssl.git "$PROJECT/repo" 945cc69f5448b9da2a0ae8ac1e55efa45a442d12
+git clone-rev.sh  https://github.com/openssl/openssl.git "$PROJECT/repo" bf41baa2bf3215625d44f7c0dc438ab1b2e3a3d0
 git -C "$PROJECT/repo" apply ../wasi-config.patch
 git -C "$PROJECT/repo" apply ../stub-fuzzer-error-prints.patch
 git -C "$PROJECT/repo" apply ../fuzzer-hashtable-sequence-of-ops.patch

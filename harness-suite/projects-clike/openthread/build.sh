@@ -16,7 +16,7 @@ set -euxo pipefail
         -DOT_COMPILE_WARNING_AS_ERROR=ON \
         -DOT_BUILD_GTEST=OFF \
         -DOT_FUZZ_TARGETS=ON \
-        -DOT_NEXUS_TESTS=OFF \
+        -DOT_NEXUS_BUILD_TESTS=OFF \
         -DOT_PLATFORM=nexus \
         -DOT_THREAD_VERSION=1.4 \
         -DOT_APP_CLI=OFF \

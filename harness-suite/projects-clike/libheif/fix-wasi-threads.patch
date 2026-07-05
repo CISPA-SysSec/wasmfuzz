@@ -1,0 +1,18 @@
+diff --git a/libheif/plugins/decoder_libde265.cc b/libheif/plugins/decoder_libde265.cc
+index 1111111..2222222 100644
+--- a/libheif/plugins/decoder_libde265.cc
++++ b/libheif/plugins/decoder_libde265.cc
+@@ -202,11 +202,13 @@ heif_error libde265_new_decoder2(void** dec, const heif_decoder_plugin_options*
+   // Speed up decoding from JavaScript.
+   de265_set_parameter_bool(decoder->ctx, DE265_DECODER_PARAM_DISABLE_DEBLOCKING, 1);
+   de265_set_parameter_bool(decoder->ctx, DE265_DECODER_PARAM_DISABLE_SAO, 1);
++#elif !ENABLE_MULTITHREADING_SUPPORT || defined(__wasi__)
++  // Worker threads are not supported on WASI or when multithreading is disabled.
+ #else
+   int nThreads = (options->num_threads ? options->num_threads : 1);
+ 
+   // Worker threads are not supported when running on Emscripten.
+   de265_start_worker_threads(decoder->ctx, nThreads);
+ #endif
+ 
+   decoder->strict_decoding = options->strict_decoding;

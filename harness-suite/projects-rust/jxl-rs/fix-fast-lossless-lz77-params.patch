@@ -1,0 +1,16 @@
+diff --git a/jxl/src/frame/modular/decode/bitstream.rs b/jxl/src/frame/modular/decode/bitstream.rs
+index 7208a3c..d11783a 100644
+--- a/jxl/src/frame/modular/decode/bitstream.rs
++++ b/jxl/src/frame/modular/decode/bitstream.rs
+@@ -35,6 +35,11 @@ fn can_decode_fast_lossless(tree: &Tree) -> bool {
+         return false;
+     }
+ 
++    let lz77 = tree.histograms.lz77_params();
++    if !lz77.enabled || lz77.min_symbol.is_none() || lz77.min_length.is_none() {
++        return false;
++    }
++
+     matches!(tree.histograms.codes(), Codes::Huffman(_))
+ }
+ 

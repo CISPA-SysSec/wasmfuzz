@@ -2,5 +2,4 @@ set -e
 apt-get update -y
 DEBIAN_FRONTEND=noninteractive apt-get install -y make libtool pkg-config vim libreadline-dev wget autoconf
 
-git clone-rev.sh git://git.ghostscript.com/jbig2dec.git "$PROJECT/repo" b5250e7767930e68c31218fdfcddda14c8bd0f33 --recursive
-git -C "$PROJECT/repo" apply "$PROJECT/fix-image-pixel-bounds.patch"
+git clone-rev.sh git://git.ghostscript.com/jbig2dec.git "$PROJECT/repo" dc15c39bbbddc90f79c14563d2eb5a794106be8f --recursive

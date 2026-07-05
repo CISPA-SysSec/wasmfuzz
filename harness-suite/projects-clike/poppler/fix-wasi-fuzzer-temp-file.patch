@@ -1,0 +1,36 @@
+diff --git a/cpp/tests/fuzzing/fuzzer_temp_file.h b/cpp/tests/fuzzing/fuzzer_temp_file.h
+index d0568ac..2564a1c 100644
+--- a/cpp/tests/fuzzing/fuzzer_temp_file.h
++++ b/cpp/tests/fuzzing/fuzzer_temp_file.h
+@@ -22,18 +22,31 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#ifdef __wasi__
++#include <fcntl.h>
++#endif
+ #include <unistd.h>
+ 
+ // Pure-C interface for creating and cleaning up temporary files.
+ 
+ static char *fuzzer_get_tmpfile(const uint8_t *data, size_t size)
+ {
++#ifdef __wasi__
++    char *filename_buffer = (char *)malloc(128);
++    if (!filename_buffer) {
++        perror("Failed to allocate file name buffer.");
++        abort();
++    }
++    snprintf(filename_buffer, 128, "/tmp/poppler-fuzz-%p-%zu", (void *)data, size);
++    const int file_descriptor = open(filename_buffer, O_RDWR | O_CREAT | O_EXCL, 0600);
++#else
+     char *filename_buffer = strdup("/tmp/generate_temporary_file.XXXXXX");
+     if (!filename_buffer) {
+         perror("Failed to allocate file name buffer.");
+         abort();
+     }
+     const int file_descriptor = mkstemp(filename_buffer);
++#endif
+     if (file_descriptor < 0) {
+         perror("Failed to make temporary file.");
+         abort();

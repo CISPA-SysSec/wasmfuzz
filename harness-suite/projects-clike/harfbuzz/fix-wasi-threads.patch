@@ -1,0 +1,21 @@
+diff --git a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -350,10 +350,14 @@
+ # threads
+ thread_dep = null_dep
+ if host_machine.system() != 'windows'
+-  thread_dep = dependency('threads', required: false)
++  if host_machine.system() == 'wasi'
++    thread_dep = null_dep
++  else
++    thread_dep = dependency('threads', required: false)
+ 
+-  if thread_dep.found()
+-    conf.set('HAVE_PTHREAD', 1)
++    if thread_dep.found()
++      conf.set('HAVE_PTHREAD', 1)
++    endif
+   endif
+ endif
+ 

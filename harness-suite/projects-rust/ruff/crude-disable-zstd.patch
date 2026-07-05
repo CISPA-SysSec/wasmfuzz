@@ -1,5 +1,5 @@
 diff --git a/crates/ty/Cargo.toml b/crates/ty/Cargo.toml
-index 12bbce58c6..49093a77b4 100644
+index 12bbce5..49093a7 100644
 --- a/crates/ty/Cargo.toml
 +++ b/crates/ty/Cargo.toml
 @@ -20,7 +20,7 @@ doctest = false
@@ -12,10 +12,10 @@ index 12bbce58c6..49093a77b4 100644
  ty_server = { workspace = true }
  ty_static = { workspace = true }
 diff --git a/crates/ty_project/Cargo.toml b/crates/ty_project/Cargo.toml
-index 8a3b32aea9..6136c11e8d 100644
+index c6cd685..4bfd275 100644
 --- a/crates/ty_project/Cargo.toml
 +++ b/crates/ty_project/Cargo.toml
-@@ -60,7 +60,7 @@ ruff_db = { workspace = true, features = ["testing"] }
+@@ -62,7 +62,7 @@ ruff_db = { workspace = true, features = ["os", "testing"] }
  insta = { workspace = true, features = ["redactions", "ron"] }
  
  [features]
@@ -25,20 +25,20 @@ index 8a3b32aea9..6136c11e8d 100644
  schemars = [
      "dep:schemars",
 diff --git a/crates/ty_vendored/Cargo.toml b/crates/ty_vendored/Cargo.toml
-index a9b70a07ec..4509fd358b 100644
+index f666e95..24a0c34 100644
 --- a/crates/ty_vendored/Cargo.toml
 +++ b/crates/ty_vendored/Cargo.toml
 @@ -18,7 +18,7 @@ zip = { workspace = true }
  [build-dependencies]
  path-slash = { workspace = true }
  walkdir = { workspace = true }
--zip = { workspace = true, features = ["zstd", "deflate"] }
-+zip = { workspace = true, features = ["deflate"] }
+-zip = { workspace = true, features = ["zstd", "deflate-flate2-zlib-rs"] }
++zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
  
  [dev-dependencies]
  walkdir = { workspace = true }
 diff --git a/crates/ty_vendored/build.rs b/crates/ty_vendored/build.rs
-index 5c65c09848..81acaf453a 100644
+index 42f95e7..f54ef77 100644
 --- a/crates/ty_vendored/build.rs
 +++ b/crates/ty_vendored/build.rs
 @@ -34,7 +34,7 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {

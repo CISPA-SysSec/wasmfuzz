@@ -1,7 +1,8 @@
 diff --git a/fuzz/fuzzers/fuzzer_script_tiff.rs b/fuzz/fuzzers/fuzzer_script_tiff.rs
+index 64de05b..bc87159 100644
 --- a/fuzz/fuzzers/fuzzer_script_tiff.rs
 +++ b/fuzz/fuzzers/fuzzer_script_tiff.rs
-@@ -1,19 +1,27 @@
+@@ -1,7 +1,7 @@
  #![no_main]
  #[macro_use] extern crate libfuzzer_sys;
  extern crate image;
@@ -10,13 +11,10 @@ diff --git a/fuzz/fuzzers/fuzzer_script_tiff.rs b/fuzz/fuzzers/fuzzer_script_tif
  use std::io::Cursor;
  
  fuzz_target!(|data: &[u8]| {
--    let decoder = match image::codecs::tiff::TiffDecoder::new(Cursor::new(data)) {
-+    let mut decoder = match image::codecs::tiff::TiffDecoder::new(Cursor::new(data)) {
-         Ok(decoder) => decoder,
+@@ -10,12 +10,20 @@ fuzz_target!(|data: &[u8]| {
          Err(_) => return,
      };
  
--    if decoder.total_bytes() > 256 * 1024 * 1024 {
 +    let mut limits = Limits::default();
 +    limits.max_alloc = Some(64 * 1024 * 1024);
 +    limits.max_image_width = Some(8192);
@@ -25,10 +23,13 @@ diff --git a/fuzz/fuzzers/fuzzer_script_tiff.rs b/fuzz/fuzzers/fuzzer_script_tif
 +        return;
 +    }
 +
-+    if decoder.total_bytes() > 64 * 1024 * 1024 {
+     let layout = match decoder.prepare_image() {
+         Ok(layout) => layout,
+         Err(_) => return,
+     };
+ 
+-    if layout.total_bytes() > 256 * 1024 * 1024 {
++    if layout.total_bytes() > 64 * 1024 * 1024 {
          return;
      }
  
-     let mut buf = vec![0; decoder.total_bytes() as usize];
-     let _ = decoder.read_image(&mut buf);
- });

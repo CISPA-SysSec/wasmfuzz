@@ -1,0 +1,12 @@
+diff --git a/jxl/fuzz/Cargo.toml b/jxl/fuzz/Cargo.toml
+index b23e03b..d48587a 100644
+--- a/jxl/fuzz/Cargo.toml
++++ b/jxl/fuzz/Cargo.toml
+@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
+ 
+ [dependencies.jxl]
+ path = ".."
++default-features = false
+ 
+ # Prevent this from interfering with workspaces
+ [workspace]

@@ -1,0 +1,14 @@
+diff --git a/src/codecs/bmp/decoder.rs b/src/codecs/bmp/decoder.rs
+index 691be7b..c8f4a21 100644
+--- a/src/codecs/bmp/decoder.rs
++++ b/src/codecs/bmp/decoder.rs
+@@ -1756,6 +1756,9 @@ impl<R: BufRead + Seek> BmpDecoder<R> {
+         // The height field in an ICO file is doubled to account for the AND mask
+         // (whether or not an AND mask is actually present).
+         self.height /= 2;
++        if self.height <= 0 {
++            return Err(DecoderError::InvalidHeight.into());
++        }
+         Ok(())
+     }
+ 

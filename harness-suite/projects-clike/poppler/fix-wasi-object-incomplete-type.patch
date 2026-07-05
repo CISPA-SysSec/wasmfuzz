@@ -1,0 +1,43 @@
+diff --git a/poppler/Object.cc b/poppler/Object.cc
+index 3717de8..1b45562 100644
+--- a/poppler/Object.cc
++++ b/poppler/Object.cc
+@@ -40,6 +40,13 @@
+ 
+ static const char *objTypeNames[numObjTypes] = { "boolean", "integer", "real", "string", "name", "null", "array", "dictionary", "stream", "ref", "cmd", "error", "eof", "none", "integer64", "hexString", "dead" };
+ 
++
++Object::Object(std::unique_ptr<Array> arrayA) : type { objArray }, data { std::shared_ptr<Array>(std::move(arrayA)) } { }
++
++Object::Object(std::unique_ptr<Dict> &&dictA) : type { objDict }, data { std::shared_ptr<Dict>(std::move(dictA)) } { }
++
++Object::~Object() = default;
++
+ Object Object::copy() const
+ {
+     CHECK_NOT_DEAD;
+diff --git a/poppler/Object.h b/poppler/Object.h
+index b74991c..65fe74e 100644
+--- a/poppler/Object.h
++++ b/poppler/Object.h
+@@ -219,7 +219,7 @@ public:
+     static Object cmd(std::string_view name) { return Object(objCmd, name); }
+     static Object hexString(std::string &&hex) { return Object(objHexString, std::move(hex)); }
+     Object() : type(objNone) { }
+-    ~Object() = default;
++    ~Object();
+ 
+     explicit Object(bool boolnA) : type { objBool }, data { boolnA } { }
+ 
+@@ -231,9 +231,9 @@ public:
+ 
+     explicit Object(long long int64gA) : type { objInt64 }, data { int64gA } { }
+ 
+-    explicit Object(std::unique_ptr<Array> arrayA) : type { objArray }, data { std::shared_ptr<Array>(std::move(arrayA)) } { }
++    explicit Object(std::unique_ptr<Array> arrayA);
+ 
+-    explicit Object(std::unique_ptr<Dict> &&dictA) : type { objDict }, data { std::shared_ptr<Dict>(std::move(dictA)) } { }
++    explicit Object(std::unique_ptr<Dict> &&dictA);
+ 
+     template<typename StreamType>
+         requires(std::is_base_of_v<Stream, StreamType>)

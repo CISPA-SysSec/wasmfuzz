@@ -1,57 +1,37 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 6580e0d..3a30979 100644
+index 05b5289..4dda2df 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -67,8 +67,9 @@ endif()
+@@ -86,11 +86,9 @@ endif()
  
- # Check out Git submodules.
- if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.gitmodules")
--  execute_process (COMMAND git submodule update --init --recursive
--                   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-+  # Submodules are initialized in prepare.sh; skip here to preserve patches.
-+  # execute_process (COMMAND git submodule update --init --recursive
-+  #                  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
- endif()
+ # Helper function for checking out Git submodules.
+ function(init_submodule PATH)
+-  message(STATUS "initializing submodule ${PATH}")
+-  execute_process(
+-    COMMAND git submodule update --init --recursive "${PATH}"
+-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+-  )
++  # Submodules are initialized (and patched) in prepare.sh; skip the checkout
++  # here so we don't reset patched third_party trees.
++  message(STATUS "skipping submodule init for ${PATH} (handled in prepare.sh)")
+ endfunction()
  
  # Add third_party libraries, disabling as much as we can of their builds.
-@@ -123,12 +124,16 @@ if(UNIX OR MINGW)
-   else()
-     set(protobuf_BUILD_TESTS OFF CACHE BOOL "enable tests for proto2" FORCE)
-     set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "enable shared libs for proto2" FORCE)
-+    set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "disable protoc for wasm" FORCE)
-     add_subdirectory(third_party/protobuf/cmake)
-     include_directories(SYSTEM third_party/protobuf/src)
-   endif()
-   if(NOT ZLIB_FOUND)
--    add_subdirectory(third_party/zlib)
-     include_directories(SYSTEM third_party/zlib)
-+    set(ZLIB_BUILD_SHARED OFF CACHE BOOL "disable zlib shared library" FORCE)
-+    set(ZLIB_BUILD_TESTING OFF CACHE BOOL "enable tests for zlib" FORCE)
-+    add_subdirectory(third_party/zlib)
-+    include_directories(${CMAKE_CURRENT_BINARY_DIR}/third_party/zlib)
-   endif()
- else()
-   if(BLOATY_ENABLE_RE2)
-@@ -146,20 +151,22 @@ else()
- 
-   set(protobuf_BUILD_TESTS OFF CACHE BOOL "enable tests for proto2" FORCE)
-   set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "enable shared libs for proto2" FORCE)
-+  set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "disable protoc for wasm" FORCE)
-   add_subdirectory(third_party/protobuf/cmake)
-   include_directories(SYSTEM third_party/protobuf/src)
- 
--  add_subdirectory(third_party/zlib)
+@@ -257,9 +255,9 @@ else()
    include_directories(third_party/zlib)
-+  set(ZLIB_BUILD_SHARED OFF CACHE BOOL "disable zlib shared library" FORCE)
-+  set(ZLIB_BUILD_TESTING OFF CACHE BOOL "enable tests for zlib" FORCE)
-+  add_subdirectory(third_party/zlib)
    include_directories(${CMAKE_CURRENT_BINARY_DIR}/third_party/zlib)
+   add_subdirectory(third_party/zlib)
 -  set_property(TARGET example PROPERTY FOLDER "third_party")
 -  set_property(TARGET minigzip PROPERTY FOLDER "third_party")
 -  set_property(TARGET zlib PROPERTY FOLDER "third_party")
 +  # set_property(TARGET example PROPERTY FOLDER "third_party")
 +  # set_property(TARGET minigzip PROPERTY FOLDER "third_party")
++  # set_property(TARGET zlib PROPERTY FOLDER "third_party")
    set_property(TARGET zlibstatic PROPERTY FOLDER "third_party")
+ 
+   init_submodule(third_party/zstd)
+@@ -274,8 +272,8 @@ else()
+ 
    set_property(TARGET libprotobuf PROPERTY FOLDER "third_party")
    set_property(TARGET libprotobuf-lite PROPERTY FOLDER "third_party")
 -  set_property(TARGET libprotoc PROPERTY FOLDER "third_party")
@@ -61,29 +41,20 @@ index 6580e0d..3a30979 100644
  endif()
  
  include_directories(.)
-@@ -265,7 +272,7 @@ if(UNIX OR MINGW)
-   if(PROTOBUF_FOUND)
-     list(APPEND LIBBLOATY_LIBS ${PROTOBUF_LIBRARIES})
-   else()
--    list(APPEND LIBBLOATY_LIBS libprotoc)
-+    list(APPEND LIBBLOATY_LIBS libprotobuf)
-   endif()
-   if(BLOATY_ENABLE_RE2)
-     if(RE2_FOUND)
-@@ -285,7 +292,7 @@ if(UNIX OR MINGW)
-     list(APPEND LIBBLOATY_LIBS zlibstatic)
+@@ -455,7 +453,7 @@ if(UNIX OR MINGW)
+     list(APPEND LIBBLOATY_LIBS libzstd_static)
    endif()
  else()
--  set(LIBBLOATY_LIBS libbloaty libprotoc capstone-static)
-+  set(LIBBLOATY_LIBS libbloaty libprotobuf capstone-static)
+-  set(LIBBLOATY_DEPS libprotoc capstone)
++  set(LIBBLOATY_DEPS libprotobuf capstone)
    if(BLOATY_ENABLE_RE2)
-     list(APPEND LIBBLOATY_LIBS  re2)
+     list(APPEND LIBBLOATY_DEPS  re2)
    endif()
 diff --git a/src/bloaty.cc b/src/bloaty.cc
-index f9fe973..1e61762 100644
+index 5232959..25e2322 100644
 --- a/src/bloaty.cc
 +++ b/src/bloaty.cc
-@@ -43,7 +43,9 @@ typedef size_t z_size_t;
+@@ -45,7 +45,9 @@ typedef size_t z_size_t;
  
  #if !defined(_WIN32)
  #include <sys/mman.h>
