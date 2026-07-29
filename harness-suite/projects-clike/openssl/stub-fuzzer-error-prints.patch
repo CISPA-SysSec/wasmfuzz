@@ -1,16 +1,16 @@
 diff --git a/fuzz/bignum.c b/fuzz/bignum.c
-index b9dcb49ebe..2eb858e8dc 100644
+index eec776e..a406389 100644
 --- a/fuzz/bignum.c
 +++ b/fuzz/bignum.c
-@@ -79,6 +79,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+@@ -84,6 +84,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+         goto done;
  
-     success = BN_cmp(b4, b5) == 0;
-     if (!success) {
+     if (BN_cmp(b4, b5) != 0) {
 +	/*
          BN_print_fp(stdout, b1);
          putchar('\n');
          BN_print_fp(stdout, b2);
-@@ -89,6 +90,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+@@ -94,6 +95,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
          putchar('\n');
          BN_print_fp(stdout, b5);
          putchar('\n');
@@ -19,10 +19,10 @@ index b9dcb49ebe..2eb858e8dc 100644
  
  done:
 diff --git a/fuzz/bndiv.c b/fuzz/bndiv.c
-index a52f7b598b..6d3c11b2f0 100644
+index c3a2d2f..4d2ea50 100644
 --- a/fuzz/bndiv.c
 +++ b/fuzz/bndiv.c
-@@ -94,6 +94,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+@@ -110,6 +110,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
  
      success = success && BN_cmp(b5, b1) == 0;
      if (!success) {
@@ -30,7 +30,7 @@ index a52f7b598b..6d3c11b2f0 100644
          BN_print_fp(stdout, b1);
          putchar('\n');
          BN_print_fp(stdout, b2);
-@@ -111,6 +112,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+@@ -127,6 +128,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
                  && (BN_is_negative(b4) || BN_is_zero(b4)),
              BN_cmp(b5, b1));
          puts("----\n");
@@ -38,25 +38,3 @@ index a52f7b598b..6d3c11b2f0 100644
      }
  
  done:
-diff --git a/fuzz/server.c b/fuzz/server.c
-index 1d9a171d4b..28f1e76dd2 100644
---- a/fuzz/server.c
-+++ b/fuzz/server.c
-@@ -2377,7 +2377,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
-     OPENSSL_assert(bio_buf != NULL);
-     OPENSSL_assert((size_t)BIO_write(bio_buf, ECDSAPrivateKeyPEM, sizeof(ECDSAPrivateKeyPEM)) == sizeof(ECDSAPrivateKeyPEM));
-     ecdsakey = PEM_read_bio_ECPrivateKey(bio_buf, NULL, NULL, NULL);
--    ERR_print_errors_fp(stderr);
-+    // ERR_print_errors_fp(stderr);
-     OPENSSL_assert(ecdsakey != NULL);
-     BIO_free(bio_buf);
-     pkey = EVP_PKEY_new();
-@@ -2404,7 +2404,7 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
-     OPENSSL_assert(bio_buf != NULL);
-     OPENSSL_assert((size_t)BIO_write(bio_buf, DSAPrivateKeyPEM, sizeof(DSAPrivateKeyPEM)) == sizeof(DSAPrivateKeyPEM));
-     dsakey = PEM_read_bio_DSAPrivateKey(bio_buf, NULL, NULL, NULL);
--    ERR_print_errors_fp(stderr);
-+    // ERR_print_errors_fp(stderr);
-     OPENSSL_assert(dsakey != NULL);
-     BIO_free(bio_buf);
-     pkey = EVP_PKEY_new();

@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/kivikakk/comrak.git "$PROJECT/repo" baafcb063427af6611be3e06eaf4fe9b2d28582a
+git clone-rev.sh https://github.com/kivikakk/comrak.git "$PROJECT/repo" 835e68ea438868fdd2ee8e53683b26cd73d5f67d
 git -C "$PROJECT/repo" apply "$PROJECT/fix-cm-write_prefix.patch"

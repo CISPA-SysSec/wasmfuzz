@@ -1,27 +1,19 @@
 Subject: [PATCH] return error on RCT grid kind mismatch
 ---
-diff --git a/jxl/src/frame/modular/transforms/mod.rs b/jxl/src/frame/modular/transforms/mod.rs
-index 9638652..380460a 100644
---- a/jxl/src/frame/modular/transforms/mod.rs
-+++ b/jxl/src/frame/modular/transforms/mod.rs
-@@ -10,6 +10,7 @@ use apply::TransformStep;
- pub use apply::TransformStepChunk;
- use num_derive::FromPrimitive;
- 
-+use crate::error::{Error, Result};
- use crate::frame::modular::BUFFER_STATUS_NOT_RENDERED;
- use crate::frame::modular::ModularBuffer;
- use crate::headers::frame_header::FrameHeader;
-@@ -50,7 +51,7 @@ pub fn make_grids(
-     transform_steps: Vec<TransformStep>,
+diff --git a/jxl/src/frame/modular/transforms/meta_apply.rs b/jxl/src/frame/modular/transforms/meta_apply.rs
+index 2305805..1d9fb8c 100644
+--- a/jxl/src/frame/modular/transforms/meta_apply.rs
++++ b/jxl/src/frame/modular/transforms/meta_apply.rs
+@@ -304,7 +304,7 @@ pub fn make_grids(
      section_buffer_indices: &[Vec<usize>],
      buffer_info: &mut Vec<ModularBufferInfo>,
+     color_channels: usize,
 -) -> Vec<TransformStepChunk> {
 +) -> Result<Vec<TransformStepChunk>> {
      // Initialize grid sizes, starting from coded channels.
      for i in section_buffer_indices[1].iter() {
          buffer_info[*i].grid_kind = ModularGridKind::Lf;
-@@ -73,7 +74,9 @@ pub fn make_grids(
+@@ -327,7 +327,9 @@ pub fn make_grids(
              } => {
                  let grid_in = buffer_info[buf_in[0]].grid_kind;
                  for i in 0..3 {
@@ -32,7 +24,7 @@ index 9638652..380460a 100644
                  }
                  for i in 0..3 {
                      buffer_info[buf_out[i]].grid_kind = grid_in;
-@@ -452,5 +455,5 @@ pub fn make_grids(
+@@ -712,5 +714,5 @@ pub fn make_grids(
  
      trace!(?grid_transform_steps, ?buffer_info);
  

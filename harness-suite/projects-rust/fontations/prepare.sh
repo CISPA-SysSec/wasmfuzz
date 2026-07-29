@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/googlefonts/fontations "$PROJECT/repo" 99e2cf021d7a5b35e26a46041c55ba0766a68b0f
+git clone-rev.sh https://github.com/googlefonts/fontations "$PROJECT/repo" 734d3e01b1b5ad2e8e5a6fc3226ba8dbe4861830

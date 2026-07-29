@@ -1,0 +1,19 @@
+Subject: [PATCH] brace log macro used as a match arm expression
+
+zune-core's no-op log stubs (feature "log" off) expand to nothing, which is
+not a valid expression in match-arm position. Make the arm a block with a
+statement so the empty expansion is valid.
+---
+diff --git a/crates/zune-bmp/src/decoder.rs b/crates/zune-bmp/src/decoder.rs
+index 0f7b0cd..f92fac6 100644
+--- a/crates/zune-bmp/src/decoder.rs
++++ b/crates/zune-bmp/src/decoder.rs
+@@ -1014,7 +1014,7 @@ where
+                         pix.swap(0, 2);
+                     }
+                 }
+-                _ => error!("Unhandled pixel format")
++                _ => { error!("Unhandled pixel format"); }
+             }
+             self.image_in_bgra = true;
+         }

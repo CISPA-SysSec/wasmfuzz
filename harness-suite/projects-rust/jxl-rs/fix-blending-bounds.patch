@@ -14,12 +14,12 @@ index 5519b6d..a78553c 100644
      PatchesInvalidAlphaChannel(usize, usize),
      #[error("Invalid patch blend mode: {0}, limit is {1}")]
 diff --git a/jxl/src/features/blending.rs b/jxl/src/features/blending.rs
-index 34da7ff..6d77abd 100644
+index 23f6a64..aaf258e 100644
 --- a/jxl/src/features/blending.rs
 +++ b/jxl/src/features/blending.rs
-@@ -5,10 +5,21 @@
+@@ -7,10 +7,21 @@
  
- #![allow(clippy::needless_range_loop)]
+ use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask, simd_function};
  
 -use crate::headers::extra_channels::{ExtraChannel, ExtraChannelInfo};
 +use crate::{
@@ -37,10 +37,10 @@ index 34da7ff..6d77abd 100644
 +    Ok(())
 +}
 +
+ const MAX_F32_LANES: usize = 16;
+ 
  #[inline(always)]
- fn maybe_clamp(v: f32, clamp: bool) -> f32 {
-     if clamp { v.clamp(0.0, 1.0) } else { v }
-@@ -22,16 +33,22 @@ pub fn perform_blending(
+@@ -204,16 +215,22 @@ pub fn perform_blending(
      ec_blending: &[PatchBlending],
      extra_channel_info: &[ExtraChannelInfo],
      tmp: &mut Vec<f32>,
@@ -65,7 +65,7 @@ index 34da7ff..6d77abd 100644
      }
  
      // Fast path: Replace color + Replace/None ec -> copy fg directly to bg, no tmp needed.
-@@ -52,7 +69,7 @@ pub fn perform_blending(
+@@ -234,7 +251,7 @@ pub fn perform_blending(
                      _ => unreachable!(),
                  }
              }
@@ -74,16 +74,16 @@ index 34da7ff..6d77abd 100644
          }
      }
  
-@@ -287,6 +304,7 @@ pub fn perform_blending(
-     for i in 0..(3 + num_ec) {
-         bg[i].copy_from_slice(&tmp[i * xsize..][..xsize]);
+@@ -471,6 +488,7 @@ pub fn perform_blending(
+             // already bg_color[c]
+         }
      }
 +    Ok(())
  }
  
  #[cfg(test)]
 diff --git a/jxl/src/features/patches.rs b/jxl/src/features/patches.rs
-index 22cdb25..def0c08 100644
+index 5d80823..ed2a1fc 100644
 --- a/jxl/src/features/patches.rs
 +++ b/jxl/src/features/patches.rs
 @@ -750,14 +750,18 @@ impl PatchesDictionary {
@@ -108,7 +108,7 @@ index 22cdb25..def0c08 100644
      }
  }
 diff --git a/jxl/src/render/stages/blending.rs b/jxl/src/render/stages/blending.rs
-index b5c4856..08238fc 100644
+index 56a6738..1d2aace 100644
 --- a/jxl/src/render/stages/blending.rs
 +++ b/jxl/src/render/stages/blending.rs
 @@ -132,19 +132,26 @@ impl RenderPipelineInPlaceStage for BlendingStage {

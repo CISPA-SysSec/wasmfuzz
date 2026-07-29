@@ -1,12 +1,12 @@
 diff --git a/naga/fuzz/Cargo.toml b/naga/fuzz/Cargo.toml
-index 0e63bc4a2..a793b911c 100644
+index 3cf2bc7..bb102f0 100644
 --- a/naga/fuzz/Cargo.toml
 +++ b/naga/fuzz/Cargo.toml
-@@ -10,13 +10,13 @@ build = "build.rs"
+@@ -9,13 +9,13 @@ build = "build.rs"
  [package.metadata]
  cargo-fuzz = true
  
--[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios")))'.dependencies]
+-[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "openbsd")))'.dependencies]
 +[dependencies]
  arbitrary = { workspace = true, features = ["derive"] }
  libfuzzer-sys.workspace = true
@@ -20,19 +20,19 @@ index 0e63bc4a2..a793b911c 100644
  [build-dependencies]
  cfg_aliases.workspace = true
 diff --git a/naga/fuzz/build.rs b/naga/fuzz/build.rs
-index 9ad00f53a..257ff544f 100644
+index 6926606..63cdc20 100644
 --- a/naga/fuzz/build.rs
 +++ b/naga/fuzz/build.rs
 @@ -1,6 +1,6 @@
  fn main() {
      cfg_aliases::cfg_aliases! {
--        fuzzable_platform: { not(any(target_arch = "wasm32", target_os = "ios", all(windows, target_arch = "aarch64"))) },
-+        fuzzable_platform: { not(any(target_os = "ios", all(windows, target_arch = "aarch64"))) },
+-        fuzzable_platform: { not(any(target_arch = "wasm32", target_os = "ios", target_os = "openbsd", all(windows, target_arch = "aarch64"))) },
++        fuzzable_platform: { not(any(target_os = "ios", target_os = "openbsd", all(windows, target_arch = "aarch64"))) },
      }
      // This cfg provided by cargo-fuzz
      println!("cargo::rustc-check-cfg=cfg(fuzzing)");
 diff --git a/naga/fuzz/fuzz_targets/glsl_parser.rs b/naga/fuzz/fuzz_targets/glsl_parser.rs
-index 159886f0c..882374aac 100644
+index 159886f..882374a 100644
 --- a/naga/fuzz/fuzz_targets/glsl_parser.rs
 +++ b/naga/fuzz/fuzz_targets/glsl_parser.rs
 @@ -13,14 +13,19 @@ mod fuzz {
@@ -58,7 +58,7 @@ index 159886f0c..882374aac 100644
                  defines: FastHashMap::from_iter(
                      proxy
 diff --git a/naga/fuzz/fuzz_targets/ir.rs b/naga/fuzz/fuzz_targets/ir.rs
-index f2e7bea3f..a766d7228 100644
+index f2e7bea..a766d72 100644
 --- a/naga/fuzz/fuzz_targets/ir.rs
 +++ b/naga/fuzz/fuzz_targets/ir.rs
 @@ -4,12 +4,13 @@

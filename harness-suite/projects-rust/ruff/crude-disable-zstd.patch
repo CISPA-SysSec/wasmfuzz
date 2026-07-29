@@ -1,10 +1,10 @@
 diff --git a/crates/ty/Cargo.toml b/crates/ty/Cargo.toml
-index 12bbce5..49093a7 100644
+index e9bc06c..4a66acf 100644
 --- a/crates/ty/Cargo.toml
 +++ b/crates/ty/Cargo.toml
-@@ -20,7 +20,7 @@ doctest = false
- ruff_db = { workspace = true, features = ["os", "cache", "junit"] }
+@@ -22,7 +22,7 @@ ruff_db = { workspace = true, features = ["os", "cache", "junit"] }
  ruff_diagnostics = { workspace = true }
+ ruff_ranged_value = { workspace = true }
  ty_combine = { workspace = true }
 -ty_project = { workspace = true, features = ["zstd", "junit"] }
 +ty_project = { workspace = true, features = ["junit"] }
@@ -12,10 +12,10 @@ index 12bbce5..49093a7 100644
  ty_server = { workspace = true }
  ty_static = { workspace = true }
 diff --git a/crates/ty_project/Cargo.toml b/crates/ty_project/Cargo.toml
-index c6cd685..4bfd275 100644
+index de0e541..b9fdcf6 100644
 --- a/crates/ty_project/Cargo.toml
 +++ b/crates/ty_project/Cargo.toml
-@@ -62,7 +62,7 @@ ruff_db = { workspace = true, features = ["os", "testing"] }
+@@ -65,7 +65,7 @@ ruff_db = { workspace = true, features = ["os", "testing"] }
  insta = { workspace = true, features = ["redactions", "ron"] }
  
  [features]
@@ -24,29 +24,3 @@ index c6cd685..4bfd275 100644
  deflate = ["ty_vendored/deflate"]
  schemars = [
      "dep:schemars",
-diff --git a/crates/ty_vendored/Cargo.toml b/crates/ty_vendored/Cargo.toml
-index f666e95..24a0c34 100644
---- a/crates/ty_vendored/Cargo.toml
-+++ b/crates/ty_vendored/Cargo.toml
-@@ -18,7 +18,7 @@ zip = { workspace = true }
- [build-dependencies]
- path-slash = { workspace = true }
- walkdir = { workspace = true }
--zip = { workspace = true, features = ["zstd", "deflate-flate2-zlib-rs"] }
-+zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
- 
- [dev-dependencies]
- walkdir = { workspace = true }
-diff --git a/crates/ty_vendored/build.rs b/crates/ty_vendored/build.rs
-index 42f95e7..f54ef77 100644
---- a/crates/ty_vendored/build.rs
-+++ b/crates/ty_vendored/build.rs
-@@ -34,7 +34,7 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {
-     // architecture of the system running the build script and not the architecture of the build-target.
-     // That's why we use the `TARGET` environment variable here.
-     let method = if cfg!(feature = "zstd") {
--        CompressionMethod::Zstd
-+        CompressionMethod::Stored
-     } else if cfg!(feature = "deflate") {
-         CompressionMethod::Deflated
-     } else {

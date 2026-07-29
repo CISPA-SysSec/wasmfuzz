@@ -1,0 +1,54 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..c89c372
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,21 @@
++[package]
++name = "lopdf-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2024"
++
++[package.metadata]
++cargo-fuzz = true
++
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "parse_pdf"
++path = "fuzz_targets/parse_pdf.rs"
++test = false
++doc = false
++
++[dependencies]
++libfuzzer-sys = "0.4"
++lopdf = { path = "..", default-features = false, features = ["wasm_js"] }
+diff --git a/fuzz/fuzz_targets/parse_pdf.rs b/fuzz/fuzz_targets/parse_pdf.rs
+new file mode 100644
+index 0000000..cf92ac2
+--- /dev/null
++++ b/fuzz/fuzz_targets/parse_pdf.rs
+@@ -0,0 +1,21 @@
++#![no_main]
++
++use libfuzzer_sys::fuzz_target;
++use lopdf::Document;
++use std::io::Cursor;
++
++fuzz_target!(|content: &[u8]| {
++    let cursor = Cursor::new(content);
++    if let Ok(mut document) = Document::load_from(cursor) {
++        let pages = document.get_pages();
++
++        let mut doc_clone = document.clone();
++        doc_clone.decompress();
++
++        for page_number in pages.keys().copied() {
++            let _ = document.extract_text(&[page_number]);
++        }
++
++        let _ = document.save_to(&mut Cursor::new(Vec::new()));
++    }
++});

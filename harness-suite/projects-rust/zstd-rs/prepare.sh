@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/gyscos/zstd-rs "$PROJECT/repo" a9bbf0a981c0f0e71bc19a259769d902c126aa9d --recursive
+git clone-rev.sh https://github.com/gyscos/zstd-rs "$PROJECT/repo" ad18ca4e275aed9acc3087d7c1c65d03ab67ad6e --recursive

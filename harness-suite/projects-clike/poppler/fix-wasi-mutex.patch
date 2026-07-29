@@ -1,5 +1,5 @@
 diff --git a/poppler/Annot.h b/poppler/Annot.h
-index 4db6af6..522c3ef 100644
+index 1577d04..47f85c4 100644
 --- a/poppler/Annot.h
 +++ b/poppler/Annot.h
 @@ -58,7 +58,7 @@
@@ -11,7 +11,7 @@ index 4db6af6..522c3ef 100644
  #include <vector>
  
  #include "AnnotStampImageHelper.h"
-@@ -829,7 +829,7 @@ protected:
+@@ -828,7 +828,7 @@ protected:
      bool ok;
  
      bool hasRef;
@@ -21,19 +21,19 @@ index 4db6af6..522c3ef 100644
      bool hasBeenUpdated = false;
      Ref updatedAppearanceStream = Ref::INVALID(); // {-1,-1} if updateAppearanceStream has never been called
 diff --git a/poppler/Array.h b/poppler/Array.h
-index b94caee..4a4c1cd 100644
+index 568ddc1..0f3da8c 100644
 --- a/poppler/Array.h
 +++ b/poppler/Array.h
-@@ -31,7 +31,7 @@
+@@ -30,7 +30,7 @@
+ #ifndef ARRAY_H
  #define ARRAY_H
  
- #include <atomic>
 -#include <mutex>
 +#include "PopplerMutex.h"
  #include <vector>
  
  #include "poppler_private_export.h"
-@@ -80,7 +80,7 @@ public:
+@@ -79,7 +79,7 @@ public:
  private:
      XRef *xref; // the xref table for this PDF file
      std::vector<Object> elems; // array of elements
@@ -65,7 +65,7 @@ index 5230cf0..054d541 100644
      // Cache of CairoFont for current document
      // Most recently used is at the end of the vector.
 diff --git a/poppler/Catalog.h b/poppler/Catalog.h
-index b33f552..d5beb20 100644
+index 26d7ff5..d056982 100644
 --- a/poppler/Catalog.h
 +++ b/poppler/Catalog.h
 @@ -46,6 +46,7 @@
@@ -108,10 +108,10 @@ index df04a6f..d58cace 100644
      const DictEntry *find(std::string_view key) const;
      DictEntry *find(std::string_view key);
 diff --git a/poppler/GlobalParams.cc b/poppler/GlobalParams.cc
-index 1b92f3c..efc12fd 100644
+index fb17b8b..27a38e5 100644
 --- a/poppler/GlobalParams.cc
 +++ b/poppler/GlobalParams.cc
-@@ -1575,6 +1575,6 @@ bool GlobalParamsIniter::setCustomDataDir(const std::string &dir)
+@@ -1589,6 +1589,6 @@ bool GlobalParamsIniter::setCustomDataDir(const std::string &dir)
      return false;
  }
  
@@ -120,7 +120,7 @@ index 1b92f3c..efc12fd 100644
  int GlobalParamsIniter::count = 0;
  std::string GlobalParamsIniter::customDataDir;
 diff --git a/poppler/GlobalParams.h b/poppler/GlobalParams.h
-index 5b0565c..a8145b4 100644
+index 9b19c00..47217e3 100644
 --- a/poppler/GlobalParams.h
 +++ b/poppler/GlobalParams.h
 @@ -48,7 +48,7 @@
@@ -132,7 +132,7 @@ index 5b0565c..a8145b4 100644
  #include <optional>
  #include <utility>
  #include <vector>
-@@ -221,9 +221,9 @@ private:
+@@ -222,9 +222,9 @@ private:
  
      const UnicodeMap *utf8Map;
  
@@ -145,7 +145,7 @@ index 5b0565c..a8145b4 100644
  
      std::string popplerDataDir;
  };
-@@ -240,7 +240,7 @@ public:
+@@ -241,7 +241,7 @@ public:
      static bool setCustomDataDir(const std::string &dir);
  
  private:
@@ -155,7 +155,7 @@ index 5b0565c..a8145b4 100644
  
      static std::string customDataDir;
 diff --git a/poppler/PDFDoc.h b/poppler/PDFDoc.h
-index 3b13973..ab2ac48 100644
+index c3b91c9..312e5eb 100644
 --- a/poppler/PDFDoc.h
 +++ b/poppler/PDFDoc.h
 @@ -52,7 +52,7 @@
@@ -249,7 +249,7 @@ index 0000000..692cb70
 +
 +#endif
 diff --git a/poppler/XRef.h b/poppler/XRef.h
-index f6ea3ae..c7c63ac 100644
+index 79b25c3..5e1aa11 100644
 --- a/poppler/XRef.h
 +++ b/poppler/XRef.h
 @@ -39,6 +39,7 @@
@@ -260,7 +260,7 @@ index f6ea3ae..c7c63ac 100644
  
  #include "poppler_private_export.h"
  #include "Object.h"
-@@ -266,7 +267,7 @@ private:
+@@ -265,7 +266,7 @@ private:
      Goffset mainXRefOffset; // position of the main XRef table/stream
      bool scannedSpecialFlags; // true if scanSpecialFlags has been called
      std::unique_ptr<BaseStream> strOwner; // ownership if any of str (can be null if others own the stream)

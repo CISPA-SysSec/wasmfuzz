@@ -1,0 +1,15 @@
+diff --git a/src/document.rs b/src/document.rs
+index f25e59a..55b679a 100644
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -880,6 +880,10 @@ fn size_hint(&self) -> (usize, Option<usize>) {
+             })
+             .sum();
+ 
++        // Hostile /Count values must not drive collection preallocation (WASM OOM).
++        let cap = self.doc.objects.len();
++        let nb_pages = nb_pages.min(cap);
++
+         (nb_pages, Some(nb_pages))
+     }
+ }

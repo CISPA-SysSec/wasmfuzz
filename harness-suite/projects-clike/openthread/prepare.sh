@@ -1,4 +1,4 @@
 set -e
-git clone-rev.sh https://github.com/openthread/openthread "$PROJECT/repo" 9cc2cb3e96b8282fdc31725bcb397eceb7f4a53a --recursive
+git clone-rev.sh https://github.com/openthread/openthread "$PROJECT/repo" 54dce1c674d2f3363d880f1558f8781cfc8e2a6e --recursive
 git -C "$PROJECT/repo" apply ../wasm-tcplp.patch
 git -C "$PROJECT/repo" apply ../fix-harness-include.patch

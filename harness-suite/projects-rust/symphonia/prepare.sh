@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/pdeljanov/symphonia.git "$PROJECT/repo" 9b791099ae99bed4f4fe7f7c1243ef4b8e7b3ccd
+git clone-rev.sh https://github.com/pdeljanov/symphonia.git "$PROJECT/repo" 5f26f020b3a1e62a4a3efad41e6e5752ab21fbeb
 git -C "$PROJECT/repo" apply "$PROJECT/cap-adpcm-packet-frames.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/cap-pcm-packet-frames.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-vorbis-codebook-lookup.patch"
@@ -15,7 +15,6 @@ git -C "$PROJECT/repo" apply "$PROJECT/fuzz-decode-flac-slice-input.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/cap-wav-info-chunk.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/cap-aiff-chunk-size.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/cap-ebml-element-size.patch"
-git -C "$PROJECT/repo" apply "$PROJECT/fix-aac-section-bands.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-scoped-stream-overflow.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-ogg-physical-scoped-len.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/clamp-audio-buffer-render.patch"
