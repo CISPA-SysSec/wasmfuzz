@@ -57,9 +57,62 @@ pub(crate) struct Worker {
     stage_id_stack: Vec<StageId>,
     stage_depth: usize,
     stop_requested: bool,
+    /// Process-wide metrics accumulator, shared with the orchestrator. None
+    /// for standalone workers (no orchestrator).
+    metrics: Option<Arc<super::metrics::Accumulator>>,
+    /// Snapshot of `self.stats` at the last `Accumulator::merge_delta` call;
+    /// used to compute the delta to push on each periodic tick + on exit.
+    last_merged_stats: Stats,
+    last_metrics_dump: Instant,
 }
 
 impl Worker {
+    pub(crate) fn note_completed(&self) {
+        if let Some(acc) = self.metrics.as_ref() {
+            acc.note_worker_completed();
+        }
+    }
+
+    /// Merge `self.stats`'s delta-since-last-call into the shared
+    /// [`super::metrics::Accumulator`], refresh the "last-seen active worker"
+    /// fields, and dump to `$WASMFUZZ_METRICS_JSON` when `force` or
+    /// [`super::metrics::METRICS_TICK`] has elapsed since the last dump.
+    pub(crate) fn maybe_dump_metrics(&mut self, force: bool) {
+        if self.metrics.is_none() {
+            return;
+        }
+        if !force && self.last_metrics_dump.elapsed() < super::metrics::METRICS_TICK {
+            return;
+        }
+        self.last_metrics_dump = Instant::now();
+        self.merge_metrics();
+        if let Some(acc) = self.metrics.as_ref() {
+            acc.dump_if_enabled(super::metrics::session_elapsed());
+        }
+    }
+
+    /// Merge `self.stats`'s delta-since-last-call into the shared
+    /// [`super::metrics::Accumulator`] and refresh the "last-seen active
+    /// worker state" fields.
+    pub(crate) fn merge_metrics(&mut self) {
+        let Some(acc) = self.metrics.as_ref() else {
+            return;
+        };
+        let delta = super::metrics::StatsDelta::between(&self.last_merged_stats, &self.stats);
+        acc.merge_delta(delta);
+        self.last_merged_stats = self.stats.clone();
+        use libafl::corpus::Corpus;
+        acc.update_active_state(
+            self.corpus.count(),
+            self.solutions.count(),
+            self.exhaustive_queue.len(),
+            self.stage_depth,
+        );
+        if self.last_crasher.is_some() {
+            acc.note_crash();
+        }
+    }
+
     /// Returns an exit reason when a wall-clock or idle limit is hit.
     fn poll_schedule(&self) -> Option<WorkerExit> {
         if self.stop_requested || self.schedule.is_timeout() || self.schedule.is_setup_timeout() {
@@ -133,7 +186,13 @@ impl Worker {
             stage_id_stack: Vec::new(),
             opts,
             stop_requested: false,
+            metrics: orc.as_ref().map(|h| h.metrics()),
+            last_merged_stats: Stats::default(),
+            last_metrics_dump: Instant::now(),
         };
+        if let Some(ref acc) = worker.metrics {
+            acc.note_worker_started();
+        }
         // TODO: move this somewhere else?
         if let Some(ref orc) = orc {
             let corpus = orc.fetch_corpus();
@@ -567,8 +626,10 @@ impl Worker {
             }
 
             // periodic stuff
+            self.maybe_dump_metrics(false);
             if self.schedule.next_print() {
                 println!("{}", self.stats.format(&self.opts.thread_name));
+                self.merge_metrics();
             }
 
             let force_cmin = corpus_additions_since_cmin >= self.opts.x.cmin_after_corpus_additions;

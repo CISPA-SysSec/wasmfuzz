@@ -36,7 +36,7 @@ use self::{
     feedback::FeedbackContext, instance::ModuleInstance, module::TrapKind, vmcontext::VMContext,
 };
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub(crate) struct Stats {
     _start: Option<Instant>,
     pub reusable_stage_executions: usize,

@@ -4,6 +4,7 @@ use clap::Parser;
 
 pub(crate) mod exhaustive;
 pub(crate) mod i2s_patches;
+mod metrics;
 pub mod opts;
 pub(crate) mod orc;
 mod worker;
@@ -94,6 +95,11 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                         Some(orc_handle.clone()),
                     );
                     let res = worker.run().unwrap();
+                    // Final delta -- workers respawn per `config_interval`, so
+                    // counters accumulated since the last dump tick would
+                    // otherwise be lost when the Stats struct is dropped.
+                    worker.maybe_dump_metrics(true);
+                    worker.note_completed();
                     use libafl::corpus::Corpus;
                     let res = if worker.solutions.count() != 0 {
                         WorkerExit::CrashFound

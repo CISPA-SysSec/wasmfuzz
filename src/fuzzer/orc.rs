@@ -74,6 +74,7 @@ pub(crate) struct OrchestratorHandle {
     // pub Arc<Mutex<Orchestrator>>
     chan: mpsc::Sender<(OrcMessage, mpsc::SyncSender<OrcMessage>)>,
     corpus: Arc<RwLock<SharedCorpus>>,
+    metrics: Arc<super::metrics::Accumulator>,
 }
 
 enum OrcMessage {
@@ -94,12 +95,15 @@ impl OrchestratorHandle {
         let (tx, rx) = mpsc::channel::<(OrcMessage, mpsc::SyncSender<OrcMessage>)>();
         let corpus = SharedCorpus::new(&opts);
         let corpus_ = corpus.clone();
+        super::metrics::init_session();
+        let metrics = Arc::new(super::metrics::Accumulator::default());
+        let metrics_ = metrics.clone();
 
         let _thread_handle = std::thread::Builder::new()
             .stack_size(32 << 20) // TODO: look into why generated code doesn't probe the stack any more?
             .name("orchestrator".to_owned())
             .spawn(move || {
-                let mut orc = Orchestrator::new(module, opts, corpus_);
+                let mut orc = Orchestrator::new(module, opts, corpus_, metrics_);
                 while let Ok((req, tx)) = rx.recv() {
                     let resp = match req {
                         OrcMessage::ReqSuggest => OrcMessage::RespSuggest(orc.suggest().into()),
@@ -120,6 +124,7 @@ impl OrchestratorHandle {
                                 orc.update_live_coverage();
                                 orc.frontier_bbs = orc.compute_frontier().into_iter().collect();
                             }
+                            orc.push_orc_edges_metrics();
                             OrcMessage::RespOk
                         }
                         OrcMessage::ReqShutdown => {
@@ -129,6 +134,7 @@ impl OrchestratorHandle {
                         OrcMessage::ReqLoadCorpus(corpus) => {
                             let _ = orc.load_corpus(&corpus);
                             orc.update_live_coverage();
+                            orc.push_orc_edges_metrics();
                             OrcMessage::RespOk
                         }
                         _ => OrcMessage::RespInvalid,
@@ -137,7 +143,11 @@ impl OrchestratorHandle {
                 }
             });
 
-        Self { chan: tx, corpus }
+        Self {
+            chan: tx,
+            corpus,
+            metrics,
+        }
     }
 
     fn req(&self, req: OrcMessage) -> OrcMessage {
@@ -173,6 +183,12 @@ impl OrchestratorHandle {
 
     pub fn fetch_corpus(&self) -> Vec<Arc<[u8]>> {
         self.corpus.read().unwrap().sample(&mut rand::rng())
+    }
+
+    /// Shared metrics accumulator workers merge their [`Stats`] deltas into
+    /// and periodically dump.
+    pub fn metrics(&self) -> Arc<super::metrics::Accumulator> {
+        self.metrics.clone()
     }
 
     pub fn load_corpus(&self, seed_corpus: Vec<Vec<u8>>) {
@@ -310,6 +326,7 @@ pub(crate) struct Orchestrator {
     found_crashes: bool,
     opts: CliOpts,
     corpus: Arc<RwLock<SharedCorpus>>,
+    metrics: Arc<super::metrics::Accumulator>,
     init_funcs: HashSet<FuncIdx>,
     init_edges: HashSet<Edge>,
     config_epoch: usize,
@@ -317,7 +334,12 @@ pub(crate) struct Orchestrator {
 }
 
 impl Orchestrator {
-    fn new(module: Arc<ModuleSpec>, opts: CliOpts, corpus: Arc<RwLock<SharedCorpus>>) -> Self {
+    fn new(
+        module: Arc<ModuleSpec>,
+        opts: CliOpts,
+        corpus: Arc<RwLock<SharedCorpus>>,
+        metrics: Arc<super::metrics::Accumulator>,
+    ) -> Self {
         let now = Instant::now();
         let mut codecov_sess = JitFuzzingSessionBuilder::new(module.clone())
             .feedback(FeedbackOptions {
@@ -350,6 +372,13 @@ impl Orchestrator {
             init_edges,
             config_epoch: 0,
             frontier_bbs: Vec::new(),
+            metrics,
+        }
+    }
+
+    fn push_orc_edges_metrics(&self) {
+        if let Some(edges) = self.codecov_sess.get_edge_cov() {
+            self.metrics.update_orc_edges(edges);
         }
     }
 
