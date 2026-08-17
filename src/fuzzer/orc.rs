@@ -581,6 +581,8 @@ impl Orchestrator {
             func_input_size,
             func_input_size_cyclic,
             func_input_size_color,
+            func_input_size_custom: _,
+            edge_input_size_custom: _,
             memory_op_value,
             memory_op_address,
             memory_store_prev_value,
@@ -794,6 +796,8 @@ impl PassesGen for OrcPassesGen {
             func_input_size,
             func_input_size_cyclic,
             func_input_size_color,
+            func_input_size_custom,
+            edge_input_size_custom,
             memory_op_value,
             memory_op_address,
             memory_store_prev_value,
@@ -853,6 +857,14 @@ impl PassesGen for OrcPassesGen {
         add_pass!(
             func_input_size_color,
             InputSizePass::new(InputComplexityMetric::DeBruijn, &self.spec, key_filter)
+        );
+        add_pass!(
+            func_input_size_custom,
+            InputSizePass::new(InputComplexityMetric::Custom, &self.spec, key_filter)
+        );
+        add_pass!(
+            edge_input_size_custom,
+            EdgeInputSizeCustomPass::new(&self.spec, key_filter)
         );
 
         add_pass!(
