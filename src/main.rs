@@ -14,6 +14,15 @@ mod util;
 
 pub(crate) use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+/// Build a LOD engine for a registered grammar by name. `lod-formats` is the
+/// grammar catalog (`vtable_for`); the engine lives in `lod-mutator`.
+pub(crate) fn make_engine(name: &str) -> Box<dyn lod::ErasedEngine> {
+    Box::new(lod_mutator::Engine::from_vtable(
+        lod_formats::vtable_for(name),
+        lod::EngineConfig::default(),
+    ))
+}
+
 #[cfg(test)]
 mod tests;
 

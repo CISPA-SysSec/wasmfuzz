@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -5,6 +6,44 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::jit::Stats;
+
+type CountMap = BTreeMap<&'static str, u64>;
+type NestedCountMap = BTreeMap<&'static str, CountMap>;
+
+/// Per-key `current - previous` for monotonic counter maps. Keys absent from
+/// `previous` count from zero; zero deltas are dropped.
+fn map_delta(previous: &CountMap, current: &CountMap) -> CountMap {
+    current
+        .iter()
+        .filter_map(|(&k, &v)| {
+            let d = v.saturating_sub(previous.get(k).copied().unwrap_or(0));
+            (d > 0).then_some((k, d))
+        })
+        .collect()
+}
+
+fn nested_map_delta(previous: &NestedCountMap, current: &NestedCountMap) -> NestedCountMap {
+    static EMPTY: CountMap = CountMap::new();
+    current
+        .iter()
+        .filter_map(|(&k, v)| {
+            let d = map_delta(previous.get(k).unwrap_or(&EMPTY), v);
+            (!d.is_empty()).then_some((k, d))
+        })
+        .collect()
+}
+
+fn map_merge(acc: &mut CountMap, delta: &CountMap) {
+    for (&k, &v) in delta {
+        *acc.entry(k).or_default() += v;
+    }
+}
+
+fn nested_map_merge(acc: &mut NestedCountMap, delta: &NestedCountMap) {
+    for (&k, v) in delta {
+        map_merge(acc.entry(k).or_default(), v);
+    }
+}
 
 /// Cadence at which a worker may dump `$WASMFUZZ_METRICS_JSON`. Bound on
 /// staleness in the monitor-cov-folded `LogEvent.stats`.
@@ -53,6 +92,14 @@ struct AccumulatorInner {
     wall_rehydrate_ns: u64,
     exhaustive_execs: usize,
     exhaustive_finds: usize,
+    lod_mutations: usize,
+    non_lod_mutations: usize,
+    lod_finds: usize,
+    non_lod_finds: usize,
+    mutation_attempts: CountMap,
+    mutation_finds: NestedCountMap,
+    finds_by_pass_lod: CountMap,
+    finds_by_pass_non_lod: CountMap,
 
     workers_started: usize,
     workers_completed: usize,
@@ -62,6 +109,9 @@ struct AccumulatorInner {
     solutions_count: usize,
     exhaustive_queue_len: usize,
     stage_depth: usize,
+    lod_corpus_shapes: usize,
+    lod_corpus_entries: usize,
+    lod_engine: Option<&'static str>,
     orc_edges: usize,
 }
 
@@ -106,6 +156,17 @@ impl Accumulator {
         inner.wall_rehydrate_ns += delta.wall_rehydrate_ns;
         inner.exhaustive_execs += delta.exhaustive_execs;
         inner.exhaustive_finds += delta.exhaustive_finds;
+        inner.lod_mutations += delta.lod_mutations;
+        inner.non_lod_mutations += delta.non_lod_mutations;
+        inner.lod_finds += delta.lod_finds;
+        inner.non_lod_finds += delta.non_lod_finds;
+        map_merge(&mut inner.mutation_attempts, &delta.mutation_attempts);
+        nested_map_merge(&mut inner.mutation_finds, &delta.mutation_finds);
+        map_merge(&mut inner.finds_by_pass_lod, &delta.finds_by_pass_lod);
+        map_merge(
+            &mut inner.finds_by_pass_non_lod,
+            &delta.finds_by_pass_non_lod,
+        );
     }
 
     /// Update orchestrator session edge coverage (from `orc.rs`'s codecov sess).
@@ -141,6 +202,8 @@ impl Accumulator {
         solutions_count: usize,
         exhaustive_queue_len: usize,
         stage_depth: usize,
+        lod_engine: Option<&'static str>,
+        lod_corpus: Option<(usize, usize)>,
     ) {
         let mut inner = self.inner.lock().unwrap();
         inner.metrics_updates += 1;
@@ -148,6 +211,13 @@ impl Accumulator {
         inner.solutions_count = solutions_count;
         inner.exhaustive_queue_len = exhaustive_queue_len;
         inner.stage_depth = stage_depth;
+        if let Some((shapes, entries)) = lod_corpus {
+            inner.lod_corpus_shapes = shapes;
+            inner.lod_corpus_entries = entries;
+        }
+        if let Some(engine) = lod_engine {
+            inner.lod_engine = Some(engine);
+        }
     }
 
     /// Snapshot all counters into a serializable struct and write it
@@ -190,7 +260,18 @@ impl Accumulator {
             solutions_count: inner.solutions_count,
             exhaustive_queue_len: inner.exhaustive_queue_len,
             stage_depth: inner.stage_depth,
+            lod_engine: inner.lod_engine,
+            lod_corpus_shapes: inner.lod_corpus_shapes,
+            lod_corpus_entries: inner.lod_corpus_entries,
             orc_edges: inner.orc_edges,
+            lod_mutations: inner.lod_mutations,
+            non_lod_mutations: inner.non_lod_mutations,
+            lod_finds: inner.lod_finds,
+            non_lod_finds: inner.non_lod_finds,
+            mutation_attempts: inner.mutation_attempts.clone(),
+            mutation_finds: inner.mutation_finds.clone(),
+            finds_by_pass_lod: inner.finds_by_pass_lod.clone(),
+            finds_by_pass_non_lod: inner.finds_by_pass_non_lod.clone(),
         }
     }
 }
@@ -214,6 +295,14 @@ pub(crate) struct StatsDelta {
     pub wall_rehydrate_ns: u64,
     pub exhaustive_execs: usize,
     pub exhaustive_finds: usize,
+    pub lod_mutations: usize,
+    pub non_lod_mutations: usize,
+    pub lod_finds: usize,
+    pub non_lod_finds: usize,
+    pub mutation_attempts: CountMap,
+    pub mutation_finds: NestedCountMap,
+    pub finds_by_pass_lod: CountMap,
+    pub finds_by_pass_non_lod: CountMap,
 }
 
 impl StatsDelta {
@@ -262,6 +351,19 @@ impl StatsDelta {
             exhaustive_finds: current
                 .exhaustive_finds
                 .saturating_sub(previous.exhaustive_finds),
+            lod_mutations: current.lod_mutations.saturating_sub(previous.lod_mutations),
+            non_lod_mutations: current
+                .non_lod_mutations
+                .saturating_sub(previous.non_lod_mutations),
+            lod_finds: current.lod_finds.saturating_sub(previous.lod_finds),
+            non_lod_finds: current.non_lod_finds.saturating_sub(previous.non_lod_finds),
+            mutation_attempts: map_delta(&previous.mutation_attempts, &current.mutation_attempts),
+            mutation_finds: nested_map_delta(&previous.mutation_finds, &current.mutation_finds),
+            finds_by_pass_lod: map_delta(&previous.finds_by_pass_lod, &current.finds_by_pass_lod),
+            finds_by_pass_non_lod: map_delta(
+                &previous.finds_by_pass_non_lod,
+                &current.finds_by_pass_non_lod,
+            ),
         }
     }
 }
@@ -313,7 +415,27 @@ pub(crate) struct MetricsSnapshot {
     pub solutions_count: usize,
     pub exhaustive_queue_len: usize,
     pub stage_depth: usize,
+    pub lod_engine: Option<&'static str>,
+    pub lod_corpus_shapes: usize,
+    pub lod_corpus_entries: usize,
     pub orc_edges: usize,
+    pub lod_mutations: usize,
+    pub non_lod_mutations: usize,
+    pub lod_finds: usize,
+    pub non_lod_finds: usize,
+    /// Execs per mutation op (`MutationKind` names + `LodSwitch*` /
+    /// `FreshRoot` / `Generate` / `havoc`). Stacked LOD mutations credit
+    /// every op in the stack, so values don't sum to total execs.
+    pub mutation_attempts: CountMap,
+    /// Novel execs as `op → pass-shortcode → count`. Non-disjoint on both
+    /// axes (multi-op stacks, multi-pass finds); rate = finds/attempts per
+    /// op, don't expect sums to reconcile with `finds_own`.
+    pub mutation_finds: NestedCountMap,
+    /// Per-find novelty-pass counts for LOD-sourced finds (op-independent;
+    /// disjoint per pass, a multi-pass find still increments each pass once).
+    pub finds_by_pass_lod: CountMap,
+    /// Same for byte/havoc-sourced finds.
+    pub finds_by_pass_non_lod: CountMap,
 }
 
 /// Atomically write `snap` as JSON to `$WASMFUZZ_METRICS_JSON`: write to a

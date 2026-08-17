@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use crate::fuzzer::WorkerExit;
+
 use super::FuzzOpts;
 
 struct Throttle {
@@ -147,5 +149,15 @@ impl WorkerSchedule {
 
     pub(crate) fn step(&mut self) {
         self.steps += 1;
+    }
+
+    pub(crate) fn poll(&self) -> Option<WorkerExit> {
+        if self.is_timeout() || self.is_setup_timeout() {
+            return Some(WorkerExit::Timeout);
+        }
+        if self.fuzzing() && self.is_idle_timeout() {
+            return Some(WorkerExit::IdleTimeout);
+        }
+        None
     }
 }

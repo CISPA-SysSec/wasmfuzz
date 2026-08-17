@@ -1244,6 +1244,5 @@ pub(crate) struct ConcolicTrace {
     pub symvals: Symvals,
     pub events: Vec<ConcolicEvent>,
     pub event_inputs: Vec<BitVec>,
-    #[expect(unused)]
     pub events_by_location: HashMap<Location, Vec<usize>>,
 }

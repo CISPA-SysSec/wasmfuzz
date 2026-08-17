@@ -40,6 +40,16 @@ impl<T: speedy::Writable<speedy::LittleEndian>> SpeedyVec<T> {
         T::read_from_buffer(&self.data[pos..]).unwrap()
     }
 
+    // This allows retrieving a &[u8] from a SpeedyVec<Box<[u8]>>
+    // Take care to only call with types that serialize the same
+    fn get_as_unchecked<'a, O>(&'a self, idx: usize) -> O
+    where
+        O: speedy::Readable<'a, speedy::LittleEndian>,
+    {
+        let pos = self.offsets[idx] as usize;
+        O::read_from_buffer(&self.data[pos..]).unwrap()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.offsets.is_empty()
     }
@@ -47,6 +57,17 @@ impl<T: speedy::Writable<speedy::LittleEndian>> SpeedyVec<T> {
     pub fn len(&self) -> usize {
         self.offsets.len()
     }
+}
+
+#[test]
+fn speedy_vec_get_as_unchecked() {
+    let mut vec = SpeedyVec::<Box<[u8]>>::default();
+    vec.push(b"hello".to_vec().into_boxed_slice());
+    vec.push(b"world".to_vec().into_boxed_slice());
+    let bytes: &[u8] = vec.get_as_unchecked(0);
+    assert_eq!(bytes, b"hello");
+    let bytes: &[u8] = vec.get_as_unchecked(1);
+    assert_eq!(bytes, b"world");
 }
 
 impl CmpLog {
@@ -153,6 +174,48 @@ impl CmplogStore {
     }
     pub fn len(&self) -> usize {
         self.u16s.len() + self.u32s.len() + self.u64s.len() + self.memcmps.len()
+    }
+}
+
+impl lod::CmplogSource for CmplogStore {
+    fn count(&self, kind: lod::CmpKind) -> usize {
+        use lod::CmpKind::*;
+        match kind {
+            U16 => self.u16s.len(),
+            U32 => self.u32s.len(),
+            U64 => self.u64s.len(),
+            Bytes => self.memcmps.len(),
+            U8 | U128 => 0,
+        }
+    }
+
+    fn with(&self, kind: lod::CmpKind, idx: usize, f: &mut dyn FnMut(lod::CmpPairRef<'_>)) {
+        use lod::{CmpKind, CmpPairRef};
+        let (bytes_a, bytes_b);
+        let cmp_ref = match kind {
+            CmpKind::U16 => {
+                let (a, b) = self.u16s.get(idx);
+                CmpPairRef::U16(a, b)
+            }
+            CmpKind::U32 => {
+                let (a, b) = self.u32s.get(idx);
+                CmpPairRef::U32(a, b)
+            }
+            CmpKind::U64 => {
+                let (a, b) = self.u64s.get(idx);
+                CmpPairRef::U64(a, b)
+            }
+            CmpKind::Bytes => {
+                (bytes_a, bytes_b) = self.memcmps.get_as_unchecked(idx);
+                CmpPairRef::Bytes(bytes_a, bytes_b)
+            }
+            CmpKind::U8 | CmpKind::U128 => return,
+        };
+        f(cmp_ref);
+    }
+
+    fn is_empty(&self) -> bool {
+        CmplogStore::is_empty(self)
     }
 }
 

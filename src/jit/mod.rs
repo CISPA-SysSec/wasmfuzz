@@ -15,7 +15,7 @@ pub mod util;
 pub mod vmcontext;
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     sync::Arc,
     time::{Duration, Instant},
@@ -55,6 +55,27 @@ pub(crate) struct Stats {
     pub wall_rehydrate_ns: u64,
     pub exhaustive_execs: usize,
     pub exhaustive_finds: usize,
+    pub lod_mutations: usize,
+    pub non_lod_mutations: usize,
+    pub lod_finds: usize,
+    pub non_lod_finds: usize,
+    /// Finds minimized by the `LodShrinkFinds` experiment shrink pass.
+    pub lod_shrink_finds: usize,
+    /// Total bytes shaved off finds by that shrink pass.
+    pub lod_shrink_bytes_saved: usize,
+    /// Execs attributed per mutation op (LOD `MutationKind` names +
+    /// `LodSwitch*`/`FreshRoot`/`Generate`, or `havoc` for the byte path).
+    /// Stacked LOD mutations credit every op in the stack.
+    pub mutation_attempts: BTreeMap<&'static str, u64>,
+    /// Novel execs per op, split by the instrumentation-pass shortcode that
+    /// saw the novelty (`op → pass → count`). Non-disjoint on both axes: a
+    /// stacked mutation credits every op, a multi-pass find every pass.
+    pub mutation_finds: BTreeMap<&'static str, BTreeMap<&'static str, u64>>,
+    /// Per-find novelty-pass counts (op-independent, disjoint per pass) for
+    /// `FindSource::Lod` finds…
+    pub finds_by_pass_lod: BTreeMap<&'static str, u64>,
+    /// …and for `FindSource::NonLod` finds.
+    pub finds_by_pass_non_lod: BTreeMap<&'static str, u64>,
 }
 
 impl Stats {
@@ -83,7 +104,19 @@ impl Stats {
             wall_rehydrate_ns,
             exhaustive_execs,
             exhaustive_finds,
+            lod_mutations,
+            non_lod_mutations,
+            lod_finds,
+            non_lod_finds,
+            lod_shrink_finds,
+            lod_shrink_bytes_saved,
             tracing_stage_executions,
+            // Per-op/per-pass attribution maps go to the metrics JSON sink
+            // only; the console line stays scalar.
+            mutation_attempts: _,
+            mutation_finds: _,
+            finds_by_pass_lod: _,
+            finds_by_pass_non_lod: _,
         } = self;
 
         let elapsed = _start.as_ref().expect("stats from Stats::new").elapsed();
@@ -126,6 +159,12 @@ impl Stats {
             ("finds_imported", finds_imported),
             ("exhaustive_execs", exhaustive_execs),
             ("exhaustive_finds", exhaustive_finds),
+            ("lod_mutations", lod_mutations),
+            ("non_lod_mutations", non_lod_mutations),
+            ("lod_finds", lod_finds),
+            ("non_lod_finds", non_lod_finds),
+            ("lod_shrink_finds", lod_shrink_finds),
+            ("lod_shrink_bytes_saved", lod_shrink_bytes_saved),
         ];
         for (key, val) in kv {
             let val = *val;
@@ -1140,11 +1179,19 @@ impl JitFuzzingSession {
             );
             let _ = std::fs::create_dir("/tmp/wasmfuzz-flight-recorder/");
             let _ = std::fs::write("/tmp/wasmfuzz-flight-recorder/last.bin", inp);
+            let inphash = md5::compute(inp);
+            let _ = std::fs::write(
+                format!("/tmp/wasmfuzz-flight-recorder/{inphash:x}.bin"),
+                inp,
+            );
             for (i, el) in self.reusable_exec_history.iter().enumerate() {
                 let _ = std::fs::write(
                     format!("/tmp/wasmfuzz-flight-recorder/input_{i:06}.bin"),
                     el,
                 );
+                let inphash = md5::compute(el);
+                let _ =
+                    std::fs::write(format!("/tmp/wasmfuzz-flight-recorder/{inphash:x}.bin"), el);
             }
         }
         res
