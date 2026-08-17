@@ -2,7 +2,10 @@ use std::cell::RefCell;
 
 use crate::{
     concolic::ConcolicContext,
-    cow_memory::{CowResetMapping, ResettableMapping, RestoreDirtyLKMMapping},
+    cow_memory::{
+        CowResetMapping, DirtyTrackMode, ResettableMapping, RestoreDirtyLKMMapping,
+        SoftwareDirtyMapping, UffdWpAsyncMapping, UffdWpAsyncOptions,
+    },
     ir::ModuleSpec,
 };
 
@@ -12,6 +15,10 @@ use super::signals::{TrapReason, raise_trap};
 #[repr(C)]
 pub(crate) struct VMContext {
     pub heap: *mut u8,
+    // Byte-per-page dirty map for software dirty tracking, or null when the
+    // active snapshot provider observes writes on its own. When non-null,
+    // JITted stores mark the pages they touch here.
+    pub heap_dirty_map: *mut u8,
     pub host_ptrs: *const usize,
     pub fuel: u64,
     // ^^ Note: These fields are accessed by JITted code ^^
@@ -42,6 +49,68 @@ pub(crate) struct VMContext {
     pub random_get_seed: u64,
 }
 
+// Snapshot/restore strategy for the guest heap. Override with
+// SNAPSHOT_PROVIDER={auto,software,software-paranoid,lkm,uffd,uffd-sparse,cow};
+// "auto" picks the fastest available.
+//
+// "software" relies on JIT-emitted store instrumentation to record dirty pages
+// (see plans/jit-software-dirty-tracking.md). "software-paranoid" additionally
+// verifies on every restore that no page changed without being marked, which
+// is how a missing `mark_dirty` at a host write site gets caught.
+thread_local! {
+    // Per-thread override of SNAPSHOT_PROVIDER. Thread-local rather than a
+    // global so tests can compare providers against each other without racing
+    // on the process environment.
+    static PROVIDER_OVERRIDE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn set_snapshot_provider_override(provider: Option<&str>) {
+    PROVIDER_OVERRIDE.replace(provider.map(|s| s.to_string()));
+}
+
+fn new_heap_mapping(accessible_size: usize, mapping_size: usize) -> Box<dyn ResettableMapping> {
+    let provider = PROVIDER_OVERRIDE
+        .with_borrow(|x| x.clone())
+        .or_else(|| std::env::var("SNAPSHOT_PROVIDER").ok())
+        .unwrap_or_else(|| "auto".to_string());
+    let provider = match provider.as_str() {
+        // Software tracking needs nothing from the kernel and is the fastest
+        // option on most harnesses (see plans/jit-software-dirty-tracking.md
+        // for the measurements): 0.77x the LKM's time per execution in the
+        // geometric mean over 53 harnesses, and never worse than 1.09x.
+        "auto" => "software",
+        other => other,
+    };
+    let uffd = |track_unpopulated| {
+        Box::new(UffdWpAsyncMapping::new_with_options(
+            accessible_size,
+            mapping_size,
+            UffdWpAsyncOptions {
+                track_unpopulated,
+                ..Default::default()
+            },
+        ))
+    };
+    let software = |paranoid| {
+        let mut map = SoftwareDirtyMapping::new_with_mode(
+            accessible_size,
+            mapping_size,
+            DirtyTrackMode::Bitmap,
+        );
+        map.set_paranoid(paranoid);
+        Box::new(map)
+    };
+    match provider {
+        "software" => software(false),
+        "software-paranoid" => software(true),
+        "lkm" => Box::new(RestoreDirtyLKMMapping::new(accessible_size, mapping_size)),
+        "uffd" => uffd(true),
+        "uffd-sparse" => uffd(false),
+        "cow" => Box::new(CowResetMapping::new(accessible_size, mapping_size)),
+        other => panic!("unknown SNAPSHOT_PROVIDER={other:?}"),
+    }
+}
+
 impl VMContext {
     pub(crate) fn new(module: &ModuleSpec) -> Box<Self> {
         let globals = module
@@ -54,8 +123,11 @@ impl VMContext {
         // but grown if an element segment reaches further (covers the
         // no-TableSection / imported-table cases). slots default to the
         // 0xdeadf00f sentinel so calling an uninitialized one traps.
-        let mut table_sizes: Vec<usize> =
-            module.func_table_sizes.iter().map(|&n| n as usize).collect();
+        let mut table_sizes: Vec<usize> = module
+            .func_table_sizes
+            .iter()
+            .map(|&n| n as usize)
+            .collect();
         for (table_index, offset, funcs) in &module.func_table_inits {
             let needed = offset + funcs.len();
             let idx = *table_index as usize;
@@ -88,17 +160,7 @@ impl VMContext {
         // addr32 (<4 GiB) + static offset (<4 GiB) + access width, so the full
         // span must be reserved for large-offset OOB accesses to fault
         let guard_mapping_size = (1usize << 33) + (1 << 16);
-        let mut heap_alloc: Box<dyn ResettableMapping> = if RestoreDirtyLKMMapping::is_available() {
-            Box::new(RestoreDirtyLKMMapping::new(
-                module.initial_mem_pages << 16,
-                guard_mapping_size,
-            ))
-        } else {
-            Box::new(CowResetMapping::new(
-                module.initial_mem_pages << 16,
-                guard_mapping_size,
-            ))
-        };
+        let mut heap_alloc = new_heap_mapping(module.initial_mem_pages << 16, guard_mapping_size);
 
         // Note: we write to the snapshot directly instead of taking a snapshot
         //       to avoid scanning the whole memory area
@@ -110,6 +172,7 @@ impl VMContext {
 
         Box::new(Self {
             heap: heap_alloc.as_mut_slice().as_mut_ptr(),
+            heap_dirty_map: heap_alloc.dirty_map_ptr(),
             heap_pages: module.initial_mem_pages as u32,
             heap_pages_limit_soft: crate::MEMORY_PAGES_LIMIT,
             heap_pages_limit_hard: crate::MEMORY_PAGES_LIMIT,
@@ -141,8 +204,29 @@ impl VMContext {
         self.host_ptrs = host_ptrs.as_ptr();
     }
 
+    // Read-only-ish view of guest memory. Writing through this is only safe if
+    // the write is also announced via `mark_heap_dirty` -- prefer `heap_mut`,
+    // which can't be forgotten.
     pub(crate) fn heap(&mut self) -> &mut [u8] {
         self.heap_alloc.as_mut_slice()
+    }
+
+    // Records a write to guest memory that JIT-emitted code didn't perform.
+    // Without this the software dirty tracker doesn't know the page changed and
+    // restore leaves stale bytes behind.
+    pub(crate) fn mark_heap_dirty(&mut self, offset: usize, len: usize) {
+        self.heap_alloc.mark_dirty(offset, len);
+    }
+
+    // Hands out a writable slice of guest memory and marks it dirty. Returns
+    // None if the range is out of bounds, so callers keep their bounds check.
+    pub(crate) fn heap_mut(&mut self, offset: usize, len: usize) -> Option<&mut [u8]> {
+        let end = offset.checked_add(len)?;
+        if end > self.heap_alloc.accessible_size() {
+            return None;
+        }
+        self.heap_alloc.mark_dirty(offset, len);
+        Some(&mut self.heap_alloc.as_mut_slice()[offset..end])
     }
 
     pub(crate) fn snapshot(&mut self) {
@@ -197,6 +281,11 @@ impl VMContext {
         }
         // NB: redundant
         // self.heap_alloc.restore();
+
+        // both sides were just written identically, so nothing is dirty. this
+        // also drops marks left over from the previous run, which would
+        // otherwise make the next restore copy pages that already match.
+        self.heap_alloc.mark_clean();
 
         self.heap_snapshot_is_initial = true;
         self.reset();

@@ -104,6 +104,111 @@ impl TestModule {
     fn input_len_eq_2048() -> Self {
         Self::compile_simple_rust_expr("input-len-eq-2048", "data.len() == 2048")
     }
+
+    // Exercises the write paths software dirty tracking has to cover: plain
+    // stores, unaligned stores, `memory.fill` / `memory.copy` (which go through
+    // host builtins rather than JITted stores), and allocations big enough to
+    // grow the heap.
+    fn memory_churn() -> Self {
+        Self::compile_simple_rust_expr(
+            "memory-churn",
+            "{
+                let mut v = vec![0u8; 300 * 1024];
+                let vlen = v.len();
+                for (i, b) in data.iter().enumerate() {
+                    v[(i * 4099) % vlen] = *b;
+                    // unaligned multi-byte store, straddles a page now and then
+                    let off = (i * 4093) % (vlen - 8);
+                    v[off..off + 8].copy_from_slice(&(*b as u64).to_le_bytes());
+                }
+                let mut s = vec![0xabu8; 70000];
+                let n = data.len().min(s.len() / 2);
+                s[..n].copy_from_slice(&data[..n]);
+                s.copy_within(0..n, 1000);
+                let mut total = 0usize;
+                for b in v.iter().chain(s.iter()) { total = total.wrapping_add(*b as usize); }
+                total == 0xdeadbeef
+            }",
+        )
+    }
+}
+
+// Runs a fixed input sequence under one snapshot provider and returns the
+// coverage-novelty sequence plus a digest of the restored heap.
+//
+// A provider that misses a dirty page leaves stale bytes behind after restore,
+// which makes execution history-dependent -- so both the novelty sequence and
+// the digest diverge from the kernel-backed providers.
+fn snapshot_provider_trace(
+    provider: &str,
+    test_module: &TestModule,
+    inputs: &[&[u8]],
+) -> (Vec<bool>, [u8; 16]) {
+    crate::jit::vmcontext::set_snapshot_provider_override(Some(provider));
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    let mut stats = Stats::default();
+    let mut opts = FuzzOpts::parse_from(vec!["wasmfuzz-fuzz", "test.wasm"]);
+    opts.i.cov_edges = true.into();
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(opts.i.to_feedback_opts())
+        // the point of the test: make every execution start from a restore
+        .run_from_snapshot(true)
+        .build();
+    sess.initialize(&mut stats);
+
+    let novel = inputs
+        .iter()
+        .map(|inp| sess.run(inp, &mut stats).novel_coverage)
+        .collect();
+
+    // one more restore, so what we digest is the state the next execution
+    // would actually start from
+    let instance = sess.reusable_stage.instance.as_mut().unwrap();
+    instance.vmctx.restore();
+    let digest = *md5::compute(instance.vmctx.heap());
+
+    crate::jit::vmcontext::set_snapshot_provider_override(None);
+    (novel, digest)
+}
+
+#[test]
+fn test_software_dirty_tracking_matches_kernel_providers() {
+    let inputs: Vec<Vec<u8>> = (0..24u8)
+        .map(|i| {
+            let len = 1 + (i as usize * 37) % 900;
+            (0..len).map(|j| (j as u8).wrapping_mul(i | 1)).collect()
+        })
+        .collect();
+    let inputs: Vec<&[u8]> = inputs.iter().map(|x| x.as_slice()).collect();
+
+    // Two targets on purpose. `memory_churn` covers the bulk-memory builtins
+    // and lots of scattered stores, but it allocates so heavily that the input
+    // buffer's page ends up marked by allocator traffic anyway -- which hides a
+    // missing mark in `write_input`. `u8_cmp_chain_4` allocates nothing, so
+    // nothing but the input write touches that page.
+    for module in [TestModule::memory_churn(), TestModule::u8_cmp_chain_4()] {
+        let reference = snapshot_provider_trace("cow", &module, &inputs);
+        // paranoid first: it points at the exact offset of a missed mark,
+        // whereas the differential comparison only says "something diverged"
+        for provider in ["software-paranoid", "software"] {
+            let got = snapshot_provider_trace(provider, &module, &inputs);
+            assert_eq!(
+                got.0, reference.0,
+                "{}/{provider}: coverage novelty diverged from cow",
+                module.name
+            );
+            assert_eq!(
+                got.1, reference.1,
+                "{}/{provider}: restored heap diverged from cow",
+                module.name
+            );
+        }
+        if crate::cow_memory::RestoreDirtyLKMMapping::is_available() {
+            let got = snapshot_provider_trace("lkm", &module, &inputs);
+            assert_eq!(got.0, reference.0, "{}/lkm: novelty diverged", module.name);
+            assert_eq!(got.1, reference.1, "{}/lkm: heap diverged", module.name);
+        }
+    }
 }
 
 struct Fuzzer {

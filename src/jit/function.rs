@@ -421,6 +421,21 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         )
     }
 
+    // Base of the software dirty-page map, or None when the active snapshot
+    // provider tracks writes itself and stores need no instrumentation.
+    pub(crate) fn get_dirty_map_base(&mut self, bcx: &mut FunctionBuilder) -> Option<Value> {
+        if self.vmctx.heap_dirty_map.is_null() {
+            return None;
+        }
+        let vmctx = self.get_vmctx(bcx);
+        Some(bcx.ins().load(
+            self.ptr_ty(),
+            MemFlagsData::trusted_ro(),
+            vmctx,
+            std::mem::offset_of!(VMContext, heap_dirty_map) as i32,
+        ))
+    }
+
     pub(crate) fn translate_op(&mut self, op: &WFOperator, bcx: &mut FunctionBuilder, ip: InsnIdx) {
         self.ip = ip;
         let loc = Location {

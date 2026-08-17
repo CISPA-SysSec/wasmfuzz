@@ -178,60 +178,142 @@ pub(crate) fn eval_pages_touched(program: &PathBuf, corpus: &PathBuf, jsonl_out_
     }
 }
 
-pub(crate) fn eval_snapshot_perf(pages: usize, touch: usize, iters: usize) {
-    assert!(RestoreDirtyLKMMapping::is_available());
+pub(crate) fn eval_snapshot_perf(pages: usize, touch: usize, iters: usize, threads: usize) {
     use crate::cow_memory::*;
     use rand::seq::SliceRandom;
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Copy)]
     enum Provider {
         Dummy,
         CoW,
         Criu,
         Lkm,
+        UffdWpAsync,
+        UffdWpAsyncRescan,
+        UffdWpAsyncSparse,
+        UffdWpAsyncSparseRescan,
+        SoftwareLog,
+        SoftwareBitmap,
     }
     let accessible_size = pages << 12;
     let mapping_size = accessible_size;
-    let mut page_offsets = (0..pages).map(|x| x << 12).collect::<Vec<_>>();
-    let mut rng = rand::rng();
 
     for provider in &[
         Provider::Dummy,
         Provider::CoW,
         Provider::Criu,
         Provider::Lkm,
+        Provider::UffdWpAsync,
+        Provider::UffdWpAsyncRescan,
+        Provider::UffdWpAsyncSparse,
+        Provider::UffdWpAsyncSparseRescan,
+        Provider::SoftwareLog,
+        Provider::SoftwareBitmap,
     ] {
-        dbg!(provider);
-        let mut mapping: Box<dyn ResettableMapping> = match provider {
+        match provider {
+            Provider::Lkm if !RestoreDirtyLKMMapping::is_available() => {
+                println!("{provider:?}: unavailable (/dev/restore-dirty)");
+                continue;
+            }
+            Provider::UffdWpAsync
+            | Provider::UffdWpAsyncRescan
+            | Provider::UffdWpAsyncSparse
+            | Provider::UffdWpAsyncSparseRescan
+                if !UffdWpAsyncMapping::is_available() =>
+            {
+                println!("{provider:?}: unavailable (userfaultfd WP_ASYNC)");
+                continue;
+            }
+            _ => {}
+        }
+        let new_mapping = || -> Box<dyn ResettableMapping> {
+            match provider {
             Provider::Dummy => Box::new(DummyMapping::new(accessible_size, mapping_size)),
             Provider::CoW => Box::new(CowResetMapping::new(accessible_size, mapping_size)),
             Provider::Criu => Box::new(CriuMapping::new(accessible_size, mapping_size)),
             Provider::Lkm => Box::new(RestoreDirtyLKMMapping::new(accessible_size, mapping_size)),
+            Provider::UffdWpAsync | Provider::UffdWpAsyncRescan => {
+                Box::new(UffdWpAsyncMapping::new_with_options(
+                    accessible_size,
+                    mapping_size,
+                    UffdWpAsyncOptions {
+                        track_unpopulated: true,
+                        rearm_via_scan: matches!(provider, Provider::UffdWpAsyncRescan),
+                    },
+                ))
+            }
+            Provider::UffdWpAsyncSparse | Provider::UffdWpAsyncSparseRescan => {
+                Box::new(UffdWpAsyncMapping::new_with_options(
+                    accessible_size,
+                    mapping_size,
+                    UffdWpAsyncOptions {
+                        track_unpopulated: false,
+                        rearm_via_scan: matches!(provider, Provider::UffdWpAsyncSparseRescan),
+                    },
+                ))
+            }
+            Provider::SoftwareLog => Box::new(SoftwareDirtyMapping::new_with_mode(
+                accessible_size,
+                mapping_size,
+                DirtyTrackMode::Log,
+            )),
+            Provider::SoftwareBitmap => Box::new(SoftwareDirtyMapping::new_with_mode(
+                accessible_size,
+                mapping_size,
+                DirtyTrackMode::Bitmap,
+            )),
+            }
         };
 
-        mapping.restore();
-        dbg!(provider);
-
-        let mut chksum = 0;
-        let start = Instant::now();
-        for _ in 0..iters {
-            let slice = mapping.as_mut_slice();
-            page_offsets.shuffle(&mut rng);
-            page_offsets
-                .iter()
-                .take(touch)
-                .for_each(|&i| slice[i] = 0x42);
+        // One mapping per thread, all in the same address space: that's how the
+        // fuzzer runs, and it's the setup where the kernel-backed providers pay
+        // for TLB shootdowns to every other worker's core.
+        let worker = || {
+            let mut mapping = new_mapping();
+            let mut rng = rand::rng();
+            let mut page_offsets = (0..pages).map(|x| x << 12).collect::<Vec<_>>();
             mapping.restore();
-            let slice = mapping.as_slice();
-            chksum += page_offsets
-                .iter()
-                .take(touch)
-                .map(|&i| slice[i] as usize)
-                .sum::<usize>();
-        }
+            let mut chksum = 0;
+            for _ in 0..iters {
+                // partial: shuffling all `pages` offsets per iteration costs
+                // more than the restore we're trying to measure
+                page_offsets.partial_shuffle(&mut rng, touch);
+                for &i in page_offsets.iter().take(touch) {
+                    mapping.as_mut_slice()[i] = 0x42;
+                    // no-op except for SoftwareDirtyMapping, where it stands in
+                    // for the mark the JIT would emit as part of the store
+                    mapping.mark_dirty(i, 1);
+                }
+                mapping.restore();
+                let slice = mapping.as_slice();
+                chksum += page_offsets
+                    .iter()
+                    .take(touch)
+                    .map(|&i| slice[i] as usize)
+                    .sum::<usize>();
+            }
+            chksum
+        };
+
+        let start = Instant::now();
+        let chksum: usize = std::thread::scope(|scope| {
+            let handles = (0..threads)
+                .map(|_| scope.spawn(&worker))
+                .collect::<Vec<_>>();
+            handles.into_iter().map(|h| h.join().unwrap()).sum()
+        });
+        let elapsed = start.elapsed();
+        let restores = (iters * threads) as f64;
+        // Per-restore numbers are wall/(iters*threads), i.e. aggregate
+        // throughput rather than the latency a single worker sees.
         println!(
-            "{:?}: {:?} (chksum: {:#x})",
+            "{:?}: {:?} for {} restores across {} thread(s) -- {:.3} us/restore, \
+             {:.3} us/dirty page (chksum: {:#x})",
             provider,
-            start.elapsed(),
+            elapsed,
+            restores as usize,
+            threads,
+            elapsed.as_secs_f64() * 1e6 / restores,
+            elapsed.as_secs_f64() * 1e6 / (restores * touch as f64),
             chksum
         )
     }

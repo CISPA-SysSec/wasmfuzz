@@ -14,6 +14,135 @@ from pathlib import Path
 _terminate_signal = 0
 _children: list["Child"] = []
 
+CGROUP_MOUNT = Path("/sys/fs/cgroup")
+
+
+def read_self_cgroup_v2() -> Path:
+    with open("/proc/self/cgroup") as f:
+        for line in f:
+            hid, _controllers, path = line.rstrip("\n").split(":", 2)
+            if hid == "0":
+                return CGROUP_MOUNT / path.lstrip("/")
+    raise RuntimeError("no cgroup v2 unified hierarchy in /proc/self/cgroup")
+
+
+def try_rmdir(path: Path, attempts: int = 20) -> None:
+    """Best-effort removal of an (empty) cgroup directory, retrying briefly
+    after SIGKILL to let the kernel drain cgroup.procs."""
+    for i in range(attempts):
+        try:
+            path.rmdir()
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if i + 1 == attempts:
+                return
+            time.sleep(0.05)
+
+
+class Cgroup:
+    """Memory-limited cgroup subtree for the fuzzer and monitor.
+
+    Instead of enabling the memory controller in the HQ worker's own cgroup
+    (which requires evacuating the worker process and reversing that on
+    cleanup), we walk *up* the hierarchy to find the nearest ancestor that
+    already has +memory in its subtree_control and allows us to mkdir there.
+    We create a fresh wasmfuzz-task.<token> cgroup at that level with no
+    other processes in it, so cleanup is always a plain rmdir — no state is
+    left behind for subsequent tasks.
+    """
+
+    def __init__(self) -> None:
+        self.task_cg: Path | None = None
+        self.memory_enabled = False
+        try:
+            self._setup()
+        except (OSError, RuntimeError, ValueError) as e:
+            print(
+                f"[hq-run] warning: cgroup setup failed ({e}); "
+                "running without memory limits",
+                file=sys.stderr,
+            )
+
+    def _setup(self) -> None:
+        self_cg = read_self_cgroup_v2()
+        parent = _find_memory_parent(self_cg)
+        if parent is None:
+            print(
+                "[hq-run] warning: no writable ancestor cgroup with memory "
+                "controller found; running without memory limits",
+                file=sys.stderr,
+            )
+            return
+        task_cg = parent / f"wasmfuzz-task.{secrets.token_hex(4)}"
+        task_cg.mkdir()
+        self.task_cg = task_cg
+        (task_cg / "cgroup.subtree_control").write_text("+memory")
+        self.memory_enabled = True
+
+    def leaf(self, label: str, memory_limit_gb: int | None) -> Path | None:
+        if self.task_cg is None:
+            return None
+        leaf = self.task_cg / f"{label}.{secrets.token_hex(4)}"
+        try:
+            leaf.mkdir()
+            if self.memory_enabled and memory_limit_gb is not None:
+                (leaf / "memory.max").write_text(str(memory_limit_gb * 1024**3))
+                (leaf / "memory.swap.max").write_text("0")
+            return leaf
+        except OSError as e:
+            print(
+                f"[hq-run] warning: could not set up cgroup for {label} ({e})",
+                file=sys.stderr,
+            )
+            return None
+
+    def cleanup(self) -> None:
+        if self.task_cg is None:
+            return
+        try:
+            children = sorted(self.task_cg.iterdir(), reverse=True)
+        except OSError:
+            children = []
+        for child in children:
+            if child.is_dir():
+                try_rmdir(child)
+        try_rmdir(self.task_cg)
+
+
+def _find_memory_parent(start: Path) -> Path | None:
+    """Walk up the cgroup tree to find the nearest ancestor that has +memory
+    in its subtree_control and allows mkdir (i.e. is within our delegation)."""
+    cg = start
+    while cg != cg.parent:
+        try:
+            if "memory" in (cg / "cgroup.subtree_control").read_text().split():
+                probe = cg / f"wasmfuzz-probe.{secrets.token_hex(2)}"
+                probe.mkdir()
+                probe.rmdir()
+                return cg
+        except OSError:
+            pass
+        cg = cg.parent
+    return None
+
+
+def _make_preexec(cgroup: Path | None):
+    """Return a preexec_fn that marks the process as OOM-preferred and
+    optionally moves it into a cgroup leaf before exec."""
+    def preexec() -> None:
+        try:
+            Path("/proc/self/oom_score_adj").write_text("1000")
+        except OSError:
+            pass
+        if cgroup is not None:
+            try:
+                (cgroup / "cgroup.procs").write_text(str(os.getpid()))
+            except OSError:
+                pass
+    return preexec
+
 
 def count_cores_from_hq_cpus(hq_cpus: str | None) -> int:
     if not hq_cpus:
@@ -51,11 +180,20 @@ def signal_handler(sig: int, _frame: object) -> None:
 class Child:
     """A subprocess in its own session, killable as a group."""
 
-    def __init__(self, label: str, cmd: list[str], env: dict[str, str] = {}) -> None:
+    def __init__(
+        self,
+        label: str,
+        cmd: list[str],
+        env: dict[str, str] = {},
+        cgroup: Path | None = None,
+    ) -> None:
         env_ = os.environ.copy()
         env_.update(env)
         self.label = label
-        self.proc = subprocess.Popen(cmd, start_new_session=True, env=env_)
+        self.proc = subprocess.Popen(
+            cmd, start_new_session=True, env=env_,
+            preexec_fn=_make_preexec(cgroup),
+        )
         # start_new_session=True makes the child its own session leader,
         # so pgid == pid.
         self.pgid = self.proc.pid
@@ -172,10 +310,13 @@ def main() -> int:
 
     monitor: Child | None = None
     fuzzer: Child | None = None
+    cgroup = Cgroup()
 
     print(f"[hq-run] job={job_id} cores={cores} target={target} bucket={bucket}")
     print(f"[hq-run] exp_arg='{exp_arg}' env='{env_assigns}'")
 
+    # Note: monitor and fuzzer have generous memory limits. Average use has to
+    # be at <3GB/run to properly work on high-core-count cluster machines.
     try:
         monitor = Child(
             "monitor",
@@ -188,6 +329,7 @@ def main() -> int:
                 "--continuous",
                 f"--stats-in={task_dir / 'metrics.json'}"
             ],
+            cgroup=cgroup.leaf("monitor", memory_limit_gb=5),
         )
 
         fuzz_cmd = [
@@ -198,7 +340,12 @@ def main() -> int:
         ]
         if exp_arg:
             fuzz_cmd.append(exp_arg)
-        fuzzer = Child("fuzzer", fuzz_cmd, env={"WASMFUZZ_METRICS_JSON": task_dir / 'metrics.json'})
+        fuzzer = Child(
+            "fuzzer",
+            fuzz_cmd,
+            env={"WASMFUZZ_METRICS_JSON": str(task_dir / 'metrics.json')},
+            cgroup=cgroup.leaf("fuzzer", memory_limit_gb=10),
+        )
 
         reason, rc = supervise(fuzzer, monitor, time.monotonic() + timeout_seconds)
         print(f"[hq-run] {reason} rc={rc}; cleaning up")
@@ -218,6 +365,7 @@ def main() -> int:
         if fuzzer is not None:
             fuzzer.terminate()
 
+        cgroup.cleanup()
         save_corpus(corpus_dir, corpora_dir, f"{target_stem}-{bucket}")
         shutil.rmtree(corpus_dir, ignore_errors=True)
 

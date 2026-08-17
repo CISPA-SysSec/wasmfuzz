@@ -5,6 +5,9 @@ Bugs that reproduce in native builds:
 - jxl-oxide NaN crash https://github.com/tirr-c/jxl-oxide/pull/485#event-20156094711
 - image-tiff crash https://github.com/image-rs/image-tiff/pull/305
 - zlib-rs invalid deflate stream https://github.com/trifectatechfoundation/zlib-rs/issues/455
+- libtiff assertion in `_TIFFSwab24BitData`: https://gitlab.com/libtiff/libtiff/-/work_items/669#note_3432756113
+- fontations read-fonts oob panic in fvar.rs: https://github.com/googlefonts/fontations/pull/1903
+- jxl-rs: multiple findings (https://github.com/libjxl/jxl-rs/pull/811, ..)
 
 WebAssembly-only bugs:
 - Memory corruption in wasi-libc: https://github.com/WebAssembly/wasi-libc/pull/511

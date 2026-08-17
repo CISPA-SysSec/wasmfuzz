@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use crate::{cow_memory::RestoreDirtyLKMMapping, ir::ModuleSpec};
+use crate::{
+    cow_memory::{RestoreDirtyLKMMapping, UffdWpAsyncMapping},
+    ir::ModuleSpec,
+};
 
 pub(crate) fn run(program: Option<String>) {
     print_system_info();
@@ -113,11 +116,17 @@ fn print_system_info() {
     }
 
     println!("Memory restore strategy:");
-    println!("  [*] CoW-based memory restore (default)");
+    println!("  [*] JIT-tracked software dirty pages (default, needs no kernel support)");
+    println!("  [*] CoW-based memory restore (SNAPSHOT_PROVIDER=cow)");
     if RestoreDirtyLKMMapping::is_available() {
         println!("  [+] RestoreDirtyLKMMapping available (/dev/restore-dirty)");
     } else {
         println!("  [-] RestoreDirtyLKMMapping not available (/dev/restore-dirty)");
+    }
+    if UffdWpAsyncMapping::is_available() {
+        println!("  [+] UffdWpAsyncMapping available (userfaultfd WP_ASYNC + PAGEMAP_SCAN)");
+    } else {
+        println!("  [-] UffdWpAsyncMapping not available (userfaultfd WP_ASYNC + PAGEMAP_SCAN)");
     }
     /*
     - Memory limit? available parallelism?

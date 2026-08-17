@@ -49,10 +49,7 @@ pub(crate) unsafe extern "C" fn builtin_memory_fill(
         let vmctx = &mut *vmctx;
         vmctx.builtin_consume_fuel(len as u64);
 
-        let Some(buf) = vmctx
-            .heap()
-            .get_mut(dest as usize..dest as usize + len as usize)
-        else {
+        let Some(buf) = vmctx.heap_mut(dest as usize, len as usize) else {
             raise_trap(TrapReason::MemoryOutOfBounds)
         };
 
@@ -80,7 +77,10 @@ pub(crate) unsafe extern "C" fn builtin_memory_copy(
             raise_trap(TrapReason::MemoryOutOfBounds)
         };
 
-        heap.copy_within(src_pos..(src_pos + len), dst_pos);
+        // after the bounds check, so a trapping copy doesn't mark pages it
+        // never got to write
+        vmctx.mark_heap_dirty(dst_pos, len);
+        vmctx.heap().copy_within(src_pos..(src_pos + len), dst_pos);
     }
 }
 
@@ -91,10 +91,7 @@ pub(crate) unsafe extern "C" fn builtin_random_get(dest: u32, len: u32, vmctx: *
         use libafl_bolts::rands::{Rand, XorShift64Rand};
         let mut rng = XorShift64Rand::with_seed(vmctx.random_get_seed);
         vmctx.random_get_seed = rng.next();
-        let Some(buf) = vmctx
-            .heap()
-            .get_mut(dest as usize..dest as usize + len as usize)
-        else {
+        let Some(buf) = vmctx.heap_mut(dest as usize, len as usize) else {
             raise_trap(TrapReason::MemoryOutOfBounds)
         };
         for chunk in buf.chunks_mut(8) {
@@ -112,10 +109,7 @@ pub(crate) unsafe extern "C" fn builtin_clock_time_get(time_ptr: u32, vmctx: *mu
         // dbg!(vmctx.fuel_init, vmctx.fuel, time);
         // dbg!(time);
         let time = 1700000000 * 1000000000 + time * 100; // use a somewhat sensible time in nanos
-        let Some(buf) = vmctx
-            .heap()
-            .get_mut(time_ptr as usize..time_ptr as usize + 8)
-        else {
+        let Some(buf) = vmctx.heap_mut(time_ptr as usize, 8) else {
             raise_trap(TrapReason::MemoryOutOfBounds)
         };
         buf.copy_from_slice(&time.to_le_bytes());

@@ -86,7 +86,10 @@ impl ModuleInstance {
         }
         // unstable feedback might be caused by input buffer over-reads
         // self.vmctx.heap()[pos..][..u16::MAX as usize].fill(0);
-        self.vmctx.heap()[pos..pos + buf.len()].copy_from_slice(buf);
+        self.vmctx
+            .heap_mut(pos, buf.len())
+            .expect("input doesn't fit in guest memory")
+            .copy_from_slice(buf);
 
         if self.options.is_concolic() {
             self.vmctx.concolic.mark_input(pos, buf.len());

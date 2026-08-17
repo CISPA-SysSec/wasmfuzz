@@ -102,6 +102,10 @@ pub(crate) enum Subcommand {
         verbose: bool,
         #[clap(long, default_value = "true")]
         run_from_snapshot: FlagBool,
+        /// Compile with the instrumentation passes selected by -i instead of
+        /// with no feedback at all (the latter measures raw execution speed).
+        #[clap(long, default_value = "false")]
+        instrument: FlagBool,
         #[clap(long, default_value = "1000000")]
         execs: u32,
         #[clap(flatten)]
@@ -175,6 +179,9 @@ pub(crate) enum Subcommand {
         touch: usize,
         #[clap(long, default_value = "10000")]
         iters: usize,
+        /// Run this many worker threads at once, each with its own mapping.
+        #[clap(long, default_value = "1")]
+        threads: usize,
     },
     /// Extract embedded sources from the debug info.
     #[clap(hide = true)]
@@ -336,6 +343,7 @@ pub(crate) fn main() {
             execs,
             i,
             run_from_snapshot,
+            instrument,
         } => {
             let inputs = gather_inputs_paths(&None, &inputs, true);
             let mod_spec = parse_program(&program);
@@ -346,8 +354,11 @@ pub(crate) fn main() {
                 } else {
                     DebugTrace::Disabled
                 })
-                .feedback(i.to_feedback_opts())
-                .feedback(FeedbackOptions::nothing())
+                .feedback(if *instrument {
+                    i.to_feedback_opts()
+                } else {
+                    FeedbackOptions::nothing()
+                })
                 .tracing(TracingOptions {
                     stdout: true,
                     ..TracingOptions::default()
@@ -357,28 +368,33 @@ pub(crate) fn main() {
                 .build();
             sess.initialize(&mut stats);
 
+            let mut testcases = Vec::new();
             for inp in &inputs {
-                println!("Testcase: {inp:?}");
+                if verbose {
+                    println!("Testcase: {inp:?}");
+                }
                 let testcase = std::fs::read(inp).expect("couldn't read seed");
                 assert!(testcase.len() <= crate::TEST_CASE_SIZE_LIMIT);
                 sess.run(&testcase, &mut stats).expect_ok();
+                testcases.push(testcase);
             }
 
-            if !inputs.is_empty() {
-                println!("Bench: {:?} ({})", inputs[0], execs);
+            if !testcases.is_empty() {
+                // Cycle through all inputs instead of hammering a single one:
+                // per-exec cost (and dirty page count in particular) varies a
+                // lot between inputs, so one input isn't representative.
+                println!("Bench: {} testcase(s) ({} execs)", testcases.len(), execs);
                 let start = Instant::now();
-                let testcase = std::fs::read(&inputs[0]).expect("couldn't read seed");
                 for i in 0u32..execs {
-                    sess.run(&testcase, &mut stats).expect_ok();
-                    if i.is_power_of_two() {
-                        println!("{} {}", i, i.trailing_zeros());
-                    }
+                    let testcase = &testcases[i as usize % testcases.len()];
+                    sess.run(testcase, &mut stats).expect_ok();
                 }
                 let elapsed = start.elapsed();
                 println!(
-                    "done after {:?} ({:.02} exec/s)",
+                    "done after {:?} ({:.02} exec/s, {:.02} us/exec)",
                     elapsed,
-                    execs as f32 / elapsed.as_secs_f32()
+                    execs as f32 / elapsed.as_secs_f32(),
+                    elapsed.as_secs_f64() * 1e6 / execs as f64,
                 )
             }
         }
@@ -660,8 +676,9 @@ pub(crate) fn main() {
             pages,
             touch,
             iters,
+            threads,
         } => {
-            misc_eval::eval_snapshot_perf(pages, touch, iters);
+            misc_eval::eval_snapshot_perf(pages, touch, iters, threads);
         }
         Subcommand::Doctor { program } => doctor::run(program),
 

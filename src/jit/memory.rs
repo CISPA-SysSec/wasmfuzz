@@ -53,6 +53,66 @@ fn translate_load(
     state.push1(result_ty, val);
 }
 
+// Software dirty tracking: record the page(s) this store touches in the
+// byte-per-page dirty map, so snapshot-restore only has to copy them back.
+//
+// The index is the *guest* offset (`addr32 + memarg.offset`), not the host
+// address, so the heap base doesn't come into it. Both marks are blind stores:
+// no load, no branch, and the map stays hot in L1.
+//
+// wasm allows unaligned accesses, so a store can straddle a page boundary and
+// the last byte's page has to be marked too. For all but a handful of stores
+// that's the same byte as the first mark, i.e. a store-to-store forward rather
+// than a second cache access.
+fn mark_store_dirty(
+    addr32: ir::Value,
+    static_offset: u64,
+    width: u32,
+    state: &mut FuncTranslator,
+    bcx: &mut FunctionBuilder,
+) {
+    let Some(map_base) = state.get_dirty_map_base(bcx) else {
+        return;
+    };
+    let ptr_ty = state.ptr_ty();
+    const PAGE_SHIFT: i64 = 12;
+
+    let offset = bcx.ins().uextend(ptr_ty, addr32);
+    let offset = if static_offset == 0 {
+        offset
+    } else {
+        let off = bcx.ins().iconst(ptr_ty, static_offset as i64);
+        bcx.ins().iadd(offset, off)
+    };
+
+    let one = bcx.ins().iconst(ir::types::I8, 1);
+    let flags = ir::MemFlagsData::trusted();
+
+    let first = bcx.ins().ushr_imm_u(offset, PAGE_SHIFT);
+    let addr = bcx.ins().iadd(map_base, first);
+    bcx.ins()
+        .store(flags, one, addr, ir::immediates::Offset32::new(0));
+
+    if width > 1 {
+        let last = bcx.ins().iadd_imm_u(offset, (width - 1) as i64);
+        let last = bcx.ins().ushr_imm_u(last, PAGE_SHIFT);
+        let addr = bcx.ins().iadd(map_base, last);
+        bcx.ins()
+            .store(flags, one, addr, ir::immediates::Offset32::new(0));
+    }
+}
+
+// Bytes actually written by a store opcode, which is the narrowed width for
+// the Istore8/16/32 forms rather than the width of the value type.
+fn store_width(opcode: ir::Opcode, val_ty: ir::Type) -> u32 {
+    match opcode {
+        ir::Opcode::Istore8 => 1,
+        ir::Opcode::Istore16 => 2,
+        ir::Opcode::Istore32 => 4,
+        _ => val_ty.bytes(),
+    }
+}
+
 fn translate_store(
     imm: &MemArg,
     opcode: ir::Opcode,
@@ -81,6 +141,13 @@ fn translate_store(
     if state.dead(bcx) {
         return;
     }
+    mark_store_dirty(
+        addr32,
+        imm.offset,
+        store_width(opcode, val_ty),
+        state,
+        bcx,
+    );
     bcx.ins().Store(opcode, val_ty, flags, offset, val, addr);
     let kind = crate::concolic::MemoryAccessKind::from_opcode_and_ty(opcode, val_ty);
     state.concolic_memory_store(val, addr32, imm.offset as u32, kind, bcx);
