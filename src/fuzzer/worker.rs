@@ -60,6 +60,17 @@ pub(crate) struct Worker {
 }
 
 impl Worker {
+    /// Returns an exit reason when a wall-clock or idle limit is hit.
+    fn poll_schedule(&self) -> Option<WorkerExit> {
+        if self.stop_requested || self.schedule.is_timeout() || self.schedule.is_setup_timeout() {
+            return Some(WorkerExit::Timeout);
+        }
+        if self.schedule.fuzzing() && self.schedule.is_idle_timeout() {
+            return Some(WorkerExit::IdleTimeout);
+        }
+        None
+    }
+
     pub(crate) fn new(
         mod_spec: Arc<ModuleSpec>,
         opts: FuzzOpts,
@@ -376,13 +387,12 @@ impl Worker {
             if self.corpus.is_empty() {
                 return Ok(WorkerExit::InvalidSwarm);
             }
-            if self.schedule.is_timeout() {
-                panic!("timeout hit during corpus initialization");
-            }
-            self.schedule.notify_activity();
-            self.schedule.start();
-        } else if self.schedule.is_timeout() {
-            return Ok(WorkerExit::Timeout);
+        }
+
+        self.schedule.start();
+        self.schedule.notify_activity();
+        if let Some(exit) = self.poll_schedule() {
+            return Ok(exit);
         }
 
         println!("starting with {} corpus entries...", self.corpus.count());
@@ -572,12 +582,8 @@ impl Worker {
                 sticky_input = None;
             }
 
-            if self.schedule.is_timeout() || self.stop_requested {
-                return Ok(WorkerExit::Timeout);
-            }
-
-            if self.schedule.is_idle_timeout() {
-                return Ok(WorkerExit::IdleTimeout);
+            if let Some(exit) = self.poll_schedule() {
+                return Ok(exit);
             }
         }
     }
@@ -615,7 +621,7 @@ impl Worker {
                 }
                 // eprintln!("on_corpus: {:?}", entry.file_name());
                 CrashOrLibAFLError::convert(self.on_corpus(&input, true))?;
-                if self.schedule.is_timeout() {
+                if self.poll_schedule().is_some() {
                     eprintln!("[WARN] timeout during initialize_corpus");
                     break;
                 }
