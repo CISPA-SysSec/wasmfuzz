@@ -76,10 +76,10 @@ impl ValTy {
             Self::I32 => bcx.ins().uextend(types::I64, val),
             Self::I64 => val,
             Self::F32 => {
-                let val = bcx.ins().bitcast(types::I32, MemFlags::new(), val);
+                let val = bcx.ins().bitcast(types::I32, MemFlagsData::new(), val);
                 bcx.ins().uextend(types::I64, val)
             }
-            Self::F64 => bcx.ins().bitcast(types::I64, MemFlags::new(), val),
+            Self::F64 => bcx.ins().bitcast(types::I64, MemFlagsData::new(), val),
         }
     }
 }

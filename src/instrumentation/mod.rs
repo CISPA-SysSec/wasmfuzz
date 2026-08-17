@@ -479,12 +479,12 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice + FeedbackLatticeCodegen>
             let slot_ptr = ctx.state.host_ptr(ctx.bcx, slot as *const _);
             let prev = ctx.bcx.ins().load(
                 <V as FeedbackLatticeCodegen>::cranelift_ty(),
-                MemFlags::trusted(),
+                MemFlagsData::trusted(),
                 slot_ptr,
                 0,
             );
             let val = <V as FeedbackLatticeCodegen>::unify(val, prev, ctx.bcx);
-            ctx.bcx.ins().store(MemFlags::trusted(), val, slot_ptr, 0);
+            ctx.bcx.ins().store(MemFlagsData::trusted(), val, slot_ptr, 0);
         }
     }
 }

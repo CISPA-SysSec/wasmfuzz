@@ -126,7 +126,7 @@ pub(crate) fn run(mod_spec: Arc<ModuleSpec>, opts: CminOpts) {
             );
             for (prev_path, input) in &prev_files {
                 if remaining_inputs.contains(input) {
-                    println!("[+] keeping  {:?}", &prev_path);
+                    println!("[+] keeping  {:?}", prev_path);
                     continue;
                 }
                 let filename = prev_path.file_name().unwrap().to_str().unwrap();

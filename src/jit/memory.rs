@@ -1,4 +1,5 @@
 use super::FuncTranslator;
+use super::util::intern_memflags;
 use crate::ir::MemoryInstruction;
 use cranelift::codegen::ir;
 use cranelift::prelude::InstBuilder;
@@ -36,8 +37,9 @@ fn translate_load(
     let addr = bcx.ins().uextend(state.ptr_ty(), addr32);
     let addr = bcx.ins().iadd(base, addr);
     let addr = fold_static_offset(addr, imm.offset, state, bcx);
-    let mut flags = ir::MemFlags::new();
+    let mut flags = ir::MemFlagsData::new();
     flags.set_endianness(ir::Endianness::Little);
+    let flags = intern_memflags(bcx, flags);
     let offset = ir::immediates::Offset32::new(0);
     let (load, dfg) = bcx.ins().Load(opcode, result_ty, flags, offset, addr);
     let val = dfg.first_result(load);
@@ -68,8 +70,9 @@ fn translate_store(
     let addr = bcx.ins().uextend(state.ptr_ty(), addr32);
     let addr = bcx.ins().iadd(base, addr);
     let addr = fold_static_offset(addr, imm.offset, state, bcx);
-    let mut flags = ir::MemFlags::new();
+    let mut flags = ir::MemFlagsData::new();
     flags.set_endianness(ir::Endianness::Little);
+    let flags = intern_memflags(bcx, flags);
     let offset = ir::immediates::Offset32::new(0);
 
     state.iter_passes(bcx, |pass, ctx| {

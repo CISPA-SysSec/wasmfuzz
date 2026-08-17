@@ -1,7 +1,7 @@
 use std::hash::Hash;
 
 use bitvec::{prelude::*, ptr::Mut, slice};
-use cranelift::codegen::ir::{self, InstBuilder, MemFlags, types::I8};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlagsData, types::I8};
 use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::jit::vmcontext::VMContext;
@@ -72,9 +72,9 @@ impl HashBitset {
         // TODO: handle this with a function call?
         let size = self.entries.len();
         debug_assert!(size.is_power_of_two());
-        let index = ctx.bcx.ins().band_imm(key, (size - 1) as i64);
-        let offset = ctx.bcx.ins().ushr_imm(index, 3);
-        let bit = ctx.bcx.ins().band_imm(key, 0b111);
+        let index = ctx.bcx.ins().band_imm_u(key, (size - 1) as i64);
+        let offset = ctx.bcx.ins().ushr_imm_u(index, 3);
+        let bit = ctx.bcx.ins().band_imm_u(key, 0b111);
         let one = ctx.bcx.ins().iconst(I8, 1);
         let mask = ctx.bcx.ins().rotl(one, bit);
 
@@ -84,9 +84,9 @@ impl HashBitset {
         let entry_ptr = ctx.bcx.ins().iadd(entries_ptr, offset);
 
         if ctx.state.options.kind == CompilationKind::Reusable {
-            let val = ctx.bcx.ins().load(I8, MemFlags::trusted(), entry_ptr, 0);
+            let val = ctx.bcx.ins().load(I8, MemFlagsData::trusted(), entry_ptr, 0);
             let val = ctx.bcx.ins().bor(val, mask);
-            ctx.bcx.ins().store(MemFlags::trusted(), val, entry_ptr, 0);
+            ctx.bcx.ins().store(MemFlagsData::trusted(), val, entry_ptr, 0);
         }
     }
 
@@ -199,7 +199,7 @@ fn instrument_trampoline<P: HashBitsetInstrumentationPass>(pass: &P, mut ctx: In
         0,
         std::mem::size_of::<u64>() as _,
         std::mem::align_of::<u64>() as _,
-        MemFlags::trusted(),
+        MemFlagsData::trusted(),
     );
 
     let new_cov_ptr = pass.coverage().new_coverage.as_ref() as *const _;
@@ -207,7 +207,7 @@ fn instrument_trampoline<P: HashBitsetInstrumentationPass>(pass: &P, mut ctx: In
     let zero = ctx.bcx.ins().iconst(ir::types::I8, 0);
     ctx.bcx
         .ins()
-        .store(MemFlags::trusted(), zero, new_cov_ptr, 0);
+        .store(MemFlagsData::trusted(), zero, new_cov_ptr, 0);
 }
 
 pub(crate) struct FuncPathHashPass {

@@ -1,5 +1,5 @@
 use clap::Parser;
-use rand::Rng;
+use rand::RngExt;
 use std::{
     io::{BufRead, Write},
     path::{Path, PathBuf},
@@ -132,6 +132,10 @@ pub(crate) enum Subcommand {
         input: String,
     },
     ShowConcolic {
+        program: PathBuf,
+        input: String,
+    },
+    ShowCmplog {
         program: PathBuf,
         input: String,
     },
@@ -594,7 +598,7 @@ pub(crate) fn main() {
 
             let input = std::fs::read(input).unwrap();
             assert!(input.len() <= crate::TEST_CASE_SIZE_LIMIT);
-            sess.run_tracing_fresh(&input, &mut stats).unwrap();
+            let _res = sess.run_tracing_fresh(&input, &mut stats);
 
             let context = sess
                 .tracing_stage
@@ -608,6 +612,26 @@ pub(crate) fn main() {
             let trace = context.compact_to_trace(&input);
             for ev in &trace.events {
                 trace.symvals.debug_event(ev);
+            }
+        }
+        Subcommand::ShowCmplog { program, input } => {
+            let mod_spec = parse_program(&program);
+            let input = std::fs::read(input).unwrap();
+            let mut stats = Stats::default();
+            let mut sess = JitFuzzingSession::builder(mod_spec)
+                .feedback(FeedbackOptions::nothing())
+                .tracing(TracingOptions {
+                    cmplog: true,
+                    ..TracingOptions::default()
+                })
+                .build();
+            sess.initialize(&mut stats);
+            let res = sess.run_tracing_fresh(&input, &mut stats).unwrap();
+            for (loc, cmplog) in &res.cmplog {
+                println!("{loc:?}");
+                for cmp in cmplog {
+                    println!("  {cmp:?}");
+                }
             }
         }
         Subcommand::MonitorCov(opts) => monitor_cov::run(opts),
@@ -703,7 +727,7 @@ pub(crate) fn main() {
                 let mut len = [0; 4];
                 stdout.read_exact(&mut len).unwrap();
                 let len = u32::from_le_bytes(len);
-                buf.truncate(0);
+                buf.clear();
                 buf.resize(len as usize, 0);
                 stdout.read_exact(&mut buf).unwrap();
 

@@ -6,7 +6,7 @@ use crate::ir::{
     operators::FRelOp,
 };
 use cranelift::codegen::ir;
-use cranelift::prelude::{FloatCC, IntCC, MemFlags, types::*};
+use cranelift::prelude::{FloatCC, IntCC, MemFlagsData, types::*};
 use cranelift::{frontend::FunctionBuilder, prelude::InstBuilder};
 
 pub(crate) fn translate_const(
@@ -77,7 +77,7 @@ fn translate_itestop(
             if state.dead(bcx) {
                 return state.adjust_pop_push(&[], &[I32]);
             }
-            let res = bcx.ins().icmp_imm(IntCC::Equal, arg, 0);
+            let res = bcx.ins().icmp_imm_u(IntCC::Equal, arg, 0);
             let res = bcx.ins().uextend(I32, res);
             state.fill_concolic_unop(I32, res, op.into(), arg, bcx);
             state.push1(I32, res);
@@ -265,10 +265,10 @@ fn translate_conversion_op(
         ConversionOp::I32TruncSatF64U | ConversionOp::I32TruncSatF32U => {
             bcx.ins().fcvt_to_uint_sat(I32, val)
         }
-        ConversionOp::F32ReinterpretI32 => bcx.ins().bitcast(F32, MemFlags::new(), val),
-        ConversionOp::F64ReinterpretI64 => bcx.ins().bitcast(F64, MemFlags::new(), val),
-        ConversionOp::I32ReinterpretF32 => bcx.ins().bitcast(I32, MemFlags::new(), val),
-        ConversionOp::I64ReinterpretF64 => bcx.ins().bitcast(I64, MemFlags::new(), val),
+        ConversionOp::F32ReinterpretI32 => bcx.ins().bitcast(F32, MemFlagsData::new(), val),
+        ConversionOp::F64ReinterpretI64 => bcx.ins().bitcast(F64, MemFlagsData::new(), val),
+        ConversionOp::I32ReinterpretF32 => bcx.ins().bitcast(I32, MemFlagsData::new(), val),
+        ConversionOp::I64ReinterpretF64 => bcx.ins().bitcast(I64, MemFlagsData::new(), val),
     };
     state.fill_concolic_unop(to_ty, res, op.into(), val, bcx);
     state.push1(to_ty, res);

@@ -106,7 +106,7 @@ pub(crate) fn translate_variable(
             let addr = state.vmctx.globals.as_ptr();
             let addr = state.host_ptr(bcx, addr);
             let offset = (index as i32) * 8;
-            let flags = ir::MemFlags::trusted();
+            let flags = ir::MemFlagsData::trusted();
             let val = bcx.ins().load(ty, flags, addr, offset);
 
             if state.options.is_concolic() {
@@ -131,7 +131,7 @@ pub(crate) fn translate_variable(
             let addr = state.vmctx.globals.as_ptr();
             let addr = state.host_ptr(bcx, addr);
             let offset = (index as i32) * 8;
-            let flags = ir::MemFlags::trusted();
+            let flags = ir::MemFlagsData::trusted();
             bcx.ins().store(flags, val, addr, offset);
 
             state.iter_passes(bcx, |pass, ctx| {

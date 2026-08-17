@@ -8,7 +8,7 @@ use super::concolic::{
 };
 use super::util::{values_to_blockargs, wasm2tys};
 use codegen::ir::SigRef;
-use cranelift::codegen::ir::{self, ArgumentPurpose};
+use cranelift::codegen::ir;
 use cranelift::prelude::types::*;
 use cranelift::prelude::*;
 
@@ -419,9 +419,9 @@ pub(crate) fn translate_control<'a, 'b, 's>(
 
             // signature check: a mismatch (or the u32::MAX empty-slot sentinel)
             // traps before we dispatch to a bad pointer
-            let sig_offset = bcx.ins().imul_imm(callee_idx, 4);
+            let sig_offset = bcx.ins().imul_imm_u(callee_idx, 4);
             let sig_addr = bcx.ins().iadd(sig_ptr, sig_offset);
-            let slot_sig = bcx.ins().load(I32, ir::MemFlags::trusted(), sig_addr, 0);
+            let slot_sig = bcx.ins().load(I32, ir::MemFlagsData::trusted(), sig_addr, 0);
             let want_sig = bcx.ins().iconst(I32, expected_sig);
             let sig_mismatch = bcx.ins().icmp(IntCC::NotEqual, slot_sig, want_sig);
             bcx.ins().trapnz(
@@ -429,11 +429,11 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 state.trap_abort(AbortCode::IndirectCallTypeMismatch),
             );
 
-            let callee_offset = bcx.ins().imul_imm(callee_idx, 8);
+            let callee_offset = bcx.ins().imul_imm_u(callee_idx, 8);
             let ptr = bcx.ins().iadd(ptr, callee_offset);
             let callee = bcx
                 .ins()
-                .load(state.ptr_ty(), ir::MemFlags::trusted(), ptr, 0);
+                .load(state.ptr_ty(), ir::MemFlagsData::trusted(), ptr, 0);
 
             translate_call(function_ty, state, bcx, Callee::Indirect { sigref, callee });
             // TODO: insert edges?
@@ -471,10 +471,7 @@ fn translate_call(
     }
 
     params_augument_concolic(&mut params, state);
-    let vmctx = bcx
-        .func
-        .special_param(ArgumentPurpose::VMContext)
-        .expect("Missing vmctx parameter");
+    let vmctx = super::builtins::fetch_vmctx(bcx);
 
     params.push(vmctx);
 

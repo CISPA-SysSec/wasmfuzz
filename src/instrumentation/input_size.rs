@@ -1,4 +1,4 @@
-use cranelift::codegen::ir::{self, InstBuilder, MemFlags};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlagsData};
 use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
@@ -63,7 +63,7 @@ impl KVInstrumentationPass for InputSizePass {
         let cost = ctx
             .bcx
             .ins()
-            .load(ir::types::I16, MemFlags::trusted(), cost_ptr, 0);
+            .load(ir::types::I16, MemFlagsData::trusted(), cost_ptr, 0);
         self.coverage.instrument_coverage(&key, cost, ctx, self);
     }
 
@@ -72,7 +72,7 @@ impl KVInstrumentationPass for InputSizePass {
         let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
         let cost_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
         let zero = ctx.bcx.ins().iconst(ir::types::I16, 0);
-        ctx.bcx.ins().store(MemFlags::trusted(), zero, cost_ptr, 0);
+        ctx.bcx.ins().store(MemFlagsData::trusted(), zero, cost_ptr, 0);
     }
 
     fn instrument_fuzz_trampoline(
@@ -98,7 +98,7 @@ impl KVInstrumentationPass for InputSizePass {
         );
         ctx.bcx
             .ins()
-            .store(MemFlags::trusted(), cost_val, cost_ptr, 0);
+            .store(MemFlagsData::trusted(), cost_val, cost_ptr, 0);
 
         unsafe extern "C" fn compute_metric_size(
             _inp_ptr: u32,

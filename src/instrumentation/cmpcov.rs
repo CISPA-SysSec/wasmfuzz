@@ -1,4 +1,4 @@
-use cranelift::codegen::ir::{self, InstBuilder, MemFlags, Type, Value, condcodes::IntCC};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlagsData, Type, Value, condcodes::IntCC};
 use cranelift::frontend::FunctionBuilder;
 
 use crate::ir::{Location, ModuleSpec};
@@ -41,12 +41,12 @@ impl CmpCoveragePass {
         use ir::types::*;
         if value_ty == F32 {
             // value_ty = I32;
-            value_a = bcx.ins().bitcast(I32, MemFlags::new(), value_a);
-            value_b = bcx.ins().bitcast(I32, MemFlags::new(), value_b);
+            value_a = bcx.ins().bitcast(I32, MemFlagsData::new(), value_a);
+            value_b = bcx.ins().bitcast(I32, MemFlagsData::new(), value_b);
         } else if value_ty == F64 {
             // value_ty = I64;
-            value_a = bcx.ins().bitcast(I64, MemFlags::new(), value_a);
-            value_b = bcx.ins().bitcast(I64, MemFlags::new(), value_b);
+            value_a = bcx.ins().bitcast(I64, MemFlagsData::new(), value_a);
+            value_b = bcx.ins().bitcast(I64, MemFlagsData::new(), value_b);
         }
         let dist = bcx.ins().bxor(value_a, value_b);
         let dist = bcx.ins().popcnt(dist);
@@ -67,9 +67,9 @@ impl CmpCoveragePass {
                 // IEEE 754 binary32 layout:
                 // 1 sign 8 exponent 23 fraction
                 // extract exponent:
-                let val = bcx.ins().bitcast(I32, MemFlags::new(), diff);
-                let val = bcx.ins().ishl_imm(val, 1);
-                let val = bcx.ins().ushr_imm(val, 24);
+                let val = bcx.ins().bitcast(I32, MemFlagsData::new(), diff);
+                let val = bcx.ins().ishl_imm_u(val, 1);
+                let val = bcx.ins().ushr_imm_u(val, 24);
                 bcx.ins().ireduce(I8, val)
             }
             ir::types::F64 => {
@@ -77,9 +77,9 @@ impl CmpCoveragePass {
                 // IEEE 754 binary64 layout:
                 // 1 sign 11 exponent 52 fraction
                 // extract exponent:
-                let val = bcx.ins().bitcast(I64, MemFlags::new(), diff);
-                let val = bcx.ins().ishl_imm(val, 1);
-                let val = bcx.ins().ushr_imm(val, 53);
+                let val = bcx.ins().bitcast(I64, MemFlagsData::new(), diff);
+                let val = bcx.ins().ishl_imm_u(val, 1);
+                let val = bcx.ins().ushr_imm_u(val, 53);
                 let u8_max = bcx.ins().iconst(I64, 255);
                 let val = bcx.ins().smin(val, u8_max);
                 bcx.ins().ireduce(I8, val)
@@ -99,13 +99,15 @@ impl CmpCoveragePass {
                     let is_small = bcx.ins().icmp(IntCC::UnsignedLessThan, dist, v_thresh);
 
                     let lz = bcx.ins().clz(dist);
-                    let lz_dist = bcx.ins().irsub_imm(lz, 255);
+                    let c255 = bcx.ins().iconst(value_ty, 255);
+                    let lz_dist = bcx.ins().isub(c255, lz);
 
                     bcx.ins().select(is_small, dist, lz_dist)
                 } else {
                     // More leading zeros => smaller distance
                     let progress = bcx.ins().clz(dist);
-                    bcx.ins().irsub_imm(progress, value_ty.bits() as i64)
+                    let bits = bcx.ins().iconst(value_ty, value_ty.bits() as i64);
+                    bcx.ins().isub(bits, progress)
                 };
 
                 bcx.ins().ireduce(I8, res)

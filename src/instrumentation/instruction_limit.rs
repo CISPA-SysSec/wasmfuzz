@@ -1,4 +1,4 @@
-use cranelift::codegen::ir::{self, InstBuilder, MemFlags};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlagsData};
 use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::{ir::ModuleSpec, jit::vmcontext::VMContext};
@@ -42,13 +42,12 @@ fn instrument_site<
     let initial_fuel = ctx
         .bcx
         .ins()
-        .load(ir::types::I64, MemFlags::trusted(), initial_fuel_ptr, 0);
+        .load(ir::types::I64, MemFlagsData::trusted(), initial_fuel_ptr, 0);
 
-    let gv_vmctx = ctx.state.get_vmctx(ctx.bcx);
-    let vmctx = ctx.bcx.ins().global_value(ctx.state.ptr_ty(), gv_vmctx);
+    let vmctx = ctx.state.get_vmctx(ctx.bcx);
     let fuel = ctx.bcx.ins().load(
         ir::types::I64,
-        MemFlags::trusted(),
+        MemFlagsData::trusted(),
         vmctx,
         std::mem::offset_of!(VMContext, fuel) as i32,
     );
@@ -63,17 +62,16 @@ fn instrument_trampoline(mut ctx: InstrCtx) {
     let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
     let initial_fuel_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
 
-    let gv_vmctx = ctx.state.get_vmctx(ctx.bcx);
-    let vmctx = ctx.bcx.ins().global_value(ctx.state.ptr_ty(), gv_vmctx);
+    let vmctx = ctx.state.get_vmctx(ctx.bcx);
     let initial_fuel = ctx.bcx.ins().load(
         ir::types::I64,
-        MemFlags::trusted(),
+        MemFlagsData::trusted(),
         vmctx,
         std::mem::offset_of!(VMContext, fuel) as i32,
     );
     ctx.bcx
         .ins()
-        .store(MemFlags::trusted(), initial_fuel, initial_fuel_ptr, 0);
+        .store(MemFlagsData::trusted(), initial_fuel, initial_fuel_ptr, 0);
 }
 
 pub(crate) struct FunctionShortestExecutionTracePass {

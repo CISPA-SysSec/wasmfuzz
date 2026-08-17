@@ -6,7 +6,7 @@ use std::{
 
 use clap::Parser;
 use humantime::Duration;
-use rand::{Rng, SeedableRng, prelude::*, rngs::StdRng};
+use rand::{prelude::*, rngs::StdRng};
 
 use crate::{
     HashSet,
@@ -268,7 +268,7 @@ impl SharedCorpus {
         }
     }
 
-    fn sample<R: RngCore>(&self, rng: &mut R) -> Vec<Arc<[u8]>> {
+    fn sample<R: Rng>(&self, rng: &mut R) -> Vec<Arc<[u8]>> {
         let mut res = Vec::new();
         for e in self.entries.values() {
             if e.weight >= rng.random() {
@@ -344,7 +344,7 @@ impl Orchestrator {
             // func_reachcounts: Default::default(),
             // edge_reachcounts: Default::default(),
             module,
-            rng: StdRng::from_os_rng(),
+            rng: StdRng::from_rng(&mut rand::rng()),
             found_crashes: false,
             corpus,
             init_funcs,

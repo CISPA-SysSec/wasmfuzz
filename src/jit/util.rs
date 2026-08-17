@@ -1,5 +1,6 @@
 use cranelift::codegen::ir;
-use cranelift::prelude::MemFlags;
+use cranelift::frontend::FunctionBuilder;
+use cranelift::prelude::MemFlagsData;
 use wasmparser::ValType;
 
 pub(crate) fn wasm2ty(ty: &ValType) -> ir::Type {
@@ -21,13 +22,18 @@ pub(crate) fn values_to_blockargs(vals: &[ir::Value]) -> Vec<ir::BlockArg> {
 }
 
 pub trait MemFlagsExt {
-    fn trusted_ro() -> MemFlags;
+    fn trusted_ro() -> MemFlagsData;
 }
 
-impl MemFlagsExt for MemFlags {
-    fn trusted_ro() -> MemFlags {
-        let mut flags = Self::trusted();
-        flags.set_readonly();
-        flags
+impl MemFlagsExt for MemFlagsData {
+    fn trusted_ro() -> MemFlagsData {
+        Self::trusted().with_readonly()
     }
+}
+
+pub(crate) fn intern_memflags(
+    bcx: &mut FunctionBuilder<'_>,
+    flags: ir::MemFlagsData,
+) -> ir::MemFlags {
+    bcx.func.dfg.mem_flags.insert_unchecked(flags)
 }

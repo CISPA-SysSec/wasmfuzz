@@ -1,4 +1,6 @@
-use cranelift::codegen::ir::{self, InstBuilder, MemFlags, Type, Value, types};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlagsData, Type, Value, types};
+
+use crate::jit::util::intern_memflags;
 
 use crate::ir::{Location, ModuleSpec};
 
@@ -232,8 +234,9 @@ impl KVInstrumentationPass for MemoryStorePrevValRangePass {
         let addr = ctx.bcx.ins().uextend(ctx.state.ptr_ty(), addr32);
         let addr = ctx.bcx.ins().iadd(base, addr);
         let offset = ir::immediates::Offset32::new(imm_offset as i32);
-        let mut flags = MemFlags::new();
+        let mut flags = MemFlagsData::new();
         flags.set_endianness(ir::Endianness::Little);
+        let flags = intern_memflags(ctx.bcx, flags);
         let (load, dfg) = ctx.bcx.ins().Load(load_opcode, ty, flags, offset, addr);
         let val = dfg.first_result(load);
         self.coverage

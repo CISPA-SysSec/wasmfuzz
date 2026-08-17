@@ -1,5 +1,5 @@
 use bitvec::prelude::*;
-use cranelift::codegen::ir::{InstBuilder, MemFlags, types::I8};
+use cranelift::codegen::ir::{InstBuilder, MemFlagsData, types::I8};
 
 use crate::{
     ir::{Location, ModuleSpec},
@@ -69,14 +69,14 @@ impl<K: Ord + Clone> CoverageBitset<K> {
                 // elements explicitly above in order to keep the mask
                 // immediate size down.
                 I8,
-                MemFlags::trusted(),
+                MemFlagsData::trusted(),
                 entries_ptr,
                 entry_offset,
             );
-            let val = ctx.bcx.ins().bor_imm(val, entry_mask as i64);
+            let val = ctx.bcx.ins().bor_imm_u(val, entry_mask as i64);
             ctx.bcx
                 .ins()
-                .store(MemFlags::trusted(), val, entries_ptr, entry_offset);
+                .store(MemFlagsData::trusted(), val, entries_ptr, entry_offset);
         }
     }
 

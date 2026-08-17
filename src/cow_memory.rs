@@ -233,7 +233,11 @@ impl ResettableMapping for CowResetMapping {
 
     fn resize(&mut self, accessible_size: usize) {
         tracy_full::zone!("CowResetMapping::resize");
-        // eprintln!("CowResetMapping::resize {} -> {} pages", self.accessible_size / 4096, accessible_size / 4096);
+        /*eprintln!(
+            "CowResetMapping::resize {} -> {}",
+            humansize::format_size(self.accessible_size, humansize::DECIMAL),
+            humansize::format_size(accessible_size, humansize::DECIMAL)
+        );*/
         assert!(accessible_size <= self.mapping_size);
         // Commit the accessible size.
         unsafe {

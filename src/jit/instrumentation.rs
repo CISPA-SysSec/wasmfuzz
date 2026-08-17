@@ -1,6 +1,6 @@
 use cranelift::codegen::ir;
 use cranelift::frontend::FunctionBuilder;
-use cranelift::prelude::{InstBuilder, IntCC, MemFlags, Type, Value, types::I64};
+use cranelift::prelude::{InstBuilder, IntCC, MemFlagsData, Type, Value, types::I64};
 
 use crate::ir::{Location, heuristics::Libfunc};
 
@@ -86,22 +86,21 @@ fn instrument_bb_fuel(state: &mut FuncTranslator, bcx: &mut FunctionBuilder, loc
         .unwrap_or(f.operators.len() as u32);
     let bb_size = (bb_end - bb_start.0) as i64;
 
-    let gv_vmctx = state.get_vmctx(bcx);
-    let vmctx = bcx.ins().global_value(state.ptr_ty(), gv_vmctx);
+    let vmctx = state.get_vmctx(bcx);
     let fuel = bcx.ins().load(
         I64,
-        MemFlags::trusted(),
+        MemFlagsData::trusted(),
         vmctx,
         std::mem::offset_of!(VMContext, fuel) as i32,
     );
 
-    let is_lt = bcx.ins().icmp_imm(IntCC::UnsignedLessThan, fuel, bb_size);
+    let is_lt = bcx.ins().icmp_imm_u(IntCC::UnsignedLessThan, fuel, bb_size);
     let trap_code = state.get_trap_code(TrapKind::OutOfFuel(Some(location)));
     bcx.ins().trapnz(is_lt, trap_code);
 
-    let fuel = bcx.ins().iadd_imm(fuel, -bb_size);
+    let fuel = bcx.ins().iadd_imm_s(fuel, -bb_size);
     bcx.ins().store(
-        MemFlags::trusted(),
+        MemFlagsData::trusted(),
         fuel,
         vmctx,
         std::mem::offset_of!(VMContext, fuel) as i32,

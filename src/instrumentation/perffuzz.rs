@@ -1,4 +1,4 @@
-use cranelift::codegen::ir::{self, InstBuilder, MemFlags};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlagsData};
 use cranelift::frontend::Variable;
 use cranelift::module::{DataDescription, DataId, Module};
 
@@ -71,7 +71,7 @@ impl KVInstrumentationPass for EdgeHitsInAFunctionPass {
             .instance_meta::<_, Option<Variable>>((self.shortcode(), edge))
             .unwrap();
         let val = ctx.bcx.use_var(var);
-        let val = ctx.bcx.ins().iadd_imm(val, 1);
+        let val = ctx.bcx.ins().iadd_imm_u(val, 1);
         ctx.bcx.def_var(var, val);
         self.coverage.instrument_coverage(&edge, val, ctx, self);
     }
@@ -108,7 +108,7 @@ fn instrument_trampoline<P: KVInstrumentationPass>(pass: &P, mut ctx: InstrCtx) 
         0,
         size as u64,
         std::mem::align_of::<u32>() as _,
-        MemFlags::trusted(),
+        MemFlagsData::trusted(),
     );
 }
 
@@ -131,11 +131,11 @@ where
     let val = ctx
         .bcx
         .ins()
-        .load(ir::types::I32, MemFlags::trusted(), buffer, offset as i32);
-    let val = ctx.bcx.ins().iadd_imm(val, 1);
+        .load(ir::types::I32, MemFlagsData::trusted(), buffer, offset as i32);
+    let val = ctx.bcx.ins().iadd_imm_u(val, 1);
     ctx.bcx
         .ins()
-        .store(MemFlags::trusted(), val, buffer, offset as i32);
+        .store(MemFlagsData::trusted(), val, buffer, offset as i32);
     pass.coverage().instrument_coverage(&key, val, ctx, pass);
 }
 
@@ -288,11 +288,11 @@ impl KVInstrumentationPass for FunctionRecursionDepthPass {
         let val = ctx
             .bcx
             .ins()
-            .load(ir::types::I32, MemFlags::trusted(), buffer, offset as i32);
-        let val = ctx.bcx.ins().iadd_imm(val, 1);
+            .load(ir::types::I32, MemFlagsData::trusted(), buffer, offset as i32);
+        let val = ctx.bcx.ins().iadd_imm_u(val, 1);
         ctx.bcx
             .ins()
-            .store(MemFlags::trusted(), val, buffer, offset as i32);
+            .store(MemFlagsData::trusted(), val, buffer, offset as i32);
         self.coverage.instrument_coverage(&key, val, ctx, self);
     }
 
@@ -312,10 +312,10 @@ impl KVInstrumentationPass for FunctionRecursionDepthPass {
         let val = ctx
             .bcx
             .ins()
-            .load(ir::types::I32, MemFlags::trusted(), buffer, offset as i32);
-        let val = ctx.bcx.ins().iadd_imm(val, -1);
+            .load(ir::types::I32, MemFlagsData::trusted(), buffer, offset as i32);
+        let val = ctx.bcx.ins().iadd_imm_s(val, -1);
         ctx.bcx
             .ins()
-            .store(MemFlags::trusted(), val, buffer, offset as i32);
+            .store(MemFlagsData::trusted(), val, buffer, offset as i32);
     }
 }

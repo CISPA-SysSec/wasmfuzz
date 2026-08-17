@@ -351,6 +351,7 @@ impl<'s> ModuleTranslator<'s> {
     ) -> FunctionArtifacts {
         tracy_full::zone!("ModTrans::emit_function");
         let func_id = func_ids[&func.idx];
+        let frontend_config = module.target_config();
 
         ctx.func.signature = func_sigs[&func.idx].clone();
         ctx.func.name = UserFuncName::user(0, func.idx);
@@ -460,7 +461,7 @@ impl<'s> ModuleTranslator<'s> {
         }
 
         bcx.seal_all_blocks();
-        bcx.finalize();
+        bcx.finalize(frontend_config);
 
         if options.verbose && !dead {
             println!(
@@ -513,6 +514,7 @@ impl<'s> ModuleTranslator<'s> {
         pass_meta: &mut HashMap<u64, Box<dyn Any>>,
     ) -> (FuncId, Vec<MachTrap>, Vec<TrapKind>) {
         let func = &spec.functions[fidx as usize];
+        let frontend_config = self.module.target_config();
         let signature = Self::function_signature(&self.module, func, false, options.is_concolic());
         let export_func_id = self
             .module
@@ -570,7 +572,7 @@ impl<'s> ModuleTranslator<'s> {
 
         bcx.ins().return_(&rvals);
         bcx.seal_block(block);
-        bcx.finalize();
+        bcx.finalize(frontend_config);
         if options.verbose {
             println!("> export/{}", func.symbol);
             println!("{}", ctx.func.display());

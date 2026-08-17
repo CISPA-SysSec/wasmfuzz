@@ -1,4 +1,4 @@
-use cranelift::codegen::ir::{self, InstBuilder, MemFlags, Type, Value};
+use cranelift::codegen::ir::{self, InstBuilder, MemFlagsData, Type, Value};
 use cranelift::module::{DataDescription, DataId, Module};
 
 use crate::ir::Location;
@@ -80,7 +80,7 @@ impl SwarmShortCircuitPass {
         let zero = ctx.bcx.ins().iconst(ir::types::I8, 0);
         ctx.bcx
             .ins()
-            .store(MemFlags::trusted(), zero, bools_ptr, idx as i32);
+            .store(MemFlagsData::trusted(), zero, bools_ptr, idx as i32);
     }
 
     fn trampoline_memset_mukeys(&self, iv: u8, ctx: &mut InstrCtx) {
@@ -95,7 +95,7 @@ impl SwarmShortCircuitPass {
                 iv,
                 self.must_use_keys.len() as _,
                 std::mem::align_of::<u8>() as _,
-                MemFlags::trusted(),
+                MemFlagsData::trusted(),
             );
         }
     }
@@ -162,7 +162,7 @@ impl ErasedInstrumentationPass for SwarmShortCircuitPass {
                 let val =
                     ctx.bcx
                         .ins()
-                        .load(ir::types::I8, MemFlags::trusted(), bools_ptr, i as i32);
+                        .load(ir::types::I8, MemFlagsData::trusted(), bools_ptr, i as i32);
                 c = ctx.bcx.ins().band(c, val);
             }
             let trap = TrapKind::SwarmShortCircuit(Some(ctx.state.loc()));

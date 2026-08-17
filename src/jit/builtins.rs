@@ -88,17 +88,19 @@ pub(crate) unsafe extern "C" fn builtin_random_get(dest: u32, len: u32, vmctx: *
     unsafe {
         let vmctx = &mut *vmctx;
         vmctx.builtin_consume_fuel(len as u64);
+        use libafl_bolts::rands::{Rand, XorShift64Rand};
         let mut rng = XorShift64Rand::with_seed(vmctx.random_get_seed);
-        vmctx.random_get_seed = rng.next_u64();
+        vmctx.random_get_seed = rng.next();
         let Some(buf) = vmctx
             .heap()
             .get_mut(dest as usize..dest as usize + len as usize)
         else {
             raise_trap(TrapReason::MemoryOutOfBounds)
         };
-        use libafl_bolts::rands::XorShift64Rand;
-        use rand::RngCore;
-        rng.fill_bytes(buf);
+        for chunk in buf.chunks_mut(8) {
+            let bytes = rng.next().to_ne_bytes();
+            chunk.copy_from_slice(&bytes[..chunk.len()]);
+        }
     }
 }
 
@@ -147,6 +149,9 @@ pub(crate) fn signature(
 }
 
 pub(crate) fn fetch_vmctx(bcx: &mut FunctionBuilder) -> Value {
+    // `special_param` reads the entry block; Cranelift only inserts a block
+    // into the layout once it has an instruction (or we force it).
+    bcx.ensure_inserted_block();
     bcx.func
         .special_param(ir::ArgumentPurpose::VMContext)
         .expect("Missing vmctx parameter")

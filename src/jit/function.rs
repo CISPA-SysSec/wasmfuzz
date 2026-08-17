@@ -3,11 +3,11 @@ use std::any::Any;
 use crate::jit::builtins::builtin_clock_time_get;
 use crate::{HashMap, HashSet, instrumentation::Passes};
 
-use cranelift::codegen::ir::{self, FuncRef, GlobalValue};
+use cranelift::codegen::ir::{self, FuncRef};
 use cranelift::frontend::{FunctionBuilder, Variable};
 use cranelift::jit::JITModule;
 use cranelift::module::{FuncId, Module};
-use cranelift::prelude::{InstBuilder, MemFlags, Signature, TrapCode, Value};
+use cranelift::prelude::{InstBuilder, MemFlagsData, Signature, TrapCode, Value};
 use ir::types::{I32, I64, Type};
 use wasmparser::FuncType;
 
@@ -61,8 +61,6 @@ pub(crate) struct FuncTranslator<'a, 's> {
     pub blocks: HashMap<InsnIdx, ir::Block>,
     pub dead_bbs: HashSet<ir::Block>,
     pub concolic_vals: HashMap<Value, Value>,
-    pub gv_vmctx: Option<GlobalValue>,
-    pub heap: Option<GlobalValue>,
     pub func_refs: HashMap<FuncId, FuncRef>,
     pub options: &'a CompilationOptions,
     pub passes: Option<&'a mut Passes>,
@@ -103,8 +101,6 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             dead_bbs: HashSet::default(),
             concolic_vals: HashMap::default(),
             func_refs,
-            gv_vmctx: None,
-            heap: None,
             options,
             passes: Some(passes),
             trapcodes: vec![],
@@ -411,24 +407,18 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         self.ptr_ty
     }
 
-    pub(crate) fn get_vmctx(&mut self, bcx: &mut FunctionBuilder) -> GlobalValue {
-        *self
-            .gv_vmctx
-            .get_or_insert_with(|| bcx.create_global_value(ir::GlobalValueData::VMContext))
+    pub(crate) fn get_vmctx(&mut self, bcx: &mut FunctionBuilder) -> Value {
+        fetch_vmctx(bcx)
     }
 
     pub(crate) fn get_heap_base(&mut self, bcx: &mut FunctionBuilder) -> Value {
-        let ptr_ty = self.ptr_ty();
-        let base = self.get_vmctx(bcx);
-        let gv = *self.heap.get_or_insert_with(|| {
-            bcx.create_global_value(ir::GlobalValueData::Load {
-                base,
-                offset: ir::immediates::Offset32::new(std::mem::offset_of!(VMContext, heap) as i32),
-                global_type: ptr_ty,
-                flags: ir::MemFlags::trusted().with_readonly(),
-            })
-        });
-        bcx.ins().global_value(ptr_ty, gv)
+        let vmctx = self.get_vmctx(bcx);
+        bcx.ins().load(
+            self.ptr_ty(),
+            MemFlagsData::trusted_ro(),
+            vmctx,
+            std::mem::offset_of!(VMContext, heap) as i32,
+        )
     }
 
     pub(crate) fn translate_op(&mut self, op: &WFOperator, bcx: &mut FunctionBuilder, ip: InsnIdx) {
@@ -664,7 +654,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 let count = bcx.ins().iadd(block_count, iov_len);
 
                 // iovs = &iovs[1] (+= 8)
-                let iovs = bcx.ins().iadd_imm(block_iovs_addr, 8);
+                let iovs = bcx.ins().iadd_imm_u(block_iovs_addr, 8);
 
                 // iov_len -= 1
                 let one = bcx.ins().iconst(I32, 1);
@@ -834,15 +824,8 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 }
             }
             // self.get_vmctx(bcx);
-            // avoid 'Function is empty'
-            if bcx.func.layout.entry_block().is_none() {
-                bcx.ins().nop();
-            }
-            let vmctx = bcx
-                .func
-                .special_param(ir::ArgumentPurpose::VMContext)
-                .expect("Missing vmctx parameter");
-            let flags = MemFlags::trusted_ro();
+            let vmctx = fetch_vmctx(bcx);
+            let flags = MemFlagsData::trusted_ro();
             let host_ptr_area = bcx.ins().load(
                 self.ptr_ty(),
                 flags,
@@ -856,7 +839,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 (idx * std::mem::size_of::<usize>()) as i32,
             );
             if offset != 0 {
-                bcx.ins().iadd_imm(val, offset as i64)
+                bcx.ins().iadd_imm_u(val, offset as i64)
             } else {
                 val
             }
