@@ -44,6 +44,24 @@ unsafe extern "C" fn trap_handler(
     context: *mut libc::c_void,
 ) {
     unsafe {
+        // If we're not inside a `catch_traps` region, this fault did not come
+        // from guarded JIT code — it's a genuine crash in host code (a
+        // mutator/shrink bug, a stack overflow, etc.). `JMP_BUF` then holds a
+        // stale `setjmp` from a frame that has already returned, so the
+        // unconditional `longjmp` below would either land at a popped frame and
+        // trip `assert!(ACTIVE.replace(false))` in `catch_traps` (signals.rs's
+        // line-174 panic) or corrupt the stack outright — in both cases
+        // shredding the real backtrace. Restore the default disposition and
+        // return so the faulting instruction re-executes and crashes for real
+        // (core dump / native backtrace) at the actual fault site.
+        //
+        // Safe to read `ACTIVE` here: it is `const`-initialized TLS, so there's
+        // no lazy-init guard that a signal could interrupt.
+        if !ACTIVE.with(|a| a.get()) {
+            libc::signal(signum, libc::SIG_DFL);
+            return;
+        }
+
         let context = &*(context as *const libc::ucontext_t);
         let (pc, _fp) = ucontext_get_pc_and_fp(context);
         let faulting_addr = match signum {
