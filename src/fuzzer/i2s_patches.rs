@@ -9,15 +9,44 @@ use libafl::{
 };
 use libafl_bolts::{HasLen, Named, rands::Rand};
 
-use speedy::{Readable, Writable};
-use std::io::{Cursor, Seek, SeekFrom};
 #[derive(Debug, Clone, Hash, PartialEq, Eq, speedy::Readable, speedy::Writable)]
 #[repr(u8)]
-pub(crate) enum CmpLog {
+pub enum CmpLog {
     U16(u16, u16),
     U32(u32, u32),
     U64(u64, u64),
-    Memcmp(Vec<u8>, Vec<u8>),
+    Memcmp(Box<[u8]>, Box<[u8]>),
+}
+
+#[derive(Debug, Default, Clone, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SpeedyVec<T> {
+    data: Vec<u8>,
+    offsets: Vec<u32>,
+    _t: std::marker::PhantomData<T>,
+}
+
+impl<T: speedy::Writable<speedy::LittleEndian>> SpeedyVec<T> {
+    pub fn push(&mut self, value: T) {
+        let off: u32 = self.data.len().try_into().unwrap();
+        self.offsets.push(off);
+        value.write_to_stream(&mut self.data).unwrap();
+    }
+
+    pub fn get<'a>(&'a self, idx: usize) -> T
+    where
+        T: speedy::Readable<'a, speedy::LittleEndian>,
+    {
+        let pos = self.offsets[idx] as usize;
+        T::read_from_buffer(&self.data[pos..]).unwrap()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.offsets.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.offsets.len()
+    }
 }
 
 impl CmpLog {
@@ -67,35 +96,63 @@ impl CmpLog {
     }
 }
 
-/// A state metadata holding a list of values logged from comparisons
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+/// A state metadata holding a list of values logged from comparisons.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CmplogStore {
-    offsets: Vec<u32>,
-    data: Vec<u8>,
+    u16s: SpeedyVec<(u16, u16)>,
+    u32s: SpeedyVec<(u32, u32)>,
+    u64s: SpeedyVec<(u64, u64)>,
+    #[expect(clippy::type_complexity)]
+    memcmps: SpeedyVec<(Box<[u8]>, Box<[u8]>)>,
 }
 libafl_bolts::impl_serdeany!(CmplogStore);
 
 impl CmplogStore {
     pub fn new(values: impl Iterator<Item = CmpLog>) -> Self {
-        let mut data = Vec::new();
-        let mut offsets = Vec::new();
+        let mut res = Self::default();
         for value in values {
-            offsets.push(data.len().try_into().unwrap());
-            let mut cursor = Cursor::new(&mut data);
-            cursor.seek(SeekFrom::End(0)).unwrap();
-            value.write_to_stream(cursor).unwrap();
+            res.push(value);
         }
-        Self { offsets, data }
+        res
     }
-    pub fn get(&self, idx: usize) -> CmpLog {
-        let pos = self.offsets[idx] as usize;
-        CmpLog::read_from_buffer(&self.data[pos..]).unwrap()
+    fn push(&mut self, value: CmpLog) {
+        match value {
+            CmpLog::U16(a, b) => self.u16s.push((a, b)),
+            CmpLog::U32(a, b) => self.u32s.push((a, b)),
+            CmpLog::U64(a, b) => self.u64s.push((a, b)),
+            CmpLog::Memcmp(a, b) => self.memcmps.push((a, b)),
+        }
+    }
+    pub fn get(&self, mut idx: usize) -> CmpLog {
+        if idx < self.u16s.len() {
+            let (a, b) = self.u16s.get(idx);
+            return CmpLog::U16(a, b);
+        }
+        idx -= self.u16s.len();
+        if idx < self.u32s.len() {
+            let (a, b) = self.u32s.get(idx);
+            return CmpLog::U32(a, b);
+        }
+        idx -= self.u32s.len();
+        if idx < self.u64s.len() {
+            let (a, b) = self.u64s.get(idx);
+            return CmpLog::U64(a, b);
+        }
+        idx -= self.u64s.len();
+        if idx < self.memcmps.len() {
+            let (a, b) = self.memcmps.get(idx);
+            return CmpLog::Memcmp(a, b);
+        }
+        panic!("index out of bounds");
     }
     pub fn is_empty(&self) -> bool {
-        self.offsets.is_empty()
+        self.u16s.is_empty()
+            && self.u32s.is_empty()
+            && self.u64s.is_empty()
+            && self.memcmps.is_empty()
     }
     pub fn len(&self) -> usize {
-        self.offsets.len()
+        self.u16s.len() + self.u32s.len() + self.u64s.len() + self.memcmps.len()
     }
 }
 
