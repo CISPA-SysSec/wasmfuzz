@@ -44,7 +44,12 @@ fn iter_memory(
                 MI::F32Store(_) | MI::F64Store(_) => (false, true, true),
                 _ => return None,
             };
-            if (is_load != load) || (is_store != store) || (is_float && !incl_float) {
+            // `load` / `store` select which kinds of sites we want, so asking
+            // for both has to yield loads *and* stores.
+            if !((is_load && load) || (is_store && store)) {
+                return None;
+            }
+            if is_float && !incl_float {
                 return None;
             }
             Some(Location {
@@ -77,7 +82,7 @@ impl KVInstrumentationPass for MemoryOpAddressRangePass {
     super::traits::impl_kv_instrumentation_pass!("memory-op-addr-range");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Location> {
-        iter_memory(true, false, true, spec)
+        iter_memory(true, true, true, spec)
     }
 
     fn instrument_memory_load(
@@ -168,7 +173,7 @@ impl KVInstrumentationPass for MemoryStoreValRangePass {
     super::traits::impl_kv_instrumentation_pass!("memory-store-profile");
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Location> {
-        iter_memory(true, false, false, spec)
+        iter_memory(false, true, false, spec)
     }
 
     fn instrument_memory_store(
