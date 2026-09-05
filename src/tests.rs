@@ -342,6 +342,58 @@ impl Fuzzer {
     }
 }
 
+// Source paths of the generated harness that `spec`'s fuzz entrypoint maps to.
+fn harness_source_files(spec: &ModuleSpec) -> std::collections::BTreeSet<String> {
+    use crate::ir::debuginfo_helper::resolve_source_location;
+
+    // note: the exported symbol is a wasi `.command_export` shim without debug
+    // info of its own, so go by name and take the actual harness body too
+    let funcs = spec
+        .functions
+        .iter()
+        .filter(|f| f.symbol.contains("LLVMFuzzerTestOneInput"));
+    let mut res = std::collections::BTreeSet::new();
+    for func in funcs {
+        for rel in &func.operator_offset_rel {
+            let addr = func.operators_wasm_bin_offset_base as u64 + *rel as u64;
+            resolve_source_location(spec, addr, |locs| {
+                for loc in locs {
+                    if let Some(file) = loc.file() {
+                        let path = file.full_path();
+                        // ignore inlined std frames, we only want our own snippet
+                        if path.starts_with("/tmp/wasmfuzz-test-") {
+                            res.insert(path);
+                        }
+                    }
+                }
+            });
+        }
+    }
+    res
+}
+
+// The symcache is per module, not per thread: a thread that resolves addresses
+// for one module and then another must not get the first module's debug info
+// back for the second.
+#[test]
+fn test_symcache_resolves_two_modules_on_one_thread() {
+    let a = ModuleSpec::parse("a.wasm", &TestModule::u8_cmp_chain_4().module).unwrap();
+    let b = ModuleSpec::parse("b.wasm", &TestModule::input_len_eq_2048().module).unwrap();
+
+    let a_files = harness_source_files(&a);
+    let b_files = harness_source_files(&b);
+    // ... and going back to the first module doesn't disturb anything either
+    let a_files_again = harness_source_files(&a);
+
+    assert!(!a_files.is_empty(), "no debug info resolved for module a");
+    assert!(!b_files.is_empty(), "no debug info resolved for module b");
+    assert!(
+        a_files.is_disjoint(&b_files),
+        "modules resolved to the same source: {a_files:?} / {b_files:?}"
+    );
+    assert_eq!(a_files, a_files_again);
+}
+
 // The call parameter value set should report a value we haven't seen before as
 // novel even when it sits inside the range the range pass already covers -- and
 // should stop doing so once the site has collected more values than the set can

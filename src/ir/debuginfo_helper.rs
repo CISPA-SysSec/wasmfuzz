@@ -6,7 +6,8 @@ use symbolic::{
     symcache::{SourceLocations, SymCache, SymCacheConverter},
 };
 
-use super::ModuleSpec;
+use super::{ModuleSpec, parse::ModuleId};
+use crate::HashMap;
 
 #[ouroboros::self_referencing]
 struct OwnedSymCache {
@@ -17,7 +18,13 @@ struct OwnedSymCache {
 }
 
 thread_local! {
-    pub static SYM_CACHE: RefCell<Option<Option<OwnedSymCache>>> = const { RefCell::new(None) };
+    // Keyed by module: a thread can be handed several `ModuleSpec`s (a report
+    // covering more than one harness, say), and a cache that only remembers the
+    // one it was first asked about would answer for the wrong binary.
+    // `None` means "this module has no usable debug info", which is worth
+    // remembering too -- building the symcache isn't cheap.
+    static SYM_CACHES: RefCell<HashMap<ModuleId, Option<OwnedSymCache>>> =
+        RefCell::new(HashMap::default());
 }
 
 fn open_sym_cache(spec: &ModuleSpec) -> Option<OwnedSymCache> {
@@ -48,12 +55,10 @@ pub(crate) fn resolve_source_location<R, F: FnOnce(SourceLocations) -> R>(
     addr: u64,
     func: F,
 ) -> Option<R> {
-    SYM_CACHE.with_borrow_mut(|f| {
-        // f.take_if(|x| !Arc::ptr_eq(spec, &x.0));
-        // if !f.as_mut().map_or(false, |x| Arc::ptr_eq(spec, &x.0)) {
-        //     f.take();
-        // }
-        let symcache = f.get_or_insert_with(|| open_sym_cache(spec));
+    SYM_CACHES.with_borrow_mut(|caches| {
+        let symcache = caches
+            .entry(spec.id)
+            .or_insert_with(|| open_sym_cache(spec));
         symcache
             .as_mut()
             .map(|x| x.with_symcache(|symcache| func(symcache.lookup(addr))))

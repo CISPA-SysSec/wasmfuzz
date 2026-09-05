@@ -35,7 +35,21 @@ pub(crate) struct FuncSpec {
     pub operator_offset_rel: Vec<u32>,
 }
 
+/// Identity of a parsed module, for caches that would otherwise have to key on
+/// something as fragile as "the last `ModuleSpec` this thread was handed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ModuleId(u64);
+
+impl ModuleId {
+    fn next() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 pub(crate) struct ModuleSpec {
+    pub id: ModuleId,
     pub filename: String,
     pub wasm_binary: Vec<u8>,
     types: Vec<wasmparser::FuncType>,
@@ -359,6 +373,7 @@ impl ModuleSpec {
             .collect::<Vec<_>>();
 
         let mut spec = Self {
+            id: ModuleId::next(),
             filename: filename.into(),
             wasm_binary: module_binary.to_vec(),
             types,
