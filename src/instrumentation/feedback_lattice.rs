@@ -201,7 +201,7 @@ impl<const N: usize> ValueSet<N> {
         debug_assert!(!self.is_top());
         &self.elems[..self.size]
     }
-    #[expect(unused)]
+    #[cfg_attr(not(test), expect(unused))]
     fn contains(&self, el: u64) -> bool {
         self.is_top() || self.elems().binary_search(&el).is_ok()
     }
@@ -407,5 +407,98 @@ impl<T: FLInteger> Deref for Minimize<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FeedbackLattice, ValueSet};
+
+    fn set<const N: usize>(vals: &[u64]) -> ValueSet<N> {
+        let mut res = ValueSet::<N>::bottom();
+        for &val in vals {
+            res.insert(val);
+        }
+        res
+    }
+
+    #[test]
+    fn test_valueset_insert() {
+        let empty = set::<4>(&[]);
+        assert!(empty.is_bottom());
+        assert!(!empty.is_top());
+        assert!(empty.elems().is_empty());
+
+        // duplicates collapse, elements end up sorted
+        assert_eq!(set::<4>(&[7, 7, 7]).elems(), &[7]);
+        assert_eq!(set::<4>(&[4, 1, 3, 1, 2, 4]).elems(), &[1, 2, 3, 4]);
+
+        // exactly N fits, N+1 doesn't
+        let full = set::<4>(&[4, 3, 2, 1]);
+        assert_eq!(full.size, 4);
+        assert!(!full.is_top());
+        assert!(set::<4>(&[1, 2, 3, 4, 5]).is_top());
+
+        // ... and every way of overflowing gives the same `top`
+        assert_eq!(set::<4>(&[1, 2, 3, 4, 5]), set::<4>(&[9, 8, 7, 6, 5]));
+        // inserting into `top` keeps it there
+        let mut top = set::<4>(&[1, 2, 3, 4, 5]);
+        top.insert(1);
+        assert!(top.is_top());
+    }
+
+    #[test]
+    fn test_valueset_contains() {
+        let s = set::<4>(&[3, 1]);
+        assert!(s.contains(1));
+        assert!(s.contains(3));
+        assert!(!s.contains(2));
+        // `top` stands for "some set we lost track of", so it contains anything
+        assert!(set::<4>(&[1, 2, 3, 4, 5]).contains(1234));
+    }
+
+    #[test]
+    fn test_valueset_unify() {
+        // disjoint, still fits
+        assert_eq!(set::<4>(&[1, 2]).unify(&set(&[3, 4])), set(&[1, 2, 3, 4]));
+        // overlapping elements are only counted once
+        assert_eq!(
+            set::<4>(&[1, 2, 3]).unify(&set(&[2, 3, 4])),
+            set(&[1, 2, 3, 4])
+        );
+        // the union is what has to fit, not the operands
+        assert!(set::<4>(&[1, 2, 3]).unify(&set(&[4, 5])).is_top());
+        // `top` swallows everything, from either side
+        let top = set::<4>(&[1, 2, 3, 4, 5]);
+        assert!(top.unify(&set(&[1])).is_top());
+        assert!(set::<4>(&[1]).unify(&top).is_top());
+        assert!(top.unify(&ValueSet::bottom()).is_top());
+    }
+
+    #[test]
+    fn test_valueset_lattice_laws() {
+        let samples: Vec<ValueSet<4>> = vec![
+            set(&[]),
+            set(&[1]),
+            set(&[1, 2]),
+            set(&[2, 3]),
+            set(&[3, 4, 5]),
+            set(&[1, 2, 3, 4]),
+            set(&[1, 2, 3, 4, 5]),
+        ];
+        let bottom = ValueSet::<4>::bottom();
+        for a in &samples {
+            assert_eq!(a.unify(&bottom), *a, "identity");
+            assert_eq!(a.unify(a), *a, "idempotence");
+            assert!(!a.is_extended_by(a));
+            for b in &samples {
+                assert_eq!(a.unify(b), b.unify(a), "commutativity");
+                // documented on the trait: `is_extended_by` <=> `a.unify(b) != a`
+                assert_eq!(a.is_extended_by(b), a.unify(b) != *a);
+                for c in &samples {
+                    assert_eq!(a.unify(b).unify(c), a.unify(&b.unify(c)), "associativity");
+                }
+            }
+        }
     }
 }

@@ -139,6 +139,20 @@ impl TestModule {
         }
     }
 
+    // A single call site whose argument is the first input byte.
+    fn call_param_byte() -> Self {
+        Self::from_wat(
+            "call-param-byte",
+            r#"(module
+                (memory 2)
+                (func $observe (param $arg i32))
+                (func (export "malloc") (param $size i32) (result i32) (i32.const 0))
+                (func (export "LLVMFuzzerTestOneInput") (param $ptr i32) (param $len i32)
+                    (call $observe (i32.load8_u (local.get $ptr))))
+            )"#,
+        )
+    }
+
     // A store and a load that both carry a non-zero `offset=` immediate, at
     // addresses that don't depend on the input. The effective addresses are
     // 16 + 0x2000 and 32 + 0x3000.
@@ -328,6 +342,43 @@ impl Fuzzer {
     }
 }
 
+// The call parameter value set should report a value we haven't seen before as
+// novel even when it sits inside the range the range pass already covers -- and
+// should stop doing so once the site has collected more values than the set can
+// hold.
+#[test]
+fn test_instrumentation_call_params_value_set() {
+    let test_module = TestModule::call_param_byte();
+    let opts = Fuzzer::with_config(|opts| opts.i.call_value_profile = true.into()).opts;
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    let mut stats = Stats::default();
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(opts.i.to_feedback_opts())
+        .build();
+    sess.initialize(&mut stats);
+    let mut run = |sess: &mut JitFuzzingSession, byte: u8| {
+        sess.run(&[byte], &mut stats).novel_coverage_passes
+    };
+
+    assert!(run(&mut sess, 0).contains(&"call-params-set"));
+    assert!(run(&mut sess, 100).contains(&"call-params-set"));
+
+    // 50 is inside the [0, 100] range we've already seen, so the range pass has
+    // nothing to say -- only the set pass can tell this value is new
+    let novel = run(&mut sess, 50);
+    assert!(novel.contains(&"call-params-set"));
+    assert!(!novel.contains(&"call-params-range"));
+    assert!(run(&mut sess, 50).is_empty(), "not a new value");
+
+    // fill the ValueSet<8> up: 5 more distinct values, then one that overflows
+    for byte in [10, 20, 30, 40, 60] {
+        assert!(run(&mut sess, byte).contains(&"call-params-set"));
+    }
+    assert!(run(&mut sess, 70).contains(&"call-params-set"), "saturates");
+    // saturated: the site is `top` now and can't report anything new again
+    assert!(run(&mut sess, 80).is_empty());
+}
+
 // `CmpDistU16Pass` has no distance metric for floats, so it shouldn't claim
 // those sites -- the general cmpcov pass still does.
 #[test]
@@ -368,12 +419,8 @@ fn test_instrumentation_memory_op_address_offsets() {
     sess.initialize(&mut stats);
     sess.run(b"AAAA", &mut stats);
 
-    let pass = sess
-        .passes
-        .iter()
-        .find_map(|pass| pass.as_any().downcast_ref::<MemoryOpAddressRangePass>())
-        .expect("memory-op-addr-range pass should be enabled");
-    let ranges = pass
+    let ranges = sess
+        .get_pass::<MemoryOpAddressRangePass>()
         .coverage()
         .iter_saved()
         .filter(|(_, val)| !val.is_bottom())
