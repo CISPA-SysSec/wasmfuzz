@@ -328,6 +328,27 @@ impl Fuzzer {
     }
 }
 
+// `CmpDistU16Pass` has no distance metric for floats, so it shouldn't claim
+// those sites -- the general cmpcov pass still does.
+#[test]
+fn test_cmpcov_u16dist_skips_float_sites() {
+    use crate::instrumentation::{CmpCoveragePass, CmpDistU16Pass, KVInstrumentationPass};
+
+    let test_module = TestModule::from_wat(
+        "float-and-int-cmp",
+        r#"(module
+            (memory 1)
+            (func (export "malloc") (param i32) (result i32) (i32.const 0))
+            (func (export "LLVMFuzzerTestOneInput") (param $ptr i32) (param $len i32)
+                (drop (f64.lt (f64.const 1) (f64.const 2)))
+                (drop (i32.lt_u (local.get $len) (i32.const 4))))
+        )"#,
+    );
+    let spec = ModuleSpec::parse("test.wasm", &test_module.module).unwrap();
+    assert_eq!(CmpCoveragePass::generate_keys(&spec).count(), 2);
+    assert_eq!(CmpDistU16Pass::generate_keys(&spec).count(), 1);
+}
+
 // The address profile should cover both loads and stores, and should record
 // the effective address (dynamic operand + `offset=` immediate) that the guest
 // actually accesses.

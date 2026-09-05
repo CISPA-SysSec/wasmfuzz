@@ -130,7 +130,7 @@ impl KVInstrumentationPass for CmpCoveragePass {
     }
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
-        super::iter_cmp_instrs(spec)
+        super::iter_cmp_instrs(spec, true)
     }
 
     fn instrument_cmp(&self, value_ty: Type, value_a: Value, value_b: Value, ctx: InstrCtx) {
@@ -163,19 +163,23 @@ impl CmpDistU16Pass {
         }
     }
 
+    /// Distance between the two compared values, saturated to `u16`.
+    ///
+    /// Returns `None` for comparisons we don't have a metric for. Floats fall
+    /// into that bucket: a `Minimize<u16>` slot treats 0 as "the branch is
+    /// solved", so emitting a constant zero would pin every float site at the
+    /// lattice's top and make the feedback claim progress that never happened.
+    /// Those sites aren't enumerated as keys either -- see `generate_keys`.
     fn calculate_distance(
         &self,
         value_ty: Type,
         value_a: Value,
         value_b: Value,
         bcx: &mut FunctionBuilder,
-    ) -> ir::Value {
+    ) -> Option<ir::Value> {
         use ir::types::*;
         match value_ty {
-            ir::types::F32 | ir::types::F64 => {
-                // TODO
-                bcx.ins().iconst(I16, 0)
-            }
+            ir::types::F32 | ir::types::F64 => None,
             ir::types::I32 | ir::types::I64 => {
                 // Note: is this correct? Why signed here?
                 let smaller = bcx.ins().smin(value_a, value_b);
@@ -187,7 +191,7 @@ impl CmpDistU16Pass {
                 let v_thresh = bcx.ins().iconst(value_ty, thresh);
                 let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, dist, v_thresh);
                 let res = bcx.ins().select(in_range, dist, v_thresh);
-                bcx.ins().ireduce(I16, res)
+                Some(bcx.ins().ireduce(I16, res))
             }
             _ => unreachable!(),
         }
@@ -204,7 +208,8 @@ impl KVInstrumentationPass for CmpDistU16Pass {
     }
 
     fn generate_keys(spec: &ModuleSpec) -> impl Iterator<Item = Self::Key> {
-        super::iter_cmp_instrs(spec)
+        // no float sites: we don't have a u16 distance metric for those
+        super::iter_cmp_instrs(spec, false)
     }
 
     fn instrument_cmp(&self, value_ty: Type, value_a: Value, value_b: Value, ctx: InstrCtx) {
@@ -212,7 +217,9 @@ impl KVInstrumentationPass for CmpDistU16Pass {
             return;
         }
 
-        let dist = self.calculate_distance(value_ty, value_a, value_b, ctx.bcx);
+        let Some(dist) = self.calculate_distance(value_ty, value_a, value_b, ctx.bcx) else {
+            return;
+        };
 
         self.coverage
             .instrument_coverage(&ctx.state.loc(), dist, ctx, self);

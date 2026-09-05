@@ -532,13 +532,19 @@ fn iter_bbs(spec: &ModuleSpec) -> impl Iterator<Item = Location> + '_ {
     })
 }
 
-fn iter_cmp_instrs(spec: &ModuleSpec) -> impl Iterator<Item = Location> + '_ {
+fn iter_cmp_instrs(spec: &ModuleSpec, incl_float: bool) -> impl Iterator<Item = Location> + '_ {
     use crate::ir::{NumericInstruction, WFOperator};
-    spec.functions.iter().flat_map(|f| {
+    spec.functions.iter().flat_map(move |f| {
         f.operators
             .iter()
             .enumerate()
-            .filter_map(|(idx, op)| match op {
+            .filter_map(move |(idx, op)| match op {
+                WFOperator::Numeric(NumericInstruction::F32RelOp(_))
+                | WFOperator::Numeric(NumericInstruction::F64RelOp(_))
+                    if !incl_float =>
+                {
+                    None
+                }
                 WFOperator::Numeric(NumericInstruction::I32RelOp(_))
                 | WFOperator::Numeric(NumericInstruction::I64RelOp(_))
                 | WFOperator::Numeric(NumericInstruction::F32RelOp(_))
