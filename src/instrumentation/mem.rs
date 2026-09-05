@@ -60,6 +60,21 @@ fn iter_memory(
     })
 }
 
+/// The address a memory op actually touches: `uextend(addr32) + imm_offset`.
+///
+/// Wasm computes this without wrapping (the sum is a 33 bit value that the
+/// bounds check then rejects if it's out of range), so we widen first and add
+/// afterwards, just like `jit::memory`. Adding the immediate in i32 instead
+/// would wrap around and profile addresses the guest never accessed.
+fn effective_address(addr32: Value, imm_offset: u32, ctx: &mut InstrCtx) -> Value {
+    let addr = ctx.bcx.ins().uextend(types::I64, addr32);
+    if imm_offset == 0 {
+        addr
+    } else {
+        ctx.bcx.ins().iadd_imm_u(addr, imm_offset as i64)
+    }
+}
+
 pub(crate) struct MemoryOpAddressRangePass {
     coverage: AssociatedCoverageArray<Location, ValueRange>,
 }
@@ -88,27 +103,35 @@ impl KVInstrumentationPass for MemoryOpAddressRangePass {
     fn instrument_memory_load(
         &self,
         address: Value,
-        _imm_offset: u32,
+        imm_offset: u32,
         _res: Value,
         _ty: Type,
         _opcode: ir::Opcode,
         mut ctx: InstrCtx,
     ) {
+        if !self.coverage.has_key(&ctx.state.loc()) {
+            return;
+        }
+        let address = effective_address(address, imm_offset, &mut ctx);
         self.coverage
-            .instrument_range(&ctx.state.loc(), address, types::I32, &mut ctx, self);
+            .instrument_range(&ctx.state.loc(), address, types::I64, &mut ctx, self);
     }
 
     fn instrument_memory_store(
         &self,
         address: Value,
-        _imm_offset: u32,
+        imm_offset: u32,
         _val: Value,
         _ty: Type,
         _opcode: ir::Opcode,
         mut ctx: InstrCtx,
     ) {
+        if !self.coverage.has_key(&ctx.state.loc()) {
+            return;
+        }
+        let address = effective_address(address, imm_offset, &mut ctx);
         self.coverage
-            .instrument_range(&ctx.state.loc(), address, types::I32, &mut ctx, self);
+            .instrument_range(&ctx.state.loc(), address, types::I64, &mut ctx, self);
     }
 }
 

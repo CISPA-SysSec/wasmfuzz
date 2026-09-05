@@ -131,6 +131,34 @@ impl TestModule {
             }",
         )
     }
+
+    fn from_wat(name: &'static str, wat: &str) -> Self {
+        Self {
+            name,
+            module: wat::parse_str(wat).unwrap(),
+        }
+    }
+
+    // A store and a load that both carry a non-zero `offset=` immediate, at
+    // addresses that don't depend on the input. The effective addresses are
+    // 16 + 0x2000 and 32 + 0x3000.
+    fn memory_offset_ops() -> Self {
+        Self::from_wat(
+            "memory-offset-ops",
+            r#"(module
+                (memory 8)
+                (global $bump (mut i32) (i32.const 0x10000))
+                (func (export "malloc") (param $size i32) (result i32)
+                    (local $ptr i32)
+                    (local.set $ptr (global.get $bump))
+                    (global.set $bump (i32.add (global.get $bump) (local.get $size)))
+                    (local.get $ptr))
+                (func (export "LLVMFuzzerTestOneInput") (param $ptr i32) (param $len i32)
+                    (i32.store offset=0x2000 (i32.const 16) (local.get $len))
+                    (drop (i32.load offset=0x3000 (i32.const 32))))
+            )"#,
+        )
+    }
 }
 
 // Runs a fixed input sequence under one snapshot provider and returns the
@@ -298,6 +326,40 @@ impl Fuzzer {
         );
         self
     }
+}
+
+// The address profile should cover both loads and stores, and should record
+// the effective address (dynamic operand + `offset=` immediate) that the guest
+// actually accesses.
+#[test]
+fn test_instrumentation_memory_op_address_offsets() {
+    use crate::instrumentation::{
+        FeedbackLattice, KVInstrumentationPass, MemoryOpAddressRangePass,
+    };
+
+    let test_module = TestModule::memory_offset_ops();
+    let opts = Fuzzer::with_config(|opts| opts.i.cov_memory_op_address = true.into()).opts;
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    let mut stats = Stats::default();
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(opts.i.to_feedback_opts())
+        .build();
+    sess.initialize(&mut stats);
+    sess.run(b"AAAA", &mut stats);
+
+    let pass = sess
+        .passes
+        .iter()
+        .find_map(|pass| pass.as_any().downcast_ref::<MemoryOpAddressRangePass>())
+        .expect("memory-op-addr-range pass should be enabled");
+    let ranges = pass
+        .coverage()
+        .iter_saved()
+        .filter(|(_, val)| !val.is_bottom())
+        .map(|(_, val)| (val.low, val.high))
+        .collect::<Vec<_>>();
+    // keys are sorted by location: the store comes before the load
+    assert_eq!(ranges, vec![(0x2010, 0x2010), (0x3020, 0x3020)]);
 }
 
 #[test]
