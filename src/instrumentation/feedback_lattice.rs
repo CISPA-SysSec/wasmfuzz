@@ -175,6 +175,13 @@ where
     }
 }
 
+/// A set of up to `N` distinct values. Sets that would grow past `N` collapse
+/// into `top` ("we've seen too many values here to keep track").
+// invariants:
+// - `elems[..size]` is sorted and duplicate-free
+// - `elems[size..]` is zeroed, so that derived `PartialEq` is set equality
+// - `top` is canonical (`size == N + 1`, `elems` zeroed) so that all `top`s
+//   compare equal
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub(crate) struct ValueSet<const N: usize> {
@@ -184,6 +191,12 @@ pub(crate) struct ValueSet<const N: usize> {
 }
 
 impl<const N: usize> ValueSet<N> {
+    fn top() -> Self {
+        Self {
+            size: N + 1,
+            elems: [0; N],
+        }
+    }
     fn elems(&self) -> &[u64] {
         debug_assert!(!self.is_top());
         &self.elems[..self.size]
@@ -201,7 +214,7 @@ impl<const N: usize> ValueSet<N> {
         };
         // NB: ^ This is equivalent to if self.contains(el) { return; }
         if self.size == N {
-            self.size = N + 1;
+            *self = Self::top();
             return;
         }
         self.elems.copy_within(pos..self.size, pos + 1);
@@ -216,21 +229,19 @@ impl<const N: usize> FeedbackLattice for ValueSet<N> {
         self.unify(other).size > self.size
     }
     fn unify(&self, other: &Self) -> Self {
-        if other.is_top() {
-            return other.clone();
-        }
-        if self.is_top() {
-            return self.clone();
+        if self.is_top() || other.is_top() {
+            return Self::top();
         }
         let mut elems = [0; N];
         let mut size = 0;
 
         for &el in MergeAscendingDedup::new(self.elems().iter(), other.elems().iter()) {
-            elems[size] = el;
-            if size >= N {
-                size = N + 1;
-                break;
+            if size == N {
+                // the union doesn't fit into our fixed-size buffer
+                return Self::top();
             }
+            elems[size] = el;
+            size += 1;
         }
         Self { size, elems }
     }
