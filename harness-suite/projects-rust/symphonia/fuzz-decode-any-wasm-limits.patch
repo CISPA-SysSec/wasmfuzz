@@ -1,5 +1,5 @@
 diff --git a/symphonia/fuzz/fuzz_targets/decode_any.rs b/symphonia/fuzz/fuzz_targets/decode_any.rs
-index 0534d69..0bf5169 100644
+index ef0d39f..f2d8f8b 100644
 --- a/symphonia/fuzz/fuzz_targets/decode_any.rs
 +++ b/symphonia/fuzz/fuzz_targets/decode_any.rs
 @@ -5,8 +5,11 @@ use symphonia::core::formats::{FormatOptions, TrackType};
@@ -16,37 +16,37 @@ index 0534d69..0bf5169 100644
  
      let source = MediaSourceStream::new(Box::new(data), Default::default());
  
-@@ -32,8 +35,32 @@ fuzz_target!(|data: Vec<u8>| {
-                 return;
-             };
+@@ -31,8 +34,32 @@ fuzz_target!(|data: Vec<u8>| {
+             return;
+         };
  
-+            let mut audio_params = (*audio_codec_params).clone();
-+            let max_frames_per_packet: u64 = if cfg!(target_pointer_width = "32") {
-+                4_096
-+            } else {
-+                65_536
-+            };
++        let mut audio_params = audio_codec_params.clone();
++        let max_frames_per_packet: u64 = if cfg!(target_pointer_width = "32") {
++            4_096
++        } else {
++            65_536
++        };
 +
-+            #[cfg(target_pointer_width = "32")]
-+            if let Some(ref ch) = audio_params.channels {
-+                if ch.count() > 16 {
-+                    return;
-+                }
++        #[cfg(target_pointer_width = "32")]
++        if let Some(ref ch) = audio_params.channels {
++            if ch.count() > 16 {
++                return;
 +            }
++        }
 +
-+            match audio_params.max_frames_per_packet {
-+                Some(m) if m > max_frames_per_packet => {
-+                    audio_params.max_frames_per_packet = Some(max_frames_per_packet);
-+                }
-+                None => {
-+                    audio_params.max_frames_per_packet = Some(max_frames_per_packet);
-+                }
-+                _ => {}
++        match audio_params.max_frames_per_packet {
++            Some(m) if m > max_frames_per_packet => {
++                audio_params.max_frames_per_packet = Some(max_frames_per_packet);
 +            }
++            None => {
++                audio_params.max_frames_per_packet = Some(max_frames_per_packet);
++            }
++            _ => {}
++        }
 +
-             let mut decoder = match symphonia::default::get_codecs()
--                .make_audio_decoder(&audio_codec_params, &Default::default())
-+                .make_audio_decoder(&audio_params, &Default::default())
-             {
-                 Ok(d) => d,
-                 Err(_) => return,
+         let mut decoder = match symphonia::default::get_codecs()
+-            .make_audio_decoder(audio_codec_params, &Default::default())
++            .make_audio_decoder(&audio_params, &Default::default())
+         {
+             Ok(d) => d,
+             Err(_) => return,

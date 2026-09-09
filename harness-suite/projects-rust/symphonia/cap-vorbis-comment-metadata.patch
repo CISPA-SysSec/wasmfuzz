@@ -1,5 +1,5 @@
 diff --git a/symphonia-metadata/src/embedded/vorbis.rs b/symphonia-metadata/src/embedded/vorbis.rs
-index ab3126b..bf78cdf 100644
+index 1c6a98b..4d9e0bf 100644
 --- a/symphonia-metadata/src/embedded/vorbis.rs
 +++ b/symphonia-metadata/src/embedded/vorbis.rs
 @@ -34,6 +34,11 @@ pub const VORBIS_COMMENT_METADATA_INFO: MetadataInfo = MetadataInfo {
@@ -14,7 +14,7 @@ index ab3126b..bf78cdf 100644
  lazy_static! {
      static ref VORBIS_COMMENT_MAP: RawTagParserMap = {
          let mut m: RawTagParserMap = HashMap::new();
-@@ -372,26 +377,33 @@ pub fn read_vorbis_comment<B: ReadBytes>(
+@@ -372,25 +377,33 @@ pub fn read_vorbis_comment<B: ReadBytes>(
      side_data: &mut Vec<MetadataSideData>,
  ) -> Result<()> {
      // Read the vendor string length in bytes.
@@ -41,16 +41,15 @@ index ab3126b..bf78cdf 100644
      for _ in 0..num_comments {
          // Read the comment string length in bytes.
 -        let comment_length = reader.read_u32()?;
--
--        // TODO: Apply a limit.
 +        let comment_length = reader.read_u32()? as usize;
 +        if comment_length > MAX_VORBIS_COMMENT_BYTES {
 +            return decode_error("meta (vorbis): comment length exceeds limit");
 +        }
  
          // Read the comment string.
--        let mut comment_data = vec![0; comment_length as usize];
-+        let mut comment_data = vec![0; comment_length];
-         reader.read_buf_exact(&mut comment_data)?;
+-        // TODO: Apply a limit.
+-        let comment_data = reader.read_boxed_slice_exact(comment_length as usize)?;
++        let comment_data = reader.read_boxed_slice_exact(comment_length)?;
  
          // Parse the Vorbis comment and handle the parsed output.
+         match parse_vorbis_comment(&comment_data) {

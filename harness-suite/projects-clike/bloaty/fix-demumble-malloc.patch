@@ -1,0 +1,11 @@
+diff --git a/third_party/demumble/third_party/swift/include/swift/Demangling/Demangler.h b/third_party/demumble/third_party/swift/include/swift/Demangling/Demangler.h
+--- a/third_party/demumble/third_party/swift/include/swift/Demangling/Demangler.h
++++ b/third_party/demumble/third_party/swift/include/swift/Demangling/Demangler.h
+@@ -20,6 +20,7 @@
+ #define SWIFT_DEMANGLING_DEMANGLER_H
+ 
+ #include "swift/Demangling/Demangle.h"
+ #include "swift/Demangling/NamespaceMacros.h"
++#include <stdlib.h>
+ 
+ //#define NODE_FACTORY_DEBUGGING

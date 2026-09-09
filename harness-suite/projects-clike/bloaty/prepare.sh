@@ -2,7 +2,7 @@ set -e
 
 apt-get update && apt-get install -y unzip
 
-git clone-rev.sh https://github.com/google/bloaty.git "$PROJECT/repo" 4a601b636e2347322d0371c8bf8ca5eaeaca4bac --recursive
+git clone-rev.sh https://github.com/google/bloaty.git "$PROJECT/repo" f12fc3d597c65082326610b67bba7cdadeb1fc33 --recursive
 
 git -C "$PROJECT/repo/third_party/zlib" checkout 5a82f71ed1dfc0bec044d9702463dbdf84ea3b71
 
@@ -10,6 +10,7 @@ git -C "$PROJECT/repo" apply ../bloaty.patch
 git -C "$PROJECT/repo/third_party/abseil-cpp" apply ../../../third-party-absl.patch
 git -C "$PROJECT/repo/third_party/zlib" apply ../../../fix-zlib-static.patch
 git -C "$PROJECT/repo" apply ../fix-wasi-exceptions.patch
+git -C "$PROJECT/repo" apply ../fix-demumble-malloc.patch
 
 # Build a host protoc matching the bundled protobuf; a mismatched release binary
 # generates headers that are incompatible with bloaty's pinned submodule.

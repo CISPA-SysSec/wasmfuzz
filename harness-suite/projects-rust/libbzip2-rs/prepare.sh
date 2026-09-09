@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/trifectatechfoundation/libbzip2-rs "$PROJECT/repo" f47b114db88889068c1efc8394b2e38d6a1e6dd1
+git clone-rev.sh https://github.com/trifectatechfoundation/libbzip2-rs "$PROJECT/repo" 10281317b8c406fec10d9deccc6af100a31941a7
 # git -C "$PROJECT/repo" apply "$PROJECT/harnesses-handle-outbuff-full.patch"

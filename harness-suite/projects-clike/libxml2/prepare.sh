@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://gitlab.gnome.org/GNOME/libxml2.git "$PROJECT/repo" ddcb79dc9934fd8a26263f6368c4eb7aa43f6d49
+git clone-rev.sh https://gitlab.gnome.org/GNOME/libxml2.git "$PROJECT/repo" c63248941708bc1d2e3a4292954593312212f6ca
 git -C "$PROJECT/repo" apply ../stub-dup.patch

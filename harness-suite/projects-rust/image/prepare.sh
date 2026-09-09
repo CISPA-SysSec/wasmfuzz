@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" 1257b0ff89a391cd7e8fbf0b19bea22a6d3ea4bc
+git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" 6812e732343b0eaaeeef90ca751dd0e73430fb15
 git -C "$PROJECT/repo" apply "$PROJECT/fix-icc-profile-allocation.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-ico-bmp-zero-height.patch"
 

@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/tirr-c/jxl-oxide.git "$PROJECT/repo" f8ae722ef2d6b782941c89517d19cfbf605c4a9d
+git clone-rev.sh https://github.com/tirr-c/jxl-oxide.git "$PROJECT/repo" c0cc4c7ea57c1207f38ff2970d94757470613be4
 git -C "$PROJECT/repo" apply ../fuzz-decode-resource-limits.patch
 git -C "$PROJECT/repo" apply ../fix-wasi-render-wait-no-trace.patch
 git -C "$PROJECT/repo" apply ../fix-dct-common-mutex-reentrancy.patch

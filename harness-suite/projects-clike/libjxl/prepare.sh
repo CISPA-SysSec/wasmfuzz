@@ -1,4 +1,4 @@
 set -e
 
-git clone-rev.sh https://github.com/libjxl/libjxl "$PROJECT/repo" 196a43d996aa6ed33ebf98812a7c6d43b2b6d01b --recursive
+git clone-rev.sh https://github.com/libjxl/libjxl "$PROJECT/repo" b5def9fb509d0f2421c8a5bcd7aa6f5a627363c4 --recursive
 git -C "$PROJECT/repo" apply ../fix-wasi-threads.patch

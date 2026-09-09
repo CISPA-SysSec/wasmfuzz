@@ -40,7 +40,7 @@ case $BUILD_TYPE in
         export CXXFLAGS="$CXXFLAGS $TARGET_FLAGS $CCFLAGS -fno-exceptions"
         export CONFIGUREFLAGS="--host=wasm32-wasi"
         # TODO: can we pass WASI_SDK_PREFIX to cmake automatically?
-        export CMAKE_TOOLCHAIN_FILE=$WASI_SDK_PREFIX/share/cmake/wasi-sdk.cmake
+        export CMAKE_TOOLCHAIN_FILE=$WASI_SDK_PREFIX/share/cmake/wasi-sdk-p1.cmake
         ;;
 esac
 

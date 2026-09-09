@@ -1,10 +1,8 @@
-Subject: [PATCH] handle empty modular squeeze buffers safely
----
 diff --git a/jxl/src/frame/modular/transforms/squeeze.rs b/jxl/src/frame/modular/transforms/squeeze.rs
-index 2526224..b762be6 100644
+index 99ca624..e93309f 100644
 --- a/jxl/src/frame/modular/transforms/squeeze.rs
 +++ b/jxl/src/frame/modular/transforms/squeeze.rs
-@@ -461,7 +461,9 @@ pub fn do_hsqueeze_step(
+@@ -791,7 +791,9 @@ fn do_hsqueeze_step_i16(
      buffers: &mut [&mut ModularChannel],
  ) {
      trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
@@ -12,40 +10,92 @@ index 2526224..b762be6 100644
 +    let Some(out) = buffers.first_mut() else {
 +        return;
 +    };
+     let mut out_rect = ImageRectMut::<i16>::from_raw(out.data.as_rect_mut());
      // Shortcut: guarantees that row is at least 1px in the main loop
-     if out.data.size().0 == 0 || out.data.size().1 == 0 {
-         return;
-@@ -470,8 +472,11 @@ pub fn do_hsqueeze_step(
+     if out_rect.size().0 == 0 || out_rect.size().1 == 0 {
+@@ -801,8 +803,11 @@ fn do_hsqueeze_step_i16(
      let w = in_res.size().0;
      // Another shortcut: when output row has just 1px
      if w == 0 {
 +        if in_avg.size().0 == 0 || in_avg.size().1 == 0 {
 +            return;
 +        }
-         let out_h = out.data.size().1;
+         let out_h = out_rect.size().1;
 -        for y in 0..out_h {
 +        for y in 0..out_h.min(in_avg.size().1) {
-             out.data.row_mut(y)[0] = in_avg.row(y)[0];
+             out_rect.row(y)[0] = in_avg.row(y)[0];
          }
          return;
-@@ -666,13 +671,19 @@ pub fn do_vsqueeze_step(
+@@ -820,7 +825,9 @@ fn do_hsqueeze_step_i32(
+     buffers: &mut [&mut ModularChannel],
+ ) {
+     trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
+-    let out = buffers.first_mut().unwrap();
++    let Some(out) = buffers.first_mut() else {
++        return;
++    };
+     let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
+     // Shortcut: guarantees that row is at least 1px in the main loop
+     if out_rect.size().0 == 0 || out_rect.size().1 == 0 {
+@@ -830,8 +837,11 @@ fn do_hsqueeze_step_i32(
+     let w = in_res.size().0;
+     // Another shortcut: when output row has just 1px
+     if w == 0 {
++        if in_avg.size().0 == 0 || in_avg.size().1 == 0 {
++            return;
++        }
+         let out_h = out_rect.size().1;
+-        for y in 0..out_h {
++        for y in 0..out_h.min(in_avg.size().1) {
+             out_rect.row(y)[0] = in_avg.row(y)[0];
+         }
+         return;
+@@ -1236,7 +1246,9 @@ fn do_vsqueeze_step_i16(
      buffers: &mut [&mut ModularChannel],
  ) {
      trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
--    let out = &mut buffers.first_mut().unwrap().data;
-+    let Some(out_ch) = buffers.first_mut() else {
+-    let out = buffers.first_mut().unwrap();
++    let Some(out) = buffers.first_mut() else {
 +        return;
 +    };
-+    let out = &mut out_ch.data;
+     let mut out_rect = ImageRectMut::<i16>::from_raw(out.data.as_rect_mut());
      // Shortcut: guarantees that there at least 1 output row
-     if out.size().1 == 0 || out.size().0 == 0 {
-         return;
+     if out_rect.size().1 == 0 || out_rect.size().0 == 0 {
+@@ -1244,8 +1256,11 @@ fn do_vsqueeze_step_i16(
      }
      // Another shortcut: when there is one output row
      if in_res.size().1 == 0 {
-+        if in_avg.size().1 == 0 || in_avg.size().0 != out.size().0 {
+-        let w = in_avg.size().0;
+-        out_rect.row(0)[..w].copy_from_slice(in_avg.row(0));
++        if in_avg.size().1 == 0 || in_avg.size().0 == 0 {
 +            return;
 +        }
-         out.row_mut(0).copy_from_slice(in_avg.row(0));
++        let w = in_avg.size().0.min(out_rect.size().0);
++        out_rect.row(0)[..w].copy_from_slice(&in_avg.row(0)[..w]);
          return;
      }
+     // Otherwise: 2 or more rows
+@@ -1262,7 +1277,9 @@ fn do_vsqueeze_step_i32(
+     buffers: &mut [&mut ModularChannel],
+ ) {
+     trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
+-    let out = buffers.first_mut().unwrap();
++    let Some(out) = buffers.first_mut() else {
++        return;
++    };
+     let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
+     // Shortcut: guarantees that there at least 1 output row
+     if out_rect.size().1 == 0 || out_rect.size().0 == 0 {
+@@ -1270,7 +1287,11 @@ fn do_vsqueeze_step_i32(
+     }
+     // Another shortcut: when there is one output row
+     if in_res.size().1 == 0 {
+-        out_rect.row(0).copy_from_slice(in_avg.row(0));
++        if in_avg.size().1 == 0 || in_avg.size().0 == 0 {
++            return;
++        }
++        let w = in_avg.size().0.min(out_rect.size().0);
++        out_rect.row(0)[..w].copy_from_slice(&in_avg.row(0)[..w]);
+         return;
+     }
+     // Otherwise: 2 or more rows

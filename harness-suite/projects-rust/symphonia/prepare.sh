@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/pdeljanov/symphonia.git "$PROJECT/repo" 5f26f020b3a1e62a4a3efad41e6e5752ab21fbeb
+git clone-rev.sh https://github.com/pdeljanov/symphonia.git "$PROJECT/repo" ee35874b571a35a9a6e15d3bc9a3aaf8f11fbeee
 git -C "$PROJECT/repo" apply "$PROJECT/cap-adpcm-packet-frames.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/cap-pcm-packet-frames.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-vorbis-codebook-lookup.patch"

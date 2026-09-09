@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/toml-rs/toml "$PROJECT/repo" ca4c7bf420ad3aa5d318156de483e86ec5c632fe
+git clone-rev.sh https://github.com/toml-rs/toml "$PROJECT/repo" 1189a129ba8c672708f555c855561dc65edffdda
 python3 - <<'PY'
 from pathlib import Path
 import tomlkit

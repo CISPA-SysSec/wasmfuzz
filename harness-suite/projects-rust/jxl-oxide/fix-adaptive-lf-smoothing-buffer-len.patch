@@ -1,8 +1,9 @@
 diff --git a/crates/jxl-render/src/vardct/generic/mod.rs b/crates/jxl-render/src/vardct/generic/mod.rs
+index 5e057b9..e57a257 100644
 --- a/crates/jxl-render/src/vardct/generic/mod.rs
 +++ b/crates/jxl-render/src/vardct/generic/mod.rs
-@@ -24,9 +24,21 @@ pub fn adaptive_lf_smoothing_impl(
-         return Ok(());
+@@ -37,9 +37,21 @@ pub fn adaptive_lf_smoothing_impl(
+         );
      }
  
 -    assert_eq!(in_x.len(), in_y.len());
@@ -26,38 +27,40 @@ diff --git a/crates/jxl-render/src/vardct/generic/mod.rs b/crates/jxl-render/src
  
      let mut udsum_x = AlignedGrid::with_alloc_tracker(width, height - 2, tracker)?;
      let mut udsum_y = AlignedGrid::with_alloc_tracker(width, height - 2, tracker)?;
-diff --git a/crates/jxl-render/src/vardct/mod.rs b/crates/jxl-render/src/vardct/mod.rs
---- a/crates/jxl-render/src/vardct/mod.rs
-+++ b/crates/jxl-render/src/vardct/mod.rs
-@@ -425,6 +425,34 @@ pub fn adaptive_lf_smoothing(
-     let tracker = in_x.tracker();
-     let width = in_x.width();
-     let height = in_x.height();
-+    let expected_len = match width.checked_mul(height) {
-+        Some(len) => len,
-+        None => {
+@@ -131,7 +143,21 @@ fn adaptive_lf_smoothing_subsampled_impl(
+     }
+ 
+     for ((w, h), in_lf) in std::iter::zip(dims, &in_xyb) {
+-        assert_eq!(in_lf.len(), w * h);
++        let expected = match w.checked_mul(h) {
++            Some(len) => len,
++            None => {
++                return Err(jxl_bitstream::Error::ValidationFailed(
++                    "adaptive LF smoothing dimensions overflow",
++                )
++                .into());
++            }
++        };
++        if in_lf.len() != expected {
 +            return Err(jxl_bitstream::Error::ValidationFailed(
-+                "adaptive LF smoothing dimensions overflow",
++                "adaptive LF smoothing buffer length mismatch",
 +            )
 +            .into());
 +        }
-+    };
-+    if in_y.width() != width
-+        || in_y.height() != height
-+        || in_b.width() != width
-+        || in_b.height() != height
-+    {
+     }
+ 
+     let [in_x, in_y, in_b] = in_xyb;
+diff --git a/crates/jxl-render/src/vardct/mod.rs b/crates/jxl-render/src/vardct/mod.rs
+index 5e5f7d8..0cb657d 100644
+--- a/crates/jxl-render/src/vardct/mod.rs
++++ b/crates/jxl-render/src/vardct/mod.rs
+@@ -427,6 +427,12 @@ pub fn adaptive_lf_smoothing(
+     let tracker = in_x.tracker();
+     let width = in_x.width().max(in_y.width()).max(in_b.width());
+     let height = in_x.height().max(in_y.height()).max(in_b.height());
++    if width.checked_mul(height).is_none() {
 +        return Err(jxl_bitstream::Error::ValidationFailed(
-+            "adaptive LF smoothing channel size mismatch",
-+        )
-+        .into());
-+    }
-+    if in_x.buf().len() != expected_len
-+        || in_y.buf().len() != expected_len
-+        || in_b.buf().len() != expected_len
-+    {
-+        return Err(jxl_bitstream::Error::ValidationFailed(
-+            "adaptive LF smoothing buffer length mismatch",
++            "adaptive LF smoothing dimensions overflow",
 +        )
 +        .into());
 +    }

@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/trifectatechfoundation/zlib-rs "$PROJECT/repo" 5a82af8a944d3b2d23e861c5438bac35bc40d16d
+git clone-rev.sh https://github.com/trifectatechfoundation/zlib-rs "$PROJECT/repo" 049540b605de63a6affc9a1d1f24a1894af2c406
 git -C "$PROJECT/repo" apply "$PROJECT/fix-inflate-chunked-deflate-loop.patch"

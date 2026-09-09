@@ -1,5 +1,5 @@
 diff --git a/crates/ty/Cargo.toml b/crates/ty/Cargo.toml
-index e9bc06c..4a66acf 100644
+index 7a550d1..904f1e4 100644
 --- a/crates/ty/Cargo.toml
 +++ b/crates/ty/Cargo.toml
 @@ -22,7 +22,7 @@ ruff_db = { workspace = true, features = ["os", "cache", "junit"] }
@@ -10,13 +10,13 @@ index e9bc06c..4a66acf 100644
 +ty_project = { workspace = true, features = ["junit"] }
  ty_python_semantic = { workspace = true, features = ["serde"] }
  ty_server = { workspace = true }
- ty_static = { workspace = true }
+ ty_site_packages = { workspace = true }
 diff --git a/crates/ty_project/Cargo.toml b/crates/ty_project/Cargo.toml
-index de0e541..b9fdcf6 100644
+index 4fbdf55..bfc2045 100644
 --- a/crates/ty_project/Cargo.toml
 +++ b/crates/ty_project/Cargo.toml
-@@ -65,7 +65,7 @@ ruff_db = { workspace = true, features = ["os", "testing"] }
- insta = { workspace = true, features = ["redactions", "ron"] }
+@@ -67,7 +67,7 @@ insta = { workspace = true, features = ["redactions", "ron"] }
+ tempfile = { workspace = true }
  
  [features]
 -default = ["zstd"]

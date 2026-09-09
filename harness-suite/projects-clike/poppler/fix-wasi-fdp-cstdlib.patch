@@ -1,0 +1,12 @@
+diff --git a/cpp/tests/fuzzing/FuzzedDataProvider.h b/cpp/tests/fuzzing/FuzzedDataProvider.h
+index 1996bca..a4064f8 100644
+--- a/cpp/tests/fuzzing/FuzzedDataProvider.h
++++ b/cpp/tests/fuzzing/FuzzedDataProvider.h
+@@ -15,6 +15,7 @@
+ 
+ #include <algorithm>
+ #include <climits>
++#include <cstdlib>
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstring>

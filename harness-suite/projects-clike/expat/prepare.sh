@@ -1,4 +1,4 @@
 set -e
-git clone-rev.sh https://github.com/libexpat/libexpat "$PROJECT/repo" 7d93af0965eee44fde42d9e9ec8761ae2894e8e8
+git clone-rev.sh https://github.com/libexpat/libexpat "$PROJECT/repo" 40f97d787185b63c1c761a53308f2ab2883308ee
 git -C "$PROJECT/repo" apply ../fix_link_args.patch
 git -C "$PROJECT/repo" apply ../disable-lpm-harness.patch

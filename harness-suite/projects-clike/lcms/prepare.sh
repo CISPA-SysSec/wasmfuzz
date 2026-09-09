@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/mm2/Little-CMS.git "$PROJECT/repo"      e2c0840b3c5867947dcd84a1ee91289c67b61389
-git clone-rev.sh https://github.com/google/oss-fuzz.git "$PROJECT/oss-fuzz" aa9b1bbbb35c68581047066ca1681ef258c313ae
+git clone-rev.sh https://github.com/mm2/Little-CMS.git "$PROJECT/repo"      cfb2aac13f3f55624245a71350c45f76c161d723
+git clone-rev.sh https://github.com/google/oss-fuzz.git "$PROJECT/oss-fuzz" 3209d05c48ad1232ab0c5797f6ed31a1486c2a80
