@@ -1,10 +1,10 @@
 Subject: [PATCH] reject oversized untrusted parse dimensions early
 ---
 diff --git a/jxl/src/api/inner/box_parser.rs b/jxl/src/api/inner/box_parser.rs
-index 40b16cd..a4b4549 100644
+index 5ed1d9f..1cbfd37 100644
 --- a/jxl/src/api/inner/box_parser.rs
 +++ b/jxl/src/api/inner/box_parser.rs
-@@ -418,7 +418,8 @@ impl BoxParser {
+@@ -415,7 +415,8 @@ impl BoxParser {
                      if self.ooo_jxlp_buffer.contains_key(&idx) {
                          return Err(Error::InvalidBox);
                      }
@@ -15,10 +15,10 @@ index 40b16cd..a4b4549 100644
                      }
                      self.state = ParseState::OOOJxlp(idx, content_len);
 diff --git a/jxl/src/api/inner/codestream_parser/frame_info.rs b/jxl/src/api/inner/codestream_parser/frame_info.rs
-index 6becf1e..62b4c05 100644
+index 484ccae..c8b87d0 100644
 --- a/jxl/src/api/inner/codestream_parser/frame_info.rs
 +++ b/jxl/src/api/inner/codestream_parser/frame_info.rs
-@@ -153,6 +153,19 @@ impl FrameInfo {
+@@ -147,6 +147,19 @@ impl FrameInfo {
              frame_header.size(),
              frame_header.num_extra_channels as usize,
          )?;
@@ -38,7 +38,7 @@ index 6becf1e..62b4c05 100644
  
          self.frame_header = Some(frame_header);
          *bits = br.total_bits_read();
-@@ -161,7 +174,27 @@ impl FrameInfo {
+@@ -155,7 +168,27 @@ impl FrameInfo {
  
      pub fn parse_toc(&mut self, br: &mut BitReader, bits: &mut usize) -> Result<Toc> {
          if self.toc_parser.is_none() {
@@ -67,7 +67,7 @@ index 6becf1e..62b4c05 100644
              self.toc_parser = Some(IncrementalTocReader::new(num_toc_entries as u32, br)?);
          }
  
-@@ -195,7 +228,19 @@ impl FrameInfo {
+@@ -189,7 +222,19 @@ impl FrameInfo {
          output_profile: &JxlColorProfile,
          process_mode: ProcessMode,
      ) -> Result<()> {
@@ -88,7 +88,7 @@ index 6becf1e..62b4c05 100644
          self.ready_section_data = 0;
  
          self.lf_global_section = None;
-@@ -381,9 +426,11 @@ impl FrameInfo {
+@@ -388,9 +433,11 @@ impl FrameInfo {
                  }
                  let len = buf.data.len();
                  if len > ready {
@@ -104,10 +104,10 @@ index 6becf1e..62b4c05 100644
                          break;
                      }
 diff --git a/jxl/src/api/inner/process.rs b/jxl/src/api/inner/process.rs
-index 718cab5..b36526b 100644
+index 7ac7fbb..1935283 100644
 --- a/jxl/src/api/inner/process.rs
 +++ b/jxl/src/api/inner/process.rs
-@@ -35,7 +35,7 @@ impl SmallBuffer {
+@@ -32,7 +32,7 @@ impl SmallBuffer {
      ) -> Result<usize> {
          let mut total = 0;
          loop {
@@ -116,7 +116,7 @@ index 718cab5..b36526b 100644
                  let start = self.range.start;
                  let len = self.range.len();
                  let (pre, post) = self.buf.split_at_mut(start);
-@@ -43,7 +43,7 @@ impl SmallBuffer {
+@@ -40,7 +40,7 @@ impl SmallBuffer {
                  self.range.start -= start;
                  self.range.end -= start;
              }
@@ -125,7 +125,7 @@ index 718cab5..b36526b 100644
                  break;
              }
              let num = get_input(&mut [IoSliceMut::new(&mut self.buf[self.range.end..])])?;
-@@ -105,7 +105,10 @@ impl SmallBuffer {
+@@ -102,7 +102,10 @@ impl SmallBuffer {
  
      pub(super) fn enlarge(&mut self) {
          // Note: we need a *4 here because doubling the buffer size might still not allow refill() to make progress.
@@ -138,10 +138,10 @@ index 718cab5..b36526b 100644
  
      pub(super) fn can_read_more(&self) -> bool {
 diff --git a/jxl/src/frame/decode.rs b/jxl/src/frame/decode.rs
-index f5e8820..b48670d 100644
+index 6ba1d1c..596e399 100644
 --- a/jxl/src/frame/decode.rs
 +++ b/jxl/src/frame/decode.rs
-@@ -157,6 +157,10 @@ impl Frame {
+@@ -154,6 +154,10 @@ impl Frame {
          toc: Toc,
          mut decoder_state: DecoderState,
      ) -> Result<Self> {
@@ -152,7 +152,7 @@ index f5e8820..b48670d 100644
          if frame_header.is_visible() {
              decoder_state.visible_frame_index += 1;
              decoder_state.nonvisible_frame_index = 0;
-@@ -335,7 +339,12 @@ impl Frame {
+@@ -326,7 +330,12 @@ impl Frame {
  
              if self.header.has_splines() {
                  info!("decoding splines");
@@ -163,23 +163,23 @@ index f5e8820..b48670d 100644
 +                    .checked_mul(self.header.height)
 +                    .ok_or(Error::SizeOverflow)?;
 +                let s = Splines::read(br, spline_area)?;
-                 *self.splines.borrow_mut() = s;
+                 *self.splines.try_write().unwrap() = s;
              }
  
 diff --git a/jxl/src/frame/render.rs b/jxl/src/frame/render.rs
-index c1d54be..1185f4f 100644
+index 0be483b..714f3d7 100644
 --- a/jxl/src/frame/render.rs
 +++ b/jxl/src/frame/render.rs
-@@ -21,7 +21,7 @@ use crate::headers::frame_header::FrameType;
- use crate::headers::{Orientation, color_encoding::ColorSpace, extra_channels::ExtraChannel};
- use crate::image::Image;
- use crate::image::Rect;
--use crate::util::AtomicRefCell;
-+use crate::util::{AtomicRefCell, ShiftRightCeil};
- use std::sync::Arc;
+@@ -28,7 +28,7 @@ use crate::render::SimpleRenderPipeline;
+ use crate::render::buffer_splitter::BufferSplitter;
+ use crate::render::stages::*;
+ use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
+-use crate::util::SmallVec;
++use crate::util::{ShiftRightCeil, SmallVec};
+ use crate::util::sync::atomic::{AtomicUsize, Ordering};
+ use crate::util::sync::{Arc, RwLock};
  
- #[cfg(test)]
-@@ -383,6 +383,16 @@ impl Frame {
+@@ -538,6 +538,16 @@ impl Frame {
          let num_channels = frame_header.num_extra_channels as usize + 3;
          let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
          let metadata = &decoder_state.file_header.image_metadata;
@@ -197,7 +197,7 @@ index c1d54be..1185f4f 100644
              num_channels + num_temp_channels,
              frame_header.size_upsampled(),
 diff --git a/jxl/src/headers/permutation.rs b/jxl/src/headers/permutation.rs
-index c189c0b..90c9a5c 100644
+index b268e3f..db01cf1 100644
 --- a/jxl/src/headers/permutation.rs
 +++ b/jxl/src/headers/permutation.rs
 @@ -45,6 +45,10 @@ impl Permutation {
@@ -212,10 +212,10 @@ index c189c0b..90c9a5c 100644
              return Err(Error::InvalidPermutationSize { size, skip, end });
          }
 diff --git a/jxl/src/headers/toc.rs b/jxl/src/headers/toc.rs
-index d060643..b324839 100644
+index 91cc8f9..03dd449 100644
 --- a/jxl/src/headers/toc.rs
 +++ b/jxl/src/headers/toc.rs
-@@ -43,6 +43,10 @@ pub struct IncrementalTocReader {
+@@ -41,6 +41,10 @@ pub struct IncrementalTocReader {
  
  impl IncrementalTocReader {
      pub fn new(num_entries: u32, br: &mut BitReader) -> Result<Self> {

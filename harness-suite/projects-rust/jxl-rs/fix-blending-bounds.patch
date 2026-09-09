@@ -1,33 +1,28 @@
 Subject: [PATCH] bound reference-frame blending and validate row lengths
 ---
 diff --git a/jxl/src/error.rs b/jxl/src/error.rs
-index 5519b6d..a78553c 100644
+index 735de59..e8c3494 100644
 --- a/jxl/src/error.rs
 +++ b/jxl/src/error.rs
-@@ -151,6 +151,8 @@ pub enum Error {
-     InvalidProperty(u32),
-     #[error("Invalid alpha channel for blending: {0}, limit is {1}")]
+@@ -149,6 +149,8 @@ pub enum Error {
      InvalidBlendingAlphaChannel(usize, usize),
+     #[error("Blending cannot use reference frame {0} saved before color transforms")]
+     BlendingPreColorTransform(usize),
 +    #[error("Blending buffer length mismatch: expected {0}, got {1}")]
 +    BlendingBufferLengthMismatch(usize, usize),
      #[error("Invalid alpha channel for blending: {0}, limit is {1}")]
      PatchesInvalidAlphaChannel(usize, usize),
      #[error("Invalid patch blend mode: {0}, limit is {1}")]
 diff --git a/jxl/src/features/blending.rs b/jxl/src/features/blending.rs
-index 23f6a64..aaf258e 100644
+index 5d432e9..69eef82 100644
 --- a/jxl/src/features/blending.rs
 +++ b/jxl/src/features/blending.rs
-@@ -7,10 +7,21 @@
- 
+@@ -8,8 +8,17 @@
  use jxl_simd::{F32SimdVec, SimdDescriptor, SimdMask, simd_function};
  
--use crate::headers::extra_channels::{ExtraChannel, ExtraChannelInfo};
-+use crate::{
-+    error::{Error, Result},
-+    headers::extra_channels::{ExtraChannel, ExtraChannelInfo},
-+};
- 
  use super::patches::{PatchBlendMode, PatchBlending};
++use crate::error::{Error, Result};
+ use crate::headers::extra_channels::{ExtraChannel, ExtraChannelInfo};
  
 +fn check_blending_len(slice: &[f32], xsize: usize) -> Result<()> {
 +    let len = slice.len();
@@ -40,7 +35,7 @@ index 23f6a64..aaf258e 100644
  const MAX_F32_LANES: usize = 16;
  
  #[inline(always)]
-@@ -204,16 +215,22 @@ pub fn perform_blending(
+@@ -203,16 +212,22 @@ pub fn perform_blending(
      ec_blending: &[PatchBlending],
      extra_channel_info: &[ExtraChannelInfo],
      tmp: &mut Vec<f32>,
@@ -65,7 +60,7 @@ index 23f6a64..aaf258e 100644
      }
  
      // Fast path: Replace color + Replace/None ec -> copy fg directly to bg, no tmp needed.
-@@ -234,7 +251,7 @@ pub fn perform_blending(
+@@ -233,7 +248,7 @@ pub fn perform_blending(
                      _ => unreachable!(),
                  }
              }
@@ -74,7 +69,7 @@ index 23f6a64..aaf258e 100644
          }
      }
  
-@@ -471,6 +488,7 @@ pub fn perform_blending(
+@@ -470,6 +485,7 @@ pub fn perform_blending(
              // already bg_color[c]
          }
      }
@@ -83,10 +78,10 @@ index 23f6a64..aaf258e 100644
  
  #[cfg(test)]
 diff --git a/jxl/src/features/patches.rs b/jxl/src/features/patches.rs
-index 5d80823..ed2a1fc 100644
+index 411ffff..5e188ab 100644
 --- a/jxl/src/features/patches.rs
 +++ b/jxl/src/features/patches.rs
-@@ -750,14 +750,18 @@ impl PatchesDictionary {
+@@ -748,14 +748,18 @@ impl PatchesDictionary {
              }
  
              let blending_idx = pos_idx * self.blendings_stride;
@@ -108,10 +103,10 @@ index 5d80823..ed2a1fc 100644
      }
  }
 diff --git a/jxl/src/render/stages/blending.rs b/jxl/src/render/stages/blending.rs
-index 56a6738..1d2aace 100644
+index fbb54ec..4a2f4f3 100644
 --- a/jxl/src/render/stages/blending.rs
 +++ b/jxl/src/render/stages/blending.rs
-@@ -132,19 +132,26 @@ impl RenderPipelineInPlaceStage for BlendingStage {
+@@ -129,19 +129,26 @@ impl RenderPipelineInPlaceStage for BlendingStage {
  
          let total_channels = 3 + num_ec;
  
@@ -141,7 +136,7 @@ index 56a6738..1d2aace 100644
              }
          }
  
-@@ -158,14 +165,18 @@ impl RenderPipelineInPlaceStage for BlendingStage {
+@@ -155,14 +162,18 @@ impl RenderPipelineInPlaceStage for BlendingStage {
  
          let state = state.unwrap().downcast_mut::<BlendingScratch>().unwrap();
  

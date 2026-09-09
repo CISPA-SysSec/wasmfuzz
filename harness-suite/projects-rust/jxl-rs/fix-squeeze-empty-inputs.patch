@@ -1,10 +1,10 @@
 Subject: [PATCH] handle empty modular squeeze buffers safely
 ---
 diff --git a/jxl/src/frame/modular/transforms/squeeze.rs b/jxl/src/frame/modular/transforms/squeeze.rs
-index 6422fb4..7c9f2ac 100644
+index 2526224..b762be6 100644
 --- a/jxl/src/frame/modular/transforms/squeeze.rs
 +++ b/jxl/src/frame/modular/transforms/squeeze.rs
-@@ -462,7 +462,9 @@ pub fn do_hsqueeze_step(
+@@ -461,7 +461,9 @@ pub fn do_hsqueeze_step(
      buffers: &mut [&mut ModularChannel],
  ) {
      trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
@@ -15,7 +15,7 @@ index 6422fb4..7c9f2ac 100644
      // Shortcut: guarantees that row is at least 1px in the main loop
      if out.data.size().0 == 0 || out.data.size().1 == 0 {
          return;
-@@ -471,8 +473,11 @@ pub fn do_hsqueeze_step(
+@@ -470,8 +472,11 @@ pub fn do_hsqueeze_step(
      let w = in_res.size().0;
      // Another shortcut: when output row has just 1px
      if w == 0 {
@@ -28,36 +28,7 @@ index 6422fb4..7c9f2ac 100644
              out.data.row_mut(y)[0] = in_avg.row(y)[0];
          }
          return;
-@@ -593,14 +598,16 @@ fn vsqueeze_scalar(
-     {
-         let prev_b_row = match out_prev {
-             None => in_avg.row(0),
--            Some(mc) => mc.data.row(mc.data.size().1 - 1),
-+            Some(mc) if mc.data.size().1 > 0 => mc.data.row(mc.data.size().1 - 1),
-+            Some(_) => in_avg.row(0),
-         };
-         let avg_row = in_avg.row(0);
-         let res_row = in_res.row(0);
-         let avg_row_next = if !has_tail && (h == 1) {
-             match in_next_avg {
-                 None => in_avg.row(0),
--                Some(mc) => mc.row(0),
-+                Some(mc) if mc.size().1 > 0 => mc.row(0),
-+                Some(_) => in_avg.row(0),
-             }
-         } else {
-             in_avg.row(1)
-@@ -619,7 +626,8 @@ fn vsqueeze_scalar(
-         } else {
-             match in_next_avg {
-                 None => avg_row,
--                Some(mc) => mc.row(0),
-+                Some(mc) if mc.size().1 > 0 => mc.row(0),
-+                Some(_) => in_avg.row(0),
-             }
-         };
-         for x in x_start..w {
-@@ -661,13 +669,19 @@ pub fn do_vsqueeze_step(
+@@ -666,13 +671,19 @@ pub fn do_vsqueeze_step(
      buffers: &mut [&mut ModularChannel],
  ) {
      trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");

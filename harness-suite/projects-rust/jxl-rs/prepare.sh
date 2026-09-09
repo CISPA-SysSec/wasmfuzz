@@ -1,16 +1,14 @@
 set -e
-git clone-rev.sh https://github.com/libjxl/jxl-rs "$PROJECT/repo" 24db91e57a0156e60846d0b1eb60ac9e0cd7a4dd
+git clone-rev.sh https://github.com/libjxl/jxl-rs "$PROJECT/repo" ba5cac0ed4ab6fdc7467ce256801a3bafa761ef5
+git -C "$PROJECT/repo" apply "$PROJECT/disable-simd.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fuzz-decode-resource-limits.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/cap-untrusted-parse-dimensions.patch"
+#
 git -C "$PROJECT/repo" apply "$PROJECT/fix-squeeze-empty-inputs.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-blending-bounds.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-modular-pipeline-bounds.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-rct-grid-kind-mismatch.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-low-memory-pipeline-downsampling.patch"
-git -C "$PROJECT/repo" apply "$PROJECT/fix-group-size-for-channel-unwrap.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-entropy-restore-zero-rewind.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-extend-ref-frame-bounds.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-vardct-lf-rect-bounds.patch"
-git -C "$PROJECT/repo" apply "$PROJECT/fix-modular-predict-neighbor-bounds.patch"
-git -C "$PROJECT/repo" apply "$PROJECT/disable-simd.patch"
-git -C "$PROJECT/repo" apply "$PROJECT/fix-fast-lossless-lz77-params.patch"

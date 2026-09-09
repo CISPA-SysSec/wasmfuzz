@@ -1,11 +1,11 @@
 Subject: [PATCH] fuzz: cap decode output allocation sizes
 ---
 diff --git a/jxl/fuzz/fuzz_targets/decode.rs b/jxl/fuzz/fuzz_targets/decode.rs
-index e2966b4..442c79d 100644
+index e4e5cb4..3774e99 100644
 --- a/jxl/fuzz/fuzz_targets/decode.rs
 +++ b/jxl/fuzz/fuzz_targets/decode.rs
-@@ -38,12 +38,24 @@ fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
-         let decoder_with_frame_info = as_complete(decoder_with_image_info.process(&mut data))?;
+@@ -39,12 +39,24 @@ fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
+             as_complete(decoder_with_image_info.process(&mut data, None))?;
          let frame_header = decoder_with_frame_info.frame_header();
          let frame_size = frame_header.size;
 +        let frame_pixels = frame_size.0.checked_mul(frame_size.1).ok_or(())?;
@@ -32,17 +32,48 @@ index e2966b4..442c79d 100644
  
          let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
 diff --git a/jxl/fuzz/fuzz_targets/decode_header.rs b/jxl/fuzz/fuzz_targets/decode_header.rs
-index 0f56728..6f1b4c2 100644
+index f449f22..7bdd8ee 100644
 --- a/jxl/fuzz/fuzz_targets/decode_header.rs
 +++ b/jxl/fuzz/fuzz_targets/decode_header.rs
-@@ -10,7 +10,9 @@ use libfuzzer_sys::fuzz_target;
+@@ -9,7 +9,9 @@ use libfuzzer_sys::fuzz_target;
+ 
  fuzz_target!(|data: &[u8]| {
-     // Note: cargo-fuzz doesn't support |mut data: &[u8]| here.
      let mut data = data;
 -    let decoder_options = JxlDecoderOptions::default();
 +    let mut decoder_options = JxlDecoderOptions::default();
 +    decoder_options.sample_limit = Some(1 << 22);
 +    decoder_options.scan_frames_only = true;
      let initialized_decoder = JxlDecoder::<states::Initialized>::new(decoder_options);
-     let _ = initialized_decoder.process(&mut data);
+     let _ = initialized_decoder.process(&mut data, None);
  });
+diff --git a/jxl/fuzz/fuzz_targets/decode_parallel.rs b/jxl/fuzz/fuzz_targets/decode_parallel.rs
+index a37f9c1..db9053b 100644
+--- a/jxl/fuzz/fuzz_targets/decode_parallel.rs
++++ b/jxl/fuzz/fuzz_targets/decode_parallel.rs
+@@ -109,12 +109,24 @@ fn fuzz_decode_parallel(mut data: &[u8]) -> Result<(), ()> {
+             as_complete(decoder_with_image_info.process(&mut data, reborrow(&mut runner_opt)))?;
+         let frame_header = decoder_with_frame_info.frame_header();
+         let frame_size = frame_header.size;
++        let frame_pixels = frame_size.0.checked_mul(frame_size.1).ok_or(())?;
++        const MAX_FRAME_PIXELS: usize = 1 << 22;
++        if frame_pixels >= MAX_FRAME_PIXELS {
++            return Err(());
++        }
++
++        let row_samples = frame_size.0.checked_mul(samples_per_pixel).ok_or(())?;
++        let output_samples = row_samples.checked_mul(frame_size.1).ok_or(())?;
++        const MAX_OUTPUT_SAMPLES: usize = 1 << 22;
++        if output_samples >= MAX_OUTPUT_SAMPLES {
++            return Err(());
++        }
+ 
+         let mut outputs =
+-            vec![Image::<f32>::new((frame_size.0 * samples_per_pixel, frame_size.1)).unwrap()];
++            vec![Image::<f32>::new((row_samples, frame_size.1)).map_err(|_| ())?];
+ 
+         for _ in 0..extra_channels {
+-            outputs.push(Image::<f32>::new(frame_size).unwrap());
++            outputs.push(Image::<f32>::new(frame_size).map_err(|_| ())?);
+         }
+ 
+         let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
