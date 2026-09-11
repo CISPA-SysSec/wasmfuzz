@@ -1,10 +1,10 @@
 set -e
 git clone-rev.sh https://github.com/tirr-c/jxl-oxide.git "$PROJECT/repo" c0cc4c7ea57c1207f38ff2970d94757470613be4
-git -C "$PROJECT/repo" apply ../fuzz-decode-resource-limits.patch
-git -C "$PROJECT/repo" apply ../fix-wasi-render-wait-no-trace.patch
+git -C "$PROJECT/repo" apply ../limit-jbr-decode-resources.patch
+git -C "$PROJECT/repo" apply ../port-wasi-render-wait-no-trace.patch
 git -C "$PROJECT/repo" apply ../fix-dct-common-mutex-reentrancy.patch
-git -C "$PROJECT/repo" apply ../fix-tracing-release-max-level-off.patch
-git -C "$PROJECT/repo" apply ../fix-wasi-composite-drop-render-lock.patch
+git -C "$PROJECT/repo" apply ../port-tracing-release-max-level-off.patch
+git -C "$PROJECT/repo" apply ../port-wasi-composite-drop-render-lock.patch
 git -C "$PROJECT/repo" apply ../fix-blend-subgrid-bounds.patch
 git -C "$PROJECT/repo" apply ../fix-blend-single-region-bounds.patch
 git -C "$PROJECT/repo" apply ../fix-blend-empty-region.patch
@@ -21,5 +21,3 @@ git -C "$PROJECT/repo" apply ../fix-spline-point-count-overflow.patch
 git -C "$PROJECT/repo" apply ../fix-xyb-transform-soft-fail.patch
 git -C "$PROJECT/repo" apply ../fix-toc-offset-overflow.patch
 git -C "$PROJECT/repo" apply ../fix-blend-alpha-region-bounds.patch
-# # Bug benchmark: Re-introduce NaN issue https://github.com/tirr-c/jxl-oxide/pull/485
-# git -C "$PROJECT/repo" apply ../revert-fix-crash-with-NaNs-in-upsampling-485.patch

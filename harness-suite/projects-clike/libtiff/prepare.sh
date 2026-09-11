@@ -6,4 +6,4 @@ git clone-rev.sh https://www.cl.cam.ac.uk/~mgk25/git/jbigkit    "$PROJECT/repo/j
 git clone-rev.sh https://github.com/madler/zlib.git             "$PROJECT/zlib"               e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca
 
 # git -C "$PROJECT/repo/libjpeg-turbo" apply "$PROJECT/libjpeg-turbo-skip-example.patch"
-git -C "$PROJECT/repo" apply "$PROJECT/fix-swab24-misaligned-size.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/fix-swab-misaligned-size.patch"

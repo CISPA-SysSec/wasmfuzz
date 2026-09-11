@@ -6,11 +6,11 @@ git clone-rev.sh https://github.com/google/bloaty.git "$PROJECT/repo" f12fc3d597
 
 git -C "$PROJECT/repo/third_party/zlib" checkout 5a82f71ed1dfc0bec044d9702463dbdf84ea3b71
 
-git -C "$PROJECT/repo" apply ../bloaty.patch
-git -C "$PROJECT/repo/third_party/abseil-cpp" apply ../../../third-party-absl.patch
-git -C "$PROJECT/repo/third_party/zlib" apply ../../../fix-zlib-static.patch
-git -C "$PROJECT/repo" apply ../fix-wasi-exceptions.patch
-git -C "$PROJECT/repo" apply ../fix-demumble-malloc.patch
+git -C "$PROJECT/repo" apply ../port-build-and-wasi.patch
+git -C "$PROJECT/repo/third_party/abseil-cpp" apply ../../../port-absl-examine-stack.patch
+git -C "$PROJECT/repo/third_party/zlib" apply ../../../port-zlib-static.patch
+git -C "$PROJECT/repo" apply ../port-wasi-exceptions.patch
+git -C "$PROJECT/repo" apply ../fix-demumble-missing-stdlib.patch
 
 # Build a host protoc matching the bundled protobuf; a mismatched release binary
 # generates headers that are incompatible with bloaty's pinned submodule.

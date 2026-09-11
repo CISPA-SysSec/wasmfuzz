@@ -5,5 +5,5 @@ git clone-rev.sh https://github.com/libarchive/libarchive.git "$PROJECT/libarchi
 git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/zlib" e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca
 
 git -C freetype apply ../freetype2-testing/fuzzing/settings/freetype2/ftoption.patch
-git -C freetype apply ../freetype-stub-sjlj.patch
-git -C libarchive apply ../libarchive-stubs.patch
+git -C freetype apply ../port-freetype-wasi-sjlj.patch
+git -C libarchive apply ../port-libarchive-stubs.patch
