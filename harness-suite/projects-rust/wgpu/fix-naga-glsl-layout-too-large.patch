@@ -1,0 +1,48 @@
+diff --git a/naga/src/front/glsl/parser/types.rs b/naga/src/front/glsl/parser/types.rs
+index 3eef187..a3c4570 100644
+--- a/naga/src/front/glsl/parser/types.rs
++++ b/naga/src/front/glsl/parser/types.rs
+@@ -52,7 +52,22 @@ impl ParsingContext<'_> {
+                 ArraySize::Constant(size)
+             };
+ 
+-            frontend.layouter.update(ctx.module.to_ctx()).unwrap();
++            // Nested array specifiers (and later uses of the layouter) will
++            // try to lay out any array type we just inserted. A huge constant
++            // size such as `int[2322222222][]` exceeds `MAX_TYPE_SIZE` and
++            // must be a parse error, not an unwrap panic.
++            frontend
++                .layouter
++                .update(ctx.module.to_ctx())
++                .map_err(|err| {
++                    let crate::proc::LayoutErrorInner::TooLarge = err.inner else {
++                        unreachable!("unexpected layout error: {err:?}");
++                    };
++                    Error {
++                        kind: ErrorKind::SemanticError("type is too large".into()),
++                        meta: *span,
++                    }
++                })?;
+             let stride = frontend.layouter[*ty].to_stride();
+             *ty = ctx.module.types.insert(
+                 Type {
+diff --git a/naga/src/front/glsl/parser_tests.rs b/naga/src/front/glsl/parser_tests.rs
+index 6fdd1e3..cfc2d84 100644
+--- a/naga/src/front/glsl/parser_tests.rs
++++ b/naga/src/front/glsl/parser_tests.rs
+@@ -860,3 +860,15 @@ fn expressions() {
+         )
+         .unwrap();
+ }
++
++#[test]
++fn huge_array_type_is_error_not_panic() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: an oversize constant array (optionally nested) used to
++    // unwrap a `LayoutError { inner: TooLarge }` in `parse_array_specifier`.
++    let result = frontend.parse(&Options::from(ShaderStage::Fragment), "int[2322222222][]");
++    assert!(
++        result.is_err(),
++        "expected a parse error for an oversize array type, got {result:?}"
++    );
++}

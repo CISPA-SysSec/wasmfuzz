@@ -1,0 +1,77 @@
+diff --git a/fuzz/fuzz_targets/inflate_chunked.rs b/fuzz/fuzz_targets/inflate_chunked.rs
+index 51c06ed..b4e53be 100644
+--- a/fuzz/fuzz_targets/inflate_chunked.rs
++++ b/fuzz/fuzz_targets/inflate_chunked.rs
+@@ -103,26 +103,42 @@ fuzz_target!(|input: (&[u8], usize)| {
+         assert_eq!(ReturnCode::Ok, return_code);
+     };
+ 
+-    let mut output = vec![0; 1 << 15];
++    let mut output = vec![0; data.len().max(1 << 15)];
+     stream.next_out = output.as_mut_ptr();
+     stream.avail_out = output.len() as _;
+ 
+-    for chunk in deflated.as_slice().chunks(chunk_size) {
++    'inflate: for chunk in deflated.as_slice().chunks(chunk_size) {
+         stream.next_in = chunk.as_ptr() as *mut u8;
+         stream.avail_in = chunk.len() as _;
+ 
+-        let err = unsafe { libz_rs_sys::inflate(&mut stream, ::libz_rs_sys::Z_NO_FLUSH) };
+-        let return_code: ReturnCode = ReturnCode::from(err);
+-
+-        match return_code {
+-            ReturnCode::Ok => continue,
+-            ReturnCode::StreamEnd => continue,
+-            _ => {
+-                if stream.msg.is_null() {
+-                    panic!("{return_code:?}: <no error message>")
+-                } else {
+-                    let msg = unsafe { std::ffi::CStr::from_ptr(stream.msg) };
+-                    panic!("{return_code:?}: {msg:?}")
++        loop {
++            let err = unsafe { libz_rs_sys::inflate(&mut stream, ::libz_rs_sys::Z_NO_FLUSH) };
++            let return_code: ReturnCode = ReturnCode::from(err);
++
++            match return_code {
++                ReturnCode::StreamEnd => break 'inflate,
++                ReturnCode::Ok if stream.avail_in == 0 => break,
++                ReturnCode::Ok | ReturnCode::BufError if stream.avail_out == 0 => {
++                    let pos = stream.total_out as usize;
++                    let new_len = output
++                        .len()
++                        .saturating_mul(2)
++                        .max(pos.saturating_add(1 << 15));
++                    output.resize(new_len, 0);
++                    unsafe {
++                        stream.next_out = output.as_mut_ptr().add(pos);
++                    }
++                    stream.avail_out = (output.len() - pos) as _;
++                }
++                ReturnCode::Ok => continue,
++                ReturnCode::BufError if stream.avail_in == 0 => break,
++                _ => {
++                    if stream.msg.is_null() {
++                        panic!("{return_code:?}: <no error message>")
++                    } else {
++                        let msg = unsafe { std::ffi::CStr::from_ptr(stream.msg) };
++                        panic!("{return_code:?}: {msg:?}")
++                    }
+                 }
+             }
+         }
+@@ -137,9 +153,12 @@ fuzz_target!(|input: (&[u8], usize)| {
+     }
+ 
+     if output != data {
+-        let path = std::env::temp_dir().join("deflate.txt");
+-        std::fs::write(&path, data).unwrap();
+-        eprintln!("saved input file to {path:?}");
++        #[cfg(not(target_family = "wasm"))]
++        {
++            let path = std::env::temp_dir().join("deflate.txt");
++            std::fs::write(&path, data).unwrap();
++            eprintln!("saved input file to {path:?}");
++        }
+     }
+ 
+     assert_eq!(output, data);

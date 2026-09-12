@@ -1,0 +1,176 @@
+diff --git a/Makefile.am b/Makefile.am
+index da46c35..d315f86 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -26,7 +26,7 @@ libjbig2dec_la_SOURCES = jbig2.c \
+ 	memento.c memento.h
+ 
+ bin_PROGRAMS = jbig2dec
+-noinst_PROGRAMS = test_sha1 test_huffman test_arith
++noinst_PROGRAMS = test_sha1 test_huffman test_arith test_resize
+ 
+ jbig2dec_SOURCES = jbig2dec.c sha1.c sha1.h \
+ 	jbig2.h jbig2_image.h getopt.h \
+@@ -42,7 +42,7 @@ EXTRA_DIST = test_jbig2dec.py msvc.mak LICENSE CHANGES
+ 
+ MAINTAINERCLEANFILES = config_types.h.in
+ 
+-TESTS = test_sha1 test_jbig2dec.py test_huffman test_arith
++TESTS = test_sha1 test_jbig2dec.py test_huffman test_arith test_resize
+ 
+ test_sha1_SOURCES = sha1.c sha1.h
+ test_sha1_CFLAGS = -DTEST
+@@ -55,3 +55,5 @@ test_huffman_SOURCES = jbig2_huffman.c
+ test_huffman_CFLAGS = -DTEST
+ test_huffman_LDADD = libjbig2dec.la
+ 
++test_resize_SOURCES = test_resize.c
++test_resize_LDADD = libjbig2dec.la
+diff --git a/jbig2_image.c b/jbig2_image.c
+index e4a9634..7453133 100644
+--- a/jbig2_image.c
++++ b/jbig2_image.c
+@@ -109,8 +109,8 @@ jbig2_image_resize(Jbig2Ctx *ctx, Jbig2Image *image, uint32_t width, uint32_t he
+     if (width == image->width) {
+         uint8_t *data;
+ 
+-        /* check for integer multiplication overflow */
+-        if (image->height > (INT32_MAX / image->stride)) {
++        /* check for integer multiplication overflow of the requested size */
++        if (height > (INT32_MAX / image->stride)) {
+             jbig2_error(ctx, JBIG2_SEVERITY_FATAL, JBIG2_UNKNOWN_SEGMENT_NUMBER, "integer multiplication overflow during resize (stride=%u, height=%u)", image->stride, height);
+             return NULL;
+         }
+diff --git a/test_resize.c b/test_resize.c
+new file mode 100644
+index 0000000..f365df9
+--- /dev/null
++++ b/test_resize.c
+@@ -0,0 +1,127 @@
++/* Copyright (C) 2001-2023 Artifex Software, Inc.
++   All Rights Reserved.
++
++   This software is provided AS-IS with no warranty, either express or
++   implied.
++
++   This software is distributed under license and may not be copied,
++   modified or distributed except as expressly authorized under the terms
++   of the license contained in the file LICENSE in this distribution.
++
++   Refer to licensing information at http://www.artifex.com or contact
++   Artifex Software, Inc.,  39 Mesa Street, Suite 108A, San Francisco,
++   CA 94129, USA, for further information.
++*/
++
++/*
++    jbig2dec
++*/
++
++#include "os_types.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++
++#include "jbig2.h"
++#include "jbig2_priv.h"
++#include "jbig2_image.h"
++
++/* Malformed JBIG2: striped page 16776960x(unspecified) with stripe size 1,
++   then an immediate generic refinement region 1x260 at (65792, 65281).
++   Growing the page to 65541 rows overflowed the old resize size check
++   (which used the previous height of 1) and composed off the buffer. */
++static const uint8_t malformed_striped_page[] = {
++    0x97, 0x4a, 0x42, 0x32, 0x0d, 0x0a, 0x1a, 0x0a, 0x03, 0x00, 0x00, 0x1a,
++    0x2c, 0x30, 0x00, 0x7f, 0x00, 0x00, 0x00, 0x13, 0x00, 0xff, 0xff, 0x00,
++    0xff, 0xff, 0xff, 0xff, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d,
++    0x69, 0x80, 0x01, 0x00, 0x00, 0x01, 0xff, 0x2a, 0x00, 0x05, 0x00, 0x00,
++    0x00, 0x1c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x04, 0x00, 0x01,
++    0x01, 0x00, 0x00, 0x00, 0xff, 0x01, 0xb9, 0x01, 0xfe, 0x00, 0x00, 0x00,
++    0x00, 0x13, 0x00, 0xff, 0xff, 0x00, 0x1a, 0x2c, 0x30, 0x00, 0x7f, 0x00,
++    0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c,
++    0x00, 0x00, 0xff, 0x01, 0x2c, 0x30, 0x00, 0x7f, 0x00, 0x00, 0x00, 0x13,
++    0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x02, 0x00, 0xff, 0x00, 0x80, 0x00,
++    0x01, 0x00, 0x20, 0x00, 0x03
++};
++
++static void
++error_cb(void *data, const char *msg, Jbig2Severity severity, uint32_t seg_idx)
++{
++    int *fatals = (int *) data;
++
++    (void) msg;
++    (void) seg_idx;
++    if (severity == JBIG2_SEVERITY_FATAL && fatals != NULL)
++        (*fatals)++;
++}
++
++static int
++fail(const char *msg)
++{
++    fprintf(stderr, "FAIL: %s\n", msg);
++    return 1;
++}
++
++int
++main(void)
++{
++    Jbig2Ctx *ctx;
++    Jbig2Image *image;
++    Jbig2Image *resized;
++    int fatals = 0;
++    int code;
++
++    ctx = jbig2_ctx_new(NULL, (Jbig2Options) 0, NULL, error_cb, &fatals);
++    if (ctx == NULL)
++        return fail("jbig2_ctx_new");
++
++    image = jbig2_image_new(ctx, 8, 1);
++    if (image == NULL) {
++        jbig2_ctx_free(ctx);
++        return fail("jbig2_image_new");
++    }
++
++    resized = jbig2_image_resize(ctx, image, 8, 4, 0);
++    if (resized == NULL || resized->height != 4) {
++        jbig2_image_release(ctx, image);
++        jbig2_ctx_free(ctx);
++        return fail("valid resize to height 4");
++    }
++
++    fatals = 0;
++    resized = jbig2_image_resize(ctx, image, 8, (uint32_t) INT32_MAX + 1u, 0);
++    if (resized != NULL) {
++        jbig2_image_release(ctx, image);
++        jbig2_ctx_free(ctx);
++        return fail("overflowing resize should fail");
++    }
++    if (image->height != 4) {
++        jbig2_image_release(ctx, image);
++        jbig2_ctx_free(ctx);
++        return fail("failed resize mutated height");
++    }
++    if (fatals == 0) {
++        jbig2_image_release(ctx, image);
++        jbig2_ctx_free(ctx);
++        return fail("overflowing resize should report a fatal error");
++    }
++
++    jbig2_image_release(ctx, image);
++    jbig2_ctx_free(ctx);
++
++    fatals = 0;
++    ctx = jbig2_ctx_new(NULL, (Jbig2Options) 0, NULL, error_cb, &fatals);
++    if (ctx == NULL)
++        return fail("jbig2_ctx_new for malformed stream");
++
++    code = jbig2_data_in(ctx, malformed_striped_page, sizeof(malformed_striped_page));
++    if (code == 0)
++        code = jbig2_complete_page(ctx);
++    jbig2_ctx_free(ctx);
++
++    if (code == 0 && fatals == 0)
++        return fail("malformed striped page should not decode successfully");
++
++    printf("ok\n");
++    return 0;
++}

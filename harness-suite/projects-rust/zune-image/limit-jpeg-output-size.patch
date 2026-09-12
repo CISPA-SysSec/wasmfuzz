@@ -1,0 +1,94 @@
+diff --git a/crates/zune-jpeg/fuzz/fuzz_targets/decode_buffer.rs b/crates/zune-jpeg/fuzz/fuzz_targets/decode_buffer.rs
+index 6f2e206..e05e61c 100644
+--- a/crates/zune-jpeg/fuzz/fuzz_targets/decode_buffer.rs
++++ b/crates/zune-jpeg/fuzz/fuzz_targets/decode_buffer.rs
+@@ -4,7 +4,10 @@ use libfuzzer_sys::fuzz_target;
+ 
+ fuzz_target!(|data: &[u8]| {
+     use zune_jpeg::zune_core::bytestream::ZCursor;
++    use zune_jpeg::zune_core::options::DecoderOptions;
++    const MAX_DECODE_BYTES: usize = 64 * 1024 * 1024;
++    let opts = DecoderOptions::default().inflate_set_limit(MAX_DECODE_BYTES);
+     let data = ZCursor::new(data);
+-    let mut decoder = zune_jpeg::JpegDecoder::new(data);
++    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(data, opts);
+     let _ = decoder.decode();
+ });
+diff --git a/crates/zune-jpeg/src/decoder.rs b/crates/zune-jpeg/src/decoder.rs
+index 588bc6c..ad836c3 100644
+--- a/crates/zune-jpeg/src/decoder.rs
++++ b/crates/zune-jpeg/src/decoder.rs
+@@ -740,6 +740,12 @@ where
+                 .checked_mul(usize::from(self.info.width))
+                 .and_then(|v| v.checked_mul(self.options.jpeg_get_out_colorspace().num_components()))
+                 .ok_or(DecodeErrors::FormatStatic("DNL image dimensions overflow usize"))?;
++            if max_size >= self.options.inflate_get_limit() {
++                return Err(DecodeErrors::Format(format!(
++                    "Decoded JPEG output size {max_size} exceeds configured limit {}",
++                    self.options.inflate_get_limit()
++                )));
++            }
+             let mut out = vec![0u8; max_size];
+             self.decode_into(&mut out)?;
+             // After decode_into, info.height has been set by the DNL handler.
+@@ -749,7 +755,15 @@ where
+             return Ok(out);
+         }
+ 
+-        let size = self.output_buffer_size().unwrap();
++        let size = self.output_buffer_size().ok_or(DecodeErrors::FormatStatic(
++            "Could not compute JPEG output buffer size"
++        ))?;
++        if size >= self.options.inflate_get_limit() {
++            return Err(DecodeErrors::Format(format!(
++                "Decoded JPEG output size {size} exceeds configured limit {}",
++                self.options.inflate_get_limit()
++            )));
++        }
+         let mut out = vec![0; size];
+         self.decode_into(&mut out)?;
+         Ok(out)
+diff --git a/crates/zune-jpeg/tests/invalid_images.rs b/crates/zune-jpeg/tests/invalid_images.rs
+index 0df73e7..aabc91d 100644
+--- a/crates/zune-jpeg/tests/invalid_images.rs
++++ b/crates/zune-jpeg/tests/invalid_images.rs
+@@ -7,6 +7,7 @@
+  */
+ 
+ use zune_core::bytestream::ZCursor;
++use zune_core::options::DecoderOptions;
+ use zune_jpeg::JpegDecoder;
+ 
+ #[test]
+@@ -154,3 +155,31 @@ fn test_panic_on_slice() {
+     let  _ = JpegDecoder::new(ZCursor::new(JPEG_DATA)).decode();
+ }
+ 
++/// SOF10 with height 0 (DNL) and a large width. The decoder used to pre-allocate
++/// `max_height * width * components` (hundreds of MB / 1 GiB), which aborts on
++/// wasm32-wasip1. With a 64 MiB inflate limit this must return Err.
++#[test]
++fn dnl_huge_prealloc_does_not_oom() {
++    const DATA: &[u8] = &[
++        0xff, 0xd8, 0xff, 0xca, 0x00, 0x14, 0x08, 0x00, 0x00, 0x1f, 0xe5, 0x04,
++        0x7f, 0x12, 0x00, 0x00, 0x11, 0x00, 0x01, 0x13, 0x00, 0x01, 0x13, 0x00,
++        0xff, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0xff, 0xd8, 0x00, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x80, 0x7a, 0x20, 0x3f,
++        0x20, 0xff, 0xe1, 0x00, 0x07, 0x41, 0x56, 0x1b, 0x1b, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f,
++        0x3f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x80, 0x7a, 0x20, 0x3f,
++        0x20, 0xff, 0xe1, 0x00, 0x07, 0x41, 0x56, 0x49, 0x31, 0x00, 0xff, 0xda,
++        0x00, 0x0a, 0x02, 0x01, 0x00, 0x00, 0x20, 0x20, 0x00, 0x80, 0x00, 0xff,
++        0xc4, 0x00, 0x37, 0x0d, 0x00, 0x17, 0xff, 0x99, 0x3a, 0x01, 0xff, 0x01,
++        0x31, 0xa1, 0xff, 0x01, 0x01, 0x01, 0x00, 0x45, 0x00, 0x01, 0x00, 0x00,
++        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++        0x00, 0x00, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    ];
++    let opts = DecoderOptions::default().inflate_set_limit(64 * 1024 * 1024);
++    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(DATA), opts);
++    assert!(decoder.decode().is_err());
++}

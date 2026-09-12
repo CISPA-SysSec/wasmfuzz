@@ -1,0 +1,56 @@
+diff --git a/naga/src/front/spv/mod.rs b/naga/src/front/spv/mod.rs
+--- a/naga/src/front/spv/mod.rs
++++ b/naga/src/front/spv/mod.rs
+@@ -2018,7 +2018,14 @@
+                 // Ignored because the other option (OriginLowerLeft) is not valid in Vulkan mode.
+             }
+             ExecutionMode::LocalSize => {
+-                ep.workgroup_size = [args[0], args[1], args[2]];
++                // `OpExecutionMode LocalSize` requires x/y/z operands. A
++                // truncated or undersized instruction used to index an empty
++                // `args` vec and panic.
++                let sizes: [spirv::Word; 3] = args
++                    .get(..3)
++                    .and_then(|slice| slice.try_into().ok())
++                    .ok_or(Error::InvalidOperandCount(inst.op, inst.wc))?;
++                ep.workgroup_size = sizes;
+             }
+             _ => {
+                 return Err(Error::UnsupportedExecutionMode(mode_id));
+@@ -3272,4 +3279,36 @@
+         ];
+         let _ = super::parse_u8_slice(&bin, &Default::default()).unwrap();
+     }
++
++    #[test]
++    fn execution_mode_local_size_missing_operands() {
++        // Header + OpMemoryModel + OpEntryPoint + OpExecutionMode LocalSize
++        // with no x/y/z operands. Previously indexed `args[0]` on an empty vec.
++        let words = vec![
++            0x0723_0203, // magic
++            0x0001_0000, // version 1.0
++            0,           // generator
++            2,           // bound
++            0,           // schema
++            // OpMemoryModel Logical GLSL450
++            0x0003_000e,
++            0,
++            1,
++            // OpEntryPoint Vertex %1 "main"
++            0x0005_000f,
++            0, // Vertex
++            1, // function id
++            u32::from_le_bytes(*b"main"),
++            0,
++            // OpExecutionMode %1 LocalSize (word count 3: no sizes)
++            0x0003_0010,
++            1,
++            17, // LocalSize
++        ];
++        let result = super::Frontend::new(words.into_iter(), &Default::default()).parse();
++        assert!(
++            matches!(result, Err(super::Error::InvalidOperandCount(..))),
++            "expected operand-count error, got {result:?}"
++        );
++    }
+ }

@@ -1,0 +1,81 @@
+diff --git a/crates/zune-bmp/fuzz/fuzz_targets/fuzz_target_1.rs b/crates/zune-bmp/fuzz/fuzz_targets/fuzz_target_1.rs
+index ee08208..951a57d 100644
+--- a/crates/zune-bmp/fuzz/fuzz_targets/fuzz_target_1.rs
++++ b/crates/zune-bmp/fuzz/fuzz_targets/fuzz_target_1.rs
+@@ -12,7 +12,10 @@ use libfuzzer_sys::fuzz_target;
+ fuzz_target!(|data: &[u8]| {
+     // fuzzed code goes here
+     use zune_bmp::zune_core::bytestream::ZCursor;
++    use zune_bmp::zune_core::options::DecoderOptions;
++    const MAX_DECODE_BYTES: usize = 64 * 1024 * 1024;
++    let opts = DecoderOptions::default().inflate_set_limit(MAX_DECODE_BYTES);
+     let data = ZCursor::new(data);
+-    let mut decoder = zune_bmp::BmpDecoder::new(data);
++    let mut decoder = zune_bmp::BmpDecoder::new_with_options(data, opts);
+     let _ = decoder.decode();
+ });
+diff --git a/crates/zune-bmp/src/decoder.rs b/crates/zune-bmp/src/decoder.rs
+index 8caf4da..ec13f1c 100644
+--- a/crates/zune-bmp/src/decoder.rs
++++ b/crates/zune-bmp/src/decoder.rs
+@@ -672,11 +672,16 @@ where
+     /// a pre-allocated buffer
+     pub fn decode(&mut self) -> Result<Vec<u8>, BmpDecoderErrors> {
+         self.decode_headers()?;
+-        let mut output = vec![
+-            0_u8;
+-            self.output_buf_size()
+-                .ok_or(BmpDecoderErrors::OverFlowOccurred)?
+-        ];
++        let output_size = self
++            .output_buf_size()
++            .ok_or(BmpDecoderErrors::OverFlowOccurred)?;
++        if output_size >= self.options.inflate_get_limit() {
++            return Err(BmpDecoderErrors::Generic(format!(
++                "Decoded BMP output size {output_size} exceeds configured limit {}",
++                self.options.inflate_get_limit()
++            )));
++        }
++        let mut output = vec![0_u8; output_size];
+ 
+         self.decode_into(&mut output)?;
+ 
+@@ -1151,6 +1156,13 @@ where
+             .ok_or(BmpDecoderErrors::OverFlowOccurred)?
+             >> 3;
+ 
++        if alloc_size >= self.options.inflate_get_limit() {
++            return Err(BmpDecoderErrors::Generic(format!(
++                "Decoded BMP RLE buffer size {alloc_size} exceeds configured limit {}",
++                self.options.inflate_get_limit()
++            )));
++        }
++
+         let mut pixels = vec![0; alloc_size];
+ 
+         //let rt = temp_scanline.len();
+diff --git a/crates/zune-bmp/tests/invalid.rs b/crates/zune-bmp/tests/invalid.rs
+new file mode 100644
+index 0000000..890bd93
+--- /dev/null
++++ b/crates/zune-bmp/tests/invalid.rs
+@@ -0,0 +1,19 @@
++use zune_bmp::BmpDecoder;
++use zune_core::bytestream::ZCursor;
++
++/// 16384x16384 32-bit BMP (exactly 1 GiB of output). Default `inflate_get_limit`
++/// is 1 GiB; allocating that on wasm32-wasip1 aborts. Decoding must return Err.
++#[test]
++fn huge_claimed_rgba_does_not_oom() {
++    const DATA: &[u8] = &[
++        0x42, 0x4d, 0x46, 0x00, 0x00, 0x00, 0xe1, 0x7e, 0xe3, 0x01, 0x45, 0x00,
++        0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x40,
++        0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x27,
++        0xa5, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x7f, 0x00, 0x40,
++        0x02, 0xc0, 0xd8, 0x6c, 0x3d, 0x00, 0x02, 0xc0, 0x00, 0xff, 0xff, 0x00,
++        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x02,
++        0xc0, 0xd8, 0x6c, 0x3e, 0x00, 0x02, 0xc0, 0xd8, 0x6c, 0x3e,
++    ];
++    let mut decoder = BmpDecoder::new(ZCursor::new(DATA));
++    assert!(decoder.decode().is_err());
++}

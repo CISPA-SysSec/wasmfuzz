@@ -1,0 +1,187 @@
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/compare.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/compare.py
+index 99dd8f4..3411d43 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/compare.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/compare.py
+@@ -178,3 +178,26 @@ c = (a *
+      "a" "b" > b
+      )
+ 
++
++# Fuzz regression: a list item that is a comparison whose right operand is a
++# unary expression with an end-of-line comment between the operator and operand
++# must format stably (`format(format(x)) == format(x)`).
++[a
++
++
++
++
++
++
++
++
++
++
++<+#
++Mte5,d]
++
++[
++    a < +  #
++    Mte5,
++    d,
++]
+diff --git a/crates/ruff_python_formatter/src/comments/placement.rs b/crates/ruff_python_formatter/src/comments/placement.rs
+index c0f9c8b..ffcced8 100644
+--- a/crates/ruff_python_formatter/src/comments/placement.rs
++++ b/crates/ruff_python_formatter/src/comments/placement.rs
+@@ -229,7 +229,9 @@ fn handle_enclosed_comment<'a>(
+         AnyNodeRef::PatternKeyword(pattern_keyword) => {
+             handle_pattern_keyword_comment(comment, pattern_keyword, source)
+         }
+-        AnyNodeRef::ExprUnaryOp(unary_op) => handle_unary_op_comment(comment, unary_op, source),
++        AnyNodeRef::ExprUnaryOp(unary_op) => {
++            handle_unary_op_comment(comment, unary_op, trivia, source)
++        }
+         AnyNodeRef::ExprNamed(_) => handle_named_expr_comment(comment, source),
+         AnyNodeRef::ExprLambda(lambda) => handle_lambda_comment(comment, lambda, source),
+         AnyNodeRef::ExprDict(_) => handle_dict_unpacking_comment(comment, source)
+@@ -1935,9 +1937,18 @@ fn handle_lambda_comment<'a>(
+ ///      not True  # comment
+ /// )
+ /// ```
++///
++/// When the unary expression is the rightmost operand of an unparenthesized binary-like
++/// expression (`a < +x`, `a + +x`, `a and not x`), attaching the comment as dangling on the
++/// unary node puts `expand_parent` inside the binary-like group. That forces the group to
++/// split on the first pass; after formatting, the comment sits after the whole expression
++/// (and any following list comma), so the second pass does not split — a stability failure.
++/// Re-parent those comments onto the enclosing binary-like expression so they are formatted
++/// outside that group.
+ fn handle_unary_op_comment<'a>(
+     comment: DecoratedComment<'a>,
+     unary_op: &'a ast::ExprUnaryOp,
++    trivia: &TriviaRanges,
+     source: &str,
+ ) -> CommentPlacement<'a> {
+     let mut tokenizer = SimpleTokenizer::new(
+@@ -1957,12 +1968,38 @@ fn handle_unary_op_comment<'a>(
+         .find(|token| token.kind == SimpleTokenKind::LParen)
+         .map_or(unary_op.operand.start(), |lparen| lparen.start());
+     if comment.end() < up_to && comment.line_position().is_end_of_line() {
++        if !trivia.parenthesized().contains(unary_op.range())
++            && let Some(parent) = comment.enclosing_parent()
++            && is_rightmost_operand_of_binary_like(unary_op, parent)
++        {
++            return CommentPlacement::trailing(parent, comment);
++        }
+         CommentPlacement::dangling(unary_op, comment)
+     } else {
+         CommentPlacement::Default(comment)
+     }
+ }
+ 
++/// Returns `true` if `unary_op` is the rightmost operand of `parent` when `parent` is a
++/// compare, binary, or boolean operation.
++fn is_rightmost_operand_of_binary_like(
++    unary_op: &ast::ExprUnaryOp,
++    parent: AnyNodeRef<'_>,
++) -> bool {
++    match parent {
++        AnyNodeRef::ExprCompare(compare) => compare
++            .comparators
++            .last()
++            .is_some_and(|comparator| comparator.range() == unary_op.range()),
++        AnyNodeRef::ExprBinOp(bin_op) => bin_op.right.range() == unary_op.range(),
++        AnyNodeRef::ExprBoolOp(bool_op) => bool_op
++            .values
++            .last()
++            .is_some_and(|value| value.range() == unary_op.range()),
++        _ => false,
++    }
++}
++
+ /// Attach an end-of-line comment immediately following an open bracket as a dangling comment on
+ /// enclosing node.
+ ///
+diff --git a/crates/ruff_python_formatter/src/lib.rs b/crates/ruff_python_formatter/src/lib.rs
+index 02c3847..5b738dd 100644
+--- a/crates/ruff_python_formatter/src/lib.rs
++++ b/crates/ruff_python_formatter/src/lib.rs
+@@ -243,6 +243,25 @@ if True:
+         Ok(())
+     }
+ 
++    /// Fuzz regression: list item `a < +Mte5` with an end-of-line comment between
++    /// unary `+` and its operand must be idempotent, including at the harness line width.
++    #[test]
++    fn unary_compare_comment_in_list_is_idempotent() -> Result<()> {
++        use ruff_formatter::LineWidth;
++
++        let input = "[a\n\n\n\n\n\n\n\n\n\n\n<+#\nMte5,d]";
++        let options = PyFormatOptions::default().with_line_width(LineWidth::try_from(400).unwrap());
++        let formatted = format_module_source(input, options.clone())?
++            .as_code()
++            .to_string();
++        let reformatted = format_module_source(&formatted, options)?
++            .as_code()
++            .to_string();
++        assert_eq!(formatted, reformatted);
++        assert_eq!(formatted, "[\n    a < +Mte5,  #\n    d,\n]\n");
++        Ok(())
++    }
++
+     /// Use this test to debug the formatting of some snipped
+     #[ignore]
+     #[test]
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@expression__compare.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@expression__compare.py.snap
+index 96972e5..ed8ce40 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@expression__compare.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@expression__compare.py.snap
+@@ -184,6 +184,29 @@ c = (a *
+      "a" "b" > b
+      )
+ 
++
++# Fuzz regression: a list item that is a comparison whose right operand is a
++# unary expression with an end-of-line comment between the operator and operand
++# must format stably (`format(format(x)) == format(x)`).
++[a
++
++
++
++
++
++
++
++
++
++
++<+#
++Mte5,d]
++
++[
++    a < +  #
++    Mte5,
++    d,
++]
+ ```
+ 
+ ## Output
+@@ -417,4 +440,18 @@ c = (
+     "a"
+     "b" > b
+ )
++
++
++# Fuzz regression: a list item that is a comparison whose right operand is a
++# unary expression with an end-of-line comment between the operator and operand
++# must format stably (`format(format(x)) == format(x)`).
++[
++    a < +Mte5,  #
++    d,
++]
++
++[
++    a < +Mte5,  #
++    d,
++]
+ ```

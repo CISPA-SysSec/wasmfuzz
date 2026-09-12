@@ -1,0 +1,77 @@
+diff --git a/crates/ruff_python_codegen/src/generator.rs b/crates/ruff_python_codegen/src/generator.rs
+index 9154a08..f588e22 100644
+--- a/crates/ruff_python_codegen/src/generator.rs
++++ b/crates/ruff_python_codegen/src/generator.rs
+@@ -1563,8 +1563,12 @@ impl<'a> Generator<'a> {
+             return;
+         }
+ 
+-        let quote_style = self.mode.quote_style(flags);
+-        let escape = UnicodeEscape::with_preferred_quote(&s, quote_style);
++        // Surrounding quotes are already written; never switch quote style here.
++        // `with_preferred_quote` would flip to the opposite quote when the body
++        // contains only that quote, then `write_body` would emit it unescaped
++        // (e.g. `t'\'8'` becoming `t''8'`).
++        let quote_style = flags.quote_style();
++        let escape = UnicodeEscape::with_quote(&s, quote_style);
+         if let Some(len) = escape.layout().len {
+             self.buffer.reserve(len);
+         }
+@@ -1931,6 +1935,15 @@ class Foo:
+         assert_eq!(round_trip(r#"b"he\"llo""#), r#"b'he"llo'"#);
+         assert_eq!(round_trip(r#"f"abc{'def'}{1}""#), r#"f"abc{'def'}{1}""#);
+         assert_round_trip!(r#"f'abc{"def"}{1}'"#);
++
++        // Escaped quotes in interpolated-string literal parts must be re-escaped
++        // using the already-written outer quotes (fuzz: ruff_parse_idempotency).
++        assert_eq!(round_trip(r"t'\'8'"), r"t'\'8'");
++        assert_eq!(round_trip(r"f'\'8'"), r"f'\'8'");
++        assert_eq!(round_trip(r#"t"\"8""#), r#"t"\"8""#);
++        assert_eq!(round_trip(r#"f"\"8""#), r#"f"\"8""#);
++        let first = round_trip(r"t'\'8'");
++        assert_eq!(round_trip(&first), first);
+     }
+ 
+     /// test all of the valid string literal prefix and quote combinations from
+diff --git a/crates/ruff_python_literal/src/escape.rs b/crates/ruff_python_literal/src/escape.rs
+index 0d9d857..3683df1 100644
+--- a/crates/ruff_python_literal/src/escape.rs
++++ b/crates/ruff_python_literal/src/escape.rs
+@@ -58,6 +58,23 @@ impl<'a> UnicodeEscape<'a> {
+         let layout = Self::repr_layout(source, quote);
+         Self { source, layout }
+     }
++
++    /// Like [`Self::with_preferred_quote`], but never switches the quote style.
++    ///
++    /// Use this when the surrounding quotes have already been written (for example
++    /// interpolated string literal parts) and the body must escape the quote
++    /// character those surrounding quotes use.
++    #[inline]
++    pub fn with_quote(source: &'a str, quote: Quote) -> Self {
++        let mut this = Self::with_preferred_quote(source, quote);
++        if this.layout.quote != quote {
++            this.layout.quote = quote;
++            // Force the slow path so matching quotes are escaped rather than
++            // written raw under a flipped quote style.
++            this.layout.len = None;
++        }
++        this
++    }
+     #[inline]
+     pub fn new_repr(source: &'a str) -> Self {
+         Self::with_preferred_quote(source, Quote::Single)
+@@ -414,4 +431,13 @@ mod unicode_escape_tests {
+         assert!(test("'\"hello"));
+         assert!(test("hello\n"));
+     }
++
++    #[test]
++    fn with_quote_escapes_matching_quotes() {
++        let escape = UnicodeEscape::with_quote("'8", Quote::Single);
++        assert_eq!(escape.layout().quote, Quote::Single);
++        let mut body = String::new();
++        escape.write_body(&mut body).unwrap();
++        assert_eq!(body, r"\'8");
++    }
+ }
