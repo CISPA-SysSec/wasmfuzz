@@ -193,7 +193,7 @@ impl ModuleSpec {
                 .get_operators_reader()
                 .unwrap()
                 .original_position()
-                .saturating_sub(3), // this matches up with debug info
+                .saturating_sub(3) as usize, // this matches up with debug info
             operator_offset_rel: Vec::new(),
         };
         for elem in body.get_locals_reader()? {
@@ -340,7 +340,7 @@ impl ModuleSpec {
 
             func.operators.push(wfop);
             func.operator_offset_rel.push(
-                (src_byte_pos - func.operators_wasm_bin_offset_base)
+                (src_byte_pos as usize - func.operators_wasm_bin_offset_base)
                     .try_into()
                     .unwrap(),
             );

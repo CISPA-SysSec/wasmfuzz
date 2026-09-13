@@ -4,11 +4,11 @@ version = "0.1.0"
 authors = []
 license = "Apache-2.0 OR MIT"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.100"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.256"
+wasmparser = "0.259"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive", "env"] }
 md5 = "0.8"
@@ -20,7 +20,7 @@ target-lexicon = "0.13"
 speedy = "0.8"
 colored = "3.0"
 anyhow = "1.0"
-dirs = "6.0"
+dirs = "7.0"
 serde = "1.0"
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 gimli = "0.34"
@@ -51,7 +51,7 @@ libafl_bolts = { version = "0.16", default-features = false, features = [
     "derive",
     "serdeany_autoreg",
 ] }
-cranelift = { version = "0.134", features = [
+cranelift = { version = "0.135", features = [
     "jit",
     "module",
     "native",
@@ -62,7 +62,7 @@ libc = "0.2.158"
 # feat:concolic
 # Note: waiting for 0.3.1 upstream
 smtlib = { git = "https://github.com/oeb25/smtlib-rs.git", rev = "4f0fad92289ba02931276cbe2bbe45f87f7a6f3e", optional = true }
-z3 = { version = "0.20", optional = true }
+z3 = { version = "0.21", optional = true }
 bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = true }
 
 # feat:with_mimalloc
@@ -74,7 +74,7 @@ lcov = { version = "0.8", optional = true }
 syntect = { version = "5.1", optional = true }
 
 # feat:compressed_harnesses
-zstd = { version = "0.13.1", optional = true }
+zstd = { version = "0.14", optional = true }
 
 # enable via feat:tracy
 tracy_full = { version = "1.12.0", default-features = false, features = [
@@ -122,4 +122,4 @@ opt-level = 3
 debug = true
 
 [dev-dependencies]
-wast = "256"
+wast = "259"
