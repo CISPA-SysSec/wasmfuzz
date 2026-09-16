@@ -21,3 +21,7 @@ git -C "$PROJECT/repo" apply ../fix-spline-point-count-overflow.patch
 git -C "$PROJECT/repo" apply ../fix-xyb-transform-soft-fail.patch
 git -C "$PROJECT/repo" apply ../fix-toc-offset-overflow.patch
 git -C "$PROJECT/repo" apply ../fix-blend-alpha-region-bounds.patch
+git -C "$PROJECT/repo" apply ../fix-toc-permutation-index-bounds.patch
+git -C "$PROJECT/repo" apply ../fix-alloc-tracker-size-overflow.patch
+git -C "$PROJECT/repo" apply ../fix-grid-dimension-overflow.patch
+git -C "$PROJECT/repo" apply ../fix-patch-ref-channel-mismatch.patch

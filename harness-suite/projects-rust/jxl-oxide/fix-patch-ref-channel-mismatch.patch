@@ -1,0 +1,18 @@
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index 1163b9d..87b211c 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -458,7 +458,12 @@ pub fn patch(
+     use jxl_frame::data::PatchBlendMode;
+ 
+     let color_channels = base_grid.color_channels();
+-    assert_eq!(patch_ref_grid.color_channels(), color_channels);
++    if patch_ref_grid.color_channels() != color_channels {
++        return Err(jxl_bitstream::Error::ValidationFailed(
++            "patch reference grid color channel count mismatch",
++        )
++        .into());
++    }
+     for target in &patch_ref.patch_targets {
+         for (idx, blending_info) in std::iter::repeat_n(&target.blending[0], color_channels)
+             .chain(&target.blending[1..])

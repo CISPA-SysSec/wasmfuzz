@@ -1,0 +1,39 @@
+diff --git a/crates/jxl-grid/src/lib.rs b/crates/jxl-grid/src/lib.rs
+index 0a50950..1935639 100644
+--- a/crates/jxl-grid/src/lib.rs
++++ b/crates/jxl-grid/src/lib.rs
+@@ -84,10 +84,10 @@ impl<S: Default + Clone> AlignedGrid<S> {
+     ) -> Result<Self, OutOfMemory> {
+         let len = width
+             .checked_mul(height)
+-            .expect("grid dimensions overflow usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         let buf_len = len
+             .checked_add((Self::ALIGN - 1) / std::mem::size_of::<S>())
+-            .expect("aligned grid buffer length overflows usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         let handle = tracker
+             .map(|tracker| tracker.alloc::<S>(buf_len))
+             .transpose()?;
+@@ -97,7 +97,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
+         let offset = ((Self::ALIGN - extra) % Self::ALIGN) / std::mem::size_of::<S>();
+         let len_with_offset = len
+             .checked_add(offset)
+-            .expect("aligned grid buffer length overflows usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         buf.resize_with(len_with_offset, S::default);
+ 
+         Ok(Self {
+@@ -117,10 +117,10 @@ impl<S: Default + Clone> AlignedGrid<S> {
+     ) -> Result<Self, OutOfMemory> {
+         let len = width
+             .checked_mul(height)
+-            .expect("grid dimensions overflow usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         let buf_len = len
+             .checked_add((Self::ALIGN - 1) / std::mem::size_of::<S>())
+-            .expect("aligned grid buffer length overflows usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         let handle = tracker
+             .map(|tracker| tracker.alloc::<S>(buf_len))
+             .transpose()?;

@@ -1,0 +1,17 @@
+diff --git a/crates/jxl-grid/src/alloc_tracker.rs b/crates/jxl-grid/src/alloc_tracker.rs
+index 131e1ab..031fd9a 100644
+--- a/crates/jxl-grid/src/alloc_tracker.rs
++++ b/crates/jxl-grid/src/alloc_tracker.rs
+@@ -28,7 +28,11 @@ impl AllocTracker {
+     ///
+     /// Returns an error if the allocation exceeds the current limit.
+     pub fn alloc<T>(&self, count: usize) -> Result<AllocHandle, crate::OutOfMemory> {
+-        let bytes = count * std::mem::size_of::<T>();
++        // Unchecked on 32-bit targets this wraps, so a huge request passes the limit and the
++        // following `vec!` panics with "capacity overflow" instead of reporting OutOfMemory.
++        let Some(bytes) = count.checked_mul(std::mem::size_of::<T>()) else {
++            return Err(crate::OutOfMemory::new(usize::MAX));
++        };
+         let result = self.inner.bytes_left.fetch_update(
+             Ordering::Relaxed,
+             Ordering::Relaxed,

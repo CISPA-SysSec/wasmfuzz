@@ -1,0 +1,17 @@
+diff --git a/crates/jxl-frame/src/data/toc.rs b/crates/jxl-frame/src/data/toc.rs
+index 0d9d40a..c86d92d 100644
+--- a/crates/jxl-frame/src/data/toc.rs
++++ b/crates/jxl-frame/src/data/toc.rs
+@@ -137,7 +137,11 @@ impl Toc {
+         if self.original_to_bitstream.is_empty() {
+             original_order
+         } else {
+-            self.original_to_bitstream[original_order]
++            // Out-of-range group indices map past the end; callers look the result up with `get`.
++            self.original_to_bitstream
++                .get(original_order)
++                .copied()
++                .unwrap_or(usize::MAX)
+         }
+     }
+ 
