@@ -1,0 +1,30 @@
+diff --git a/symphonia-codec-aac/src/aac/mod.rs b/symphonia-codec-aac/src/aac/mod.rs
+index f005179..0c77965 100644
+--- a/symphonia-codec-aac/src/aac/mod.rs
++++ b/symphonia-codec-aac/src/aac/mod.rs
+@@ -87,6 +87,11 @@ impl AacDecoder {
+             _ => return unsupported_error("aac: channels or channel layout is required"),
+         };
+ 
++        // At least one channel is required.
++        if channels.count() == 0 {
++            return unsupported_error("aac: number of channels cannot be 0");
++        }
++
+         // Check complexity.
+         if asc.object_type != AudioObjectType::Lc
+             || asc.sbr_present
+diff --git a/symphonia-codec-adpcm/src/lib.rs b/symphonia-codec-adpcm/src/lib.rs
+index 64f1f69..69f8e27 100644
+--- a/symphonia-codec-adpcm/src/lib.rs
++++ b/symphonia-codec-adpcm/src/lib.rs
+@@ -102,6 +102,9 @@ impl AdpcmDecoder {
+         };
+ 
+         let spec = if let Some(channels) = &params.channels {
++            if channels.count() == 0 {
++                return unsupported_error("adpcm: number of channels cannot be 0");
++            }
+             if channels.count() > 2 {
+                 return unsupported_error("adpcm: up to two channels are supported");
+             }

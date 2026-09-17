@@ -1,0 +1,16 @@
+diff --git a/symphonia-codec-vorbis/src/floor.rs b/symphonia-codec-vorbis/src/floor.rs
+index f822937..2e894a5 100644
+--- a/symphonia-codec-vorbis/src/floor.rs
++++ b/symphonia-codec-vorbis/src/floor.rs
+@@ -524,6 +524,11 @@ impl Floor1 {
+         floor1_x_list.push(0);
+         floor1_x_list.push(1 << rangebits);
+ 
++        // The implicit first two elements also take part in the uniqueness check. A duplicate x
++        // value would otherwise cause a division by zero during floor synthesis.
++        floor1_x_list_unique.insert(0);
++        floor1_x_list_unique.insert(1 << rangebits);
++
+         for &class_idx in &floor1_partition_class_list[..floor1_partitions] {
+             let class = &floor1_classes[class_idx as usize];
+ 
