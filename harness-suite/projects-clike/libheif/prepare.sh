@@ -7,3 +7,4 @@ git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/zlib" e3dc0a85b703
 
 git -C "$PROJECT/repo" apply ../port-wasi-tmpfile.patch
 git -C "$PROJECT/repo" apply ../port-wasi-threads.patch
+git -C "$PROJECT/repo" apply ../fix-snuc-float-buffer-bounds.patch

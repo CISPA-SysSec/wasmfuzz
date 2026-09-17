@@ -1,0 +1,343 @@
+diff --git a/src/ipred_tmpl.c b/src/ipred_tmpl.c
+index 07abfa55..9ffcc0d1 100644
+--- a/src/ipred_tmpl.c
++++ b/src/ipred_tmpl.c
+@@ -1103,37 +1103,40 @@ cfl_implicit_fn(444, 0, 0)
+ /* CFL MHCCP */
+ 
+ static NOINLINE void
+-cfl_mh_gen_y_420_c(pixel *dst, const pixel *src, const pixel *const top_sb_edge,
+-                   const ptrdiff_t src_stride, const int needed_top_cols,
+-                   const int needed_left_rows, const int w, const int h,
+-                   const int flags, const int filter_type)
++cfl_mh_gen_y_c(pixel *dst, const pixel *src, const pixel *const top_sb_edge,
++               const ptrdiff_t src_stride, const int needed_top_cols,
++               const int needed_left_rows, const int w, const int h,
++               const int flags, const int filter_type,
++               const int ss_hor, const int ss_ver)
+ {
+     const int has_t = flags & CFL_HAS_TOP;
+     const int has_l = flags & CFL_HAS_LEFT;
+     const int dir = flags & CFL_DIR_MASK;
+     const int n_left_cols = has_l ? 1 + (dir == CFL_DIR_LEFT): 0;
+     const int n_top_rows = has_t ? 1 + (dir == CFL_DIR_TOP) : 0;
++    const int x_step = 1 << ss_hor, y_step = 1 << ss_ver;
+ 
+ // ::
+ #define FILTER_UNIFORM(src) \
+-    (src[c] + src[r] + src[b + c] + src[b + r]) >> 2
++    (src[c] + src[r] + src[below + c] + src[below + r]) >> 2
+ // :::
+ #define FILTER_VSTRIP(src) \
+-    (src[l] + 2 * src[c] + src[r] + src[b + l] + 2 * src[b + c] + src[b + r]) >> 3
++    (src[l] + 2 * src[c] + src[r] + src[below + l] + 2 * src[below + c] + src[below + r]) >> 3
+ // -|-
+ #define FILTER_GAUSS(src, top) \
+-    (src[l] + 4 * src[c] + src[r] + (top)[c] + src[b + c]) >> 3
++    (src[l] + 4 * src[c] + src[r] + (top)[c] + src[below + c]) >> 3
+ 
+     // tl+t+tr
+     if (has_t) {
+         const pixel *top = (top_sb_edge ? top_sb_edge :
+-            src - n_top_rows * 2 * src_stride) - n_left_cols * 2;
+-        const ptrdiff_t b = !top_sb_edge ? src_stride : 0;
+-        ptrdiff_t t = n_top_rows == 1 ? -b : 0;
++            src - n_top_rows * y_step * src_stride) - n_left_cols * x_step;
++        const ptrdiff_t below = (ss_ver && !top_sb_edge) ? src_stride : 0;
++        const ptrdiff_t y_adv = top_sb_edge ? 0 : src_stride * y_step;
++        ptrdiff_t t = n_top_rows == 1 ? -below : 0;
+         const int start = !has_l && dir == CFL_DIR_CENTER;
+         for (int y = 0; y < n_top_rows; y++) {
+             for (int x = start; x < start + needed_top_cols; x++) {
+-                const int c = x * 2, r = c + 1;
++                const int c = x * x_step, r = c + ss_hor;
+                 const int l = (n_left_cols & 1) ? c - 1 : imax(c - 1, 0);
+                 switch (filter_type) {
+                 case CFL_FLT_TYPE_UNIFORM:
+@@ -1147,23 +1150,23 @@ cfl_mh_gen_y_420_c(pixel *dst, const pixel *src, const pixel *const top_sb_edge,
+                     break;
+                 }
+             }
+-            top += 2 * b;
+-            t = -b;
++            top += y_adv;
++            t = -below;
+             dst += CFL_MH_TOP_STRIDE;
+         }
+     }
+ 
+     // l+bl
+     const int ystart = !has_t && dir == CFL_DIR_CENTER;
+-    const ptrdiff_t b = src_stride;
+-    const pixel *src_left = src + ystart * 2 * src_stride - n_left_cols * 2;
++    const ptrdiff_t below = ss_ver ? src_stride : 0;
++    const pixel *src_left = src + ystart * y_step * src_stride - n_left_cols * x_step;
+     const pixel *top_left = has_t || ystart ? top_sb_edge && !ystart ?
+-        top_sb_edge - n_left_cols * 2 : src_left - src_stride : src_left;
++        top_sb_edge - n_left_cols * x_step : src_left - src_stride : src_left;
+     pixel *dst_left = dst + 32 * 32;
+ 
+     for (int y = ystart; y < ystart + needed_left_rows; y++) {
+         for (int x = 0; x < n_left_cols; x++) {
+-            const int c = x * 2, r = c + 1;
++            const int c = x * x_step, r = c + ss_hor;
+             const int l = (n_left_cols & 1) ? c - 1 : imax(c - 1, 0);
+             switch (filter_type) {
+             case CFL_FLT_TYPE_UNIFORM:
+@@ -1177,7 +1180,7 @@ cfl_mh_gen_y_420_c(pixel *dst, const pixel *src, const pixel *const top_sb_edge,
+                 break;
+             }
+         }
+-        src_left += src_stride << 1;
++        src_left += src_stride * y_step;
+         top_left = src_left - src_stride;
+         dst_left += n_left_cols;
+     }
+@@ -1186,7 +1189,7 @@ cfl_mh_gen_y_420_c(pixel *dst, const pixel *src, const pixel *const top_sb_edge,
+     const pixel *top = has_t ? top_sb_edge ? top_sb_edge : src - src_stride : src;
+     for (int y = 0; y < h; y++) {
+         for (int x = 0; x < w; x++) {
+-            const int c = x * 2, r = c + 1;
++            const int c = x * x_step, r = c + ss_hor;
+             const int l = !has_l ? imax(c - 1, 0) : c - 1;
+             switch (filter_type) {
+             case CFL_FLT_TYPE_UNIFORM:
+@@ -1200,29 +1203,31 @@ cfl_mh_gen_y_420_c(pixel *dst, const pixel *src, const pixel *const top_sb_edge,
+                 break;
+             }
+         }
+-        src += src_stride << 1;
++        src += src_stride * y_step;
+         top = src - src_stride;
+         dst += w;
+     }
+ }
+ 
+-#define cfl_mh_gen_y_420_fn(ucflt, lcflt) \
++#define cfl_mh_gen_y_fmt_fn(fmt, ss_hor, ss_ver, ucflt, lcflt) \
+ static void \
+-cfl_mh_gen_y_420_##lcflt##_c(pixel *const dst, const pixel *const src, \
+-                             const pixel *const top_sb_edge, \
+-                             ptrdiff_t const src_stride, const int refw, \
+-                             const int refh, int const w, int const h, int flags) \
++cfl_mh_gen_y_##fmt##_##lcflt##_c(pixel *const dst, const pixel *const src, \
++                                 const pixel *const top_sb_edge, \
++                                 ptrdiff_t const src_stride, const int refw, \
++                                 const int refh, int const w, int const h, int flags) \
+ { \
+-    cfl_mh_gen_y_420_c(dst, src, top_sb_edge, PXSTRIDE(src_stride), \
+-                       refw, refh, w, h, flags, CFL_FLT_TYPE_##ucflt); \
++    cfl_mh_gen_y_c(dst, src, top_sb_edge, PXSTRIDE(src_stride), \
++                   refw, refh, w, h, flags, CFL_FLT_TYPE_##ucflt, ss_hor, ss_ver); \
+ }
+ 
+-#define cfl_mh_gen_y_fn(fmt) \
+-cfl_mh_gen_y_##fmt##_fn(UNIFORM, uniform) \
+-cfl_mh_gen_y_##fmt##_fn(VSTRIP, vstrip) \
+-cfl_mh_gen_y_##fmt##_fn(GAUSS, gauss)
++#define cfl_mh_gen_y_fn(fmt, ss_hor, ss_ver) \
++cfl_mh_gen_y_fmt_fn(fmt, ss_hor, ss_ver, UNIFORM, uniform) \
++cfl_mh_gen_y_fmt_fn(fmt, ss_hor, ss_ver, VSTRIP, vstrip) \
++cfl_mh_gen_y_fmt_fn(fmt, ss_hor, ss_ver, GAUSS, gauss)
+ 
+-cfl_mh_gen_y_fn(420)
++cfl_mh_gen_y_fn(420, 1, 1)
++cfl_mh_gen_y_fn(422, 1, 0)
++cfl_mh_gen_y_fn(444, 0, 0)
+ 
+ #define SQRND(v) (((v) * (v) + mid) >> bd)
+ #define GEN_MATRIX() \
+@@ -1621,6 +1626,12 @@ COLD void bitfn(dav2d_intra_pred_dsp_init)(Dav2dIntraPredDSPContext *const c) {
+     c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I420 - 1][0] = cfl_mh_gen_y_420_uniform_c;
+     c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I420 - 1][1] = cfl_mh_gen_y_420_vstrip_c;
+     c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I420 - 1][2] = cfl_mh_gen_y_420_gauss_c;
++    c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I422 - 1][0] = cfl_mh_gen_y_422_uniform_c;
++    c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I422 - 1][1] = cfl_mh_gen_y_422_vstrip_c;
++    c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I422 - 1][2] = cfl_mh_gen_y_422_gauss_c;
++    c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I444 - 1][0] = cfl_mh_gen_y_444_uniform_c;
++    c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I444 - 1][1] = cfl_mh_gen_y_444_vstrip_c;
++    c->cfl_mh_gen_y[DAV2D_PIXEL_LAYOUT_I444 - 1][2] = cfl_mh_gen_y_444_gauss_c;
+     c->cfl_mh_gen_mat = cfl_mh_gen_mat_c; \
+     c->cfl_mh_calc_alphas = cfl_mh_calc_alphas_c;
+     c->cfl_mh_pred[CFL_DIR_CENTER] = cfl_mh_pred_c_c;
+diff --git a/src/recon_tmpl.c b/src/recon_tmpl.c
+index 792d1396..63baadb9 100644
+--- a/src/recon_tmpl.c
++++ b/src/recon_tmpl.c
+@@ -2982,7 +2982,7 @@ static inline void cfl(Dav2dTaskContext *const t, const Av2Block *const b,
+     const int ctw4 = imin(t_dim->w, (f->bw - t->cbx + ss_hor) >> ss_hor);
+     const int cth4 = imin(t_dim->h, (f->bh - t->cby + ss_ver) >> ss_ver);
+     const int ctw = t_dim->w * 4, cth = t_dim->h * 4;
+-    const int filter_type = f->seq_hdr->cfl_ds_filter_index;
++    const int filter_type = imin(f->seq_hdr->cfl_ds_filter_index, CFL_FLT_TYPE_GAUSS);
+     pixel *const ysrc = ((pixel *) f->cur.p.data[0]) +
+         (t->cby * PXSTRIDE(ystride) + t->cbx) * 4;
+     pixel *const ytop_sb_edge = !is_top_sb_edge ? NULL :
+@@ -3105,6 +3105,7 @@ static inline void cfl(Dav2dTaskContext *const t, const Av2Block *const b,
+                           (is_top_sb_edge ? CFL_IS_TOP_SB_EDGE : 0) |
+                           b->cfl_mh_dir;
+ 
++        if ((unsigned)layout > 2) return;
+         dsp->ipred.cfl_mh_gen_y[layout][filter_type](luma, ysrc, ytop_sb_edge,
+                                                      ystride, needed_top,
+                                                      needed_left - n_top_rows,
+diff --git a/tests/meson.build b/tests/meson.build
+index 515ffba5..87622d7e 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -119,6 +119,16 @@ foreach header : dav2d_api_headers
+     test(target, header_test_exe, suite: 'headers')
+ endforeach
+ 
++test_cfl_mhccp_422 = executable('test_cfl_mhccp_422',
++    'test_cfl_mhccp_422.c',
++    include_directories: dav2d_inc_dirs,
++    link_with: libdav2d,
++    dependencies: [thread_dependency],
++    build_by_default: true,
++)
++test('test_cfl_mhccp_422', test_cfl_mhccp_422, suite: 'dav2d',
++     env: ['ASAN_OPTIONS=detect_leaks=0'])
++
+ 
+ # fuzzing binaries
+ subdir('libfuzzer')
+diff --git a/tests/test_cfl_mhccp_422.c b/tests/test_cfl_mhccp_422.c
+new file mode 100644
+index 00000000..503577b4
+--- /dev/null
++++ b/tests/test_cfl_mhccp_422.c
+@@ -0,0 +1,133 @@
++/*
++ * Copyright © 2026, VideoLAN and dav2d authors
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice, this
++ *    list of conditions and the following disclaimer.
++ *
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ *    this list of conditions and the following disclaimer in the documentation
++ *    and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
++ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++
++#include <errno.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++#include <dav2d/dav2d.h>
++
++/* Crafted 10-bit 4:2:2 IVF that selects MHCCP. Previously called a NULL
++ * cfl_mh_gen_y DSP pointer (only 4:2:0 was initialized). */
++static const uint8_t k_mhccp_422[] = {
++    0x9b, 0x01, 0x00, 0xfe, 0x13, 0xcf, 0xa1, 0xad, 0x00, 0xb6, 0x68, 0x31,
++    0x4f, 0x31, 0x47, 0x00, 0x00, 0x49, 0x9b, 0x5a, 0x66, 0x9b, 0x99, 0x9b,
++    0xbb, 0x80, 0xff, 0xff, 0xff, 0xb6, 0xb0, 0xa2, 0x77, 0x00, 0x00, 0x00,
++    0x40, 0xec, 0x74, 0x4e, 0x4e, 0x4e, 0x46, 0x07, 0x0d, 0x07, 0x30, 0xa4,
++    0x24, 0x08, 0x75, 0x2b, 0x01, 0x22, 0x46, 0x55, 0xfd, 0x01, 0x12, 0x4e,
++    0x9b, 0x02, 0x00, 0x80, 0xd3, 0xcf, 0xa1, 0xad, 0x4a, 0xb6, 0x68, 0x31,
++    0x4f, 0xb0, 0x47, 0x00, 0x00, 0x49, 0x9b, 0x5a, 0x66, 0x9b, 0x9b, 0xff,
++    0x80, 0xee, 0xee, 0xee, 0x22, 0x46, 0x0d, 0x0d, 0x0d, 0x0d, 0x4e, 0x4a,
++    0xb6, 0x68, 0x31, 0x4f, 0x4f, 0x47, 0x00, 0x00, 0x49, 0x9b, 0xee, 0x31,
++    0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x79, 0x79,
++    0x79, 0xee, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31,
++    0x31, 0x79, 0x79, 0x79, 0x79, 0x79, 0x79, 0x49, 0x9b, 0x5a, 0x66, 0x9b,
++    0x99, 0x9b, 0xbb, 0x80, 0xff, 0x79, 0x79, 0x79, 0x79, 0x79, 0x4a, 0xb6,
++    0x68, 0x31, 0x49, 0x49, 0x49, 0x49, 0x49, 0x49, 0x49, 0x01, 0x30, 0xa4,
++    0x52, 0x00, 0x00, 0x00, 0x40, 0x52, 0x64, 0x1a, 0x9b, 0x99, 0x65, 0xa7,
++    0x9b, 0xfa, 0x00, 0x00, 0x7f, 0x0e, 0x0e, 0x0e, 0x00, 0x00, 0x00, 0x00,
++    0x02, 0x00, 0x00, 0x00, 0x40, 0x0d, 0x4e, 0x4e, 0x4e, 0x00, 0x0e, 0x0e,
++    0x88, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x00, 0x00, 0x00, 0x00,
++    0xff, 0xca, 0x09
++};
++
++static unsigned r32le(const uint8_t *const p) {
++    return ((unsigned)p[3] << 24) | (p[2] << 16) | (p[1] << 8) | p[0];
++}
++
++int main(void) {
++    Dav2dSettings settings = { 0 };
++    Dav2dContext *ctx = NULL;
++    const uint8_t *ptr = k_mhccp_422;
++    const size_t size = sizeof(k_mhccp_422);
++    int have_seq_hdr = 0;
++    int err;
++
++    if (size < 32)
++        return 1;
++    ptr += 32;
++
++    dav2d_default_settings(&settings);
++    settings.max_frame_delay = settings.n_threads = 1;
++    if (dav2d_open(&ctx, &settings) < 0)
++        return 1;
++
++    while (ptr <= k_mhccp_422 + size - 12) {
++        Dav2dData buf;
++        uint8_t *p;
++        size_t frame_size = r32le(ptr);
++        ptr += 12;
++
++        if (frame_size > size || ptr > k_mhccp_422 + size - frame_size)
++            break;
++        if (!frame_size)
++            continue;
++
++        if (!have_seq_hdr) {
++            Dav2dSequenceHeader seq;
++            if (dav2d_parse_sequence_header(&seq, ptr, frame_size) != 0) {
++                ptr += frame_size;
++                continue;
++            }
++            have_seq_hdr = 1;
++        }
++
++        p = dav2d_data_create(&buf, frame_size);
++        if (!p)
++            goto cleanup;
++        memcpy(p, ptr, frame_size);
++        ptr += frame_size;
++
++        do {
++            if ((err = dav2d_send_data(ctx, &buf)) < 0) {
++                if (err != DAV2D_ERR(EAGAIN))
++                    break;
++            }
++            for (;;) {
++                Dav2dPicture pic;
++                memset(&pic, 0, sizeof(pic));
++                err = dav2d_get_picture(ctx, &pic);
++                if (err == 0)
++                    dav2d_picture_unref(&pic);
++                else if (err != DAV2D_ERR(EAGAIN))
++                    goto next_frame;
++            }
++        } while (buf.sz > 0);
++
++    next_frame:
++        if (buf.sz > 0)
++            dav2d_data_unref(&buf);
++    }
++
++cleanup:
++    if (ctx)
++        dav2d_close(&ctx);
++    /* Reaching here without abort/SIGSEGV is success; a decode error is OK. */
++    return 0;
++}

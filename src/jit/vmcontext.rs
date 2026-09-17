@@ -64,6 +64,7 @@ thread_local! {
     static PROVIDER_OVERRIDE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
+#[allow(unused)]
 pub(crate) fn set_snapshot_provider_override(provider: Option<&str>) {
     PROVIDER_OVERRIDE.replace(provider.map(|s| s.to_string()));
 }

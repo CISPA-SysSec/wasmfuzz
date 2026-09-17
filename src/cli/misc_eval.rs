@@ -227,40 +227,42 @@ pub(crate) fn eval_snapshot_perf(pages: usize, touch: usize, iters: usize, threa
         }
         let new_mapping = || -> Box<dyn ResettableMapping> {
             match provider {
-            Provider::Dummy => Box::new(DummyMapping::new(accessible_size, mapping_size)),
-            Provider::CoW => Box::new(CowResetMapping::new(accessible_size, mapping_size)),
-            Provider::Criu => Box::new(CriuMapping::new(accessible_size, mapping_size)),
-            Provider::Lkm => Box::new(RestoreDirtyLKMMapping::new(accessible_size, mapping_size)),
-            Provider::UffdWpAsync | Provider::UffdWpAsyncRescan => {
-                Box::new(UffdWpAsyncMapping::new_with_options(
+                Provider::Dummy => Box::new(DummyMapping::new(accessible_size, mapping_size)),
+                Provider::CoW => Box::new(CowResetMapping::new(accessible_size, mapping_size)),
+                Provider::Criu => Box::new(CriuMapping::new(accessible_size, mapping_size)),
+                Provider::Lkm => {
+                    Box::new(RestoreDirtyLKMMapping::new(accessible_size, mapping_size))
+                }
+                Provider::UffdWpAsync | Provider::UffdWpAsyncRescan => {
+                    Box::new(UffdWpAsyncMapping::new_with_options(
+                        accessible_size,
+                        mapping_size,
+                        UffdWpAsyncOptions {
+                            track_unpopulated: true,
+                            rearm_via_scan: matches!(provider, Provider::UffdWpAsyncRescan),
+                        },
+                    ))
+                }
+                Provider::UffdWpAsyncSparse | Provider::UffdWpAsyncSparseRescan => {
+                    Box::new(UffdWpAsyncMapping::new_with_options(
+                        accessible_size,
+                        mapping_size,
+                        UffdWpAsyncOptions {
+                            track_unpopulated: false,
+                            rearm_via_scan: matches!(provider, Provider::UffdWpAsyncSparseRescan),
+                        },
+                    ))
+                }
+                Provider::SoftwareLog => Box::new(SoftwareDirtyMapping::new_with_mode(
                     accessible_size,
                     mapping_size,
-                    UffdWpAsyncOptions {
-                        track_unpopulated: true,
-                        rearm_via_scan: matches!(provider, Provider::UffdWpAsyncRescan),
-                    },
-                ))
-            }
-            Provider::UffdWpAsyncSparse | Provider::UffdWpAsyncSparseRescan => {
-                Box::new(UffdWpAsyncMapping::new_with_options(
+                    DirtyTrackMode::Log,
+                )),
+                Provider::SoftwareBitmap => Box::new(SoftwareDirtyMapping::new_with_mode(
                     accessible_size,
                     mapping_size,
-                    UffdWpAsyncOptions {
-                        track_unpopulated: false,
-                        rearm_via_scan: matches!(provider, Provider::UffdWpAsyncSparseRescan),
-                    },
-                ))
-            }
-            Provider::SoftwareLog => Box::new(SoftwareDirtyMapping::new_with_mode(
-                accessible_size,
-                mapping_size,
-                DirtyTrackMode::Log,
-            )),
-            Provider::SoftwareBitmap => Box::new(SoftwareDirtyMapping::new_with_mode(
-                accessible_size,
-                mapping_size,
-                DirtyTrackMode::Bitmap,
-            )),
+                    DirtyTrackMode::Bitmap,
+                )),
             }
         };
 
@@ -276,7 +278,7 @@ pub(crate) fn eval_snapshot_perf(pages: usize, touch: usize, iters: usize, threa
             for _ in 0..iters {
                 // partial: shuffling all `pages` offsets per iteration costs
                 // more than the restore we're trying to measure
-                page_offsets.partial_shuffle(&mut rng, touch);
+                let (_, _) = page_offsets.partial_shuffle(&mut rng, touch);
                 for &i in page_offsets.iter().take(touch) {
                     mapping.as_mut_slice()[i] = 0x42;
                     // no-op except for SoftwareDirtyMapping, where it stands in

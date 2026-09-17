@@ -1,0 +1,54 @@
+diff --git a/lib/jxl/enc_modular.cc b/lib/jxl/enc_modular.cc
+index 8a442d88..da5aeb9f 100644
+--- a/lib/jxl/enc_modular.cc
++++ b/lib/jxl/enc_modular.cc
+@@ -701,7 +701,9 @@ Status ModularFrameEncoder::ComputeEncodingData(
+ 
+   bool groupwise = enc_state->streaming_mode;
+ 
+-  if (do_color && frame_header.loop_filter.gab && !groupwise) {
++  // Inverse Gaborish must run in streaming too: the patch already has a
++  // kBlockDim border, and the frame header still advertises gab=1.
++  if (do_color && frame_header.loop_filter.gab) {
+     float w = 0.9908511000000001f;
+     float weights[3] = {w, w, w};
+     JXL_RETURN_IF_ERROR(GaborishInverse(color, Rect(*color), weights, pool));
+diff --git a/lib/jxl/jxl_test.cc b/lib/jxl/jxl_test.cc
+index 58ce1b21..5d463bfd 100644
+--- a/lib/jxl/jxl_test.cc
++++ b/lib/jxl/jxl_test.cc
+@@ -1984,5 +1984,34 @@ JXL_GTEST_INSTANTIATE_TEST_SUITE_P(
+     JxlStreamingTest, JxlStreamingEncodingTest,
+     testing::ValuesIn(StreamingEncodingTestParam::All()));
+ 
++// Modular streaming used to skip inverse Gaborish while still writing gab=1.
++// A 1x2304 image has 9 groups (group dim 256), so streaming is actually used.
++TEST(JxlTest, StreamingModularGaborishSamePixels) {
++  TestImage image;
++  ASSERT_TRUE(image.SetDimensions(1, 2304));
++  image.SetDataType(JXL_TYPE_UINT16);
++  ASSERT_TRUE(image.SetChannels(2));
++  image.SetAllBitDepths(16);
++  JXL_TEST_ASSIGN_OR_DIE(auto frame, image.AddFrame());
++  frame.RandomFill();
++
++  JXLCompressParams cparams;
++  cparams.distance = 0.0;
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_EFFORT, 5);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_GABORISH, 1);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_USE_FULL_IMAGE_HEURISTICS, 0);
++  extras::JXLDecompressParams dparams;
++
++  ThreadPoolForTests pool(0);
++  PackedPixelFile ppf_out;
++  Roundtrip(image.ppf(), cparams, dparams, pool.get(), &ppf_out);
++
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_BUFFERING, 3);
++  PackedPixelFile ppf_out_streaming;
++  Roundtrip(image.ppf(), cparams, dparams, pool.get(), &ppf_out_streaming);
++
++  EXPECT_TRUE(jxl::test::SamePixels(ppf_out, ppf_out_streaming));
++}
++
+ }  // namespace
+ }  // namespace jxl

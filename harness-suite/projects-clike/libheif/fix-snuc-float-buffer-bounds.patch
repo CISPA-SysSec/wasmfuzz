@@ -1,0 +1,65 @@
+diff --git a/libheif/codecs/uncompressed/unc_boxes.cc b/libheif/codecs/uncompressed/unc_boxes.cc
+index 3d435c66..1e999ae2 100644
+--- a/libheif/codecs/uncompressed/unc_boxes.cc
++++ b/libheif/codecs/uncompressed/unc_boxes.cc
+@@ -1357,6 +1357,27 @@ Error Box_snuc::parse(BitstreamRange& range, const heif_security_limits* limits)
+             "snuc image dimensions exceed security limit."};
+   }
+ 
++  // Each pixel stores a float32 gain and a float32 offset. Check that the box
++  // actually contains that payload before allocating. MemoryHandle::alloc() is
++  // not sufficient on its own: global/disabled security-limit contexts skip
++  // total-memory accounting, max_image_size_pixels allows up to 32768^2 pixels
++  // (~2 GiB of floats, within the 4 GiB block limit), and a truncated size-0
++  // (until-EOF) box can declare a huge image with only a few remaining bytes.
++  // Mirrors the icef remaining-bytes check.
++  constexpr uint64_t bytes_per_pixel = 2 * sizeof(float);
++  if (num_pixels > std::numeric_limits<uint64_t>::max() / bytes_per_pixel) {
++    return {heif_error_Invalid_input,
++            heif_suberror_Security_limit_exceeded,
++            "snuc image memory size exceeds max integer size."};
++  }
++
++  uint64_t bytes_needed = num_pixels * bytes_per_pixel;
++  if (bytes_needed > range.get_remaining_bytes()) {
++    return {heif_error_Invalid_input,
++            heif_suberror_End_of_data,
++            "snuc box declares more NUC samples than are contained in the file"};
++  }
++
+   Error err = m_memory_handle.alloc(num_pixels, 2 * sizeof(float), limits, "snuc box");
+   if (err) {
+     return err;
+diff --git a/tests/uncompressed_box.cc b/tests/uncompressed_box.cc
+index 21b3fe37..a7d21a4b 100644
+--- a/tests/uncompressed_box.cc
++++ b/tests/uncompressed_box.cc
+@@ -919,3 +919,28 @@ TEST_CASE("snuc_bad_version")
+   REQUIRE(error.sub_error_code == heif_suberror_Unsupported_data_version);
+   REQUIRE(error.message == std::string("snuc box data version 1 is not implemented yet"));
+ }
++
++
++TEST_CASE("snuc_truncated_huge_image")
++{
++  // Fuzz crash (31 bytes): size-0 (until-EOF) snuc box, component_count=0,
++  // 1x268435456 image. max_image_size_pixels allows this, MemoryHandle::alloc()
++  // of 2 GiB is within max_memory_block_size, then vector<float>::resize
++  // allocates ~1 GiB. On wasm32 that exceeds the guest memory cap.
++  std::vector<uint8_t> byteArray = {
++    0x00, 0x00, 0x00, 0x00, 's', 'n', 'u', 'c',
++    0x00, 0x08, 0x64, 0xff,
++    0x00, 0x00, 0x00, 0x00,
++    0x00,
++    0x00, 0x00, 0x00, 0x01,
++    0x10, 0x00, 0x00, 0x00,
++    0x00, 0x0b, 0x75, 0x72, 0x00, 0x01
++  };
++
++  auto reader = std::make_shared<StreamReader_memory>(byteArray.data(), byteArray.size(), false);
++  BitstreamRange range(reader, byteArray.size());
++  std::shared_ptr<Box> box;
++  Error error = Box::read(range, &box, heif_get_global_security_limits());
++  REQUIRE(error.error_code == heif_error_Invalid_input);
++  REQUIRE(error.sub_error_code == heif_suberror_End_of_data);
++}

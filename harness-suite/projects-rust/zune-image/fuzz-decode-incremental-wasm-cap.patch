@@ -1,7 +1,8 @@
 diff --git a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs b/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
+index d5c7013..2331d09 100644
 --- a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
 +++ b/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
-@@ -26,7 +26,7 @@ use std::rc::Rc;
+@@ -26,6 +26,7 @@ use std::rc::Rc;
  use libfuzzer_sys::fuzz_target;
  use zune_jpeg::JpegDecoder;
  use zune_jpeg::zune_core::bytestream::ZCursor;
@@ -9,7 +10,7 @@ diff --git a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs b/crates/z
  
  /// Cursor over a byte slice with an externally-controllable visibility
  /// limit. Reads/seeks past `limit` behave as EOF; growing `limit` simulates
-@@ -122,16 +122,34 @@ fuzz_target!(|data: &[u8]| {
+@@ -122,14 +123,26 @@ fuzz_target!(|data: &[u8]| {
      // decoder). If it succeeds, we use it as ground truth; if it fails,
      // we only require that the incremental path doesn't panic and reaches
      // a terminal state.
@@ -26,7 +27,7 @@ diff --git a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs b/crates/z
 +        return;
 +    }
 +    let oneshot_pixels = match oneshot.output_buffer_size() {
-+        Some(s) if s <= MAX_DECODE_BYTES => oneshot.decode().ok(),
++        Some(sz) if sz <= MAX_DECODE_BYTES => oneshot.decode().ok(),
 +        _ => return,
 +    };
      let oneshot_icc = oneshot.icc_profile();
@@ -39,9 +40,7 @@ diff --git a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs b/crates/z
  
      let mut out: Vec<u8> = Vec::new();
      let mut headers_done = false;
- 
-     // Phase 1: Feed data incrementally until headers are complete.
-@@ -149,7 +167,7 @@ fuzz_target!(|data: &[u8]| {
+@@ -149,7 +162,7 @@ fuzz_target!(|data: &[u8]| {
              Ok(()) => {
                  headers_done = true;
                  let size = match decoder.output_buffer_size() {
