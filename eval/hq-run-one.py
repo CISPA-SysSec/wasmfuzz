@@ -444,10 +444,14 @@ def main() -> int:
             save_log_tails(runs_dir.parent / "logs", job_id)
         # Preserve run boundaries so per-run coverage differences remain recoverable.
         save_corpus(corpus_dir, corpora_dir, f"{target_stem}-{bucket}/{job_id}")
-        # The fuzzer only exits before the deadline when it found a crash.
+        # Early exits can indicate a crash, startup failure or exhausted work.
         if exited_early:
             save_corpus(corpus_dir, crash_corpora_dir, job_id)
-
+        crashers = corpus_dir.with_name(corpus_dir.name + ".crashes")
+        if crashers.is_dir():
+            # Also preserve crashers found near the deadline or before a signal.
+            save_corpus(crashers, crash_corpora_dir, f"{job_id}.crashes")
+            shutil.rmtree(crashers, ignore_errors=True)
         shutil.rmtree(corpus_dir, ignore_errors=True)
 
 

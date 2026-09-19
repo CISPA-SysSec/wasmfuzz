@@ -746,6 +746,20 @@ impl Orchestrator {
             self.last_func_find = Instant::now();
         }
         self.found_crashes |= res.is_crash();
+        if res.is_crash()
+            && let Some(out_dir) = self.opts.g.out_dir()
+        {
+            // Keep crashers identifiable without replaying the whole corpus.
+            let mut crash_dir = out_dir.into_os_string();
+            crash_dir.push(".crashes");
+            let crash_dir = PathBuf::from(crash_dir);
+            let result = std::fs::create_dir_all(&crash_dir).and_then(|()| {
+                std::fs::write(crash_dir.join(format!("{:x}", md5::compute(input))), input)
+            });
+            if let Err(err) = result {
+                eprintln!("could not save crashing input to {crash_dir:?}: {err}");
+            }
+        }
         Some(res)
     }
 
