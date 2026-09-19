@@ -1,0 +1,32 @@
+diff --git a/crates/jxl-color/src/icc/parse.rs b/crates/jxl-color/src/icc/parse.rs
+index abf38c6..2692e5c 100644
+--- a/crates/jxl-color/src/icc/parse.rs
++++ b/crates/jxl-color/src/icc/parse.rs
+@@ -260,20 +260,23 @@ pub(crate) fn parse_icc_raw(profile: &[u8]) -> Result<IccProfile<'_>> {
+ 
+     let tag_count =
+         u32::from_be_bytes([profile[0x80], profile[0x81], profile[0x82], profile[0x83]]);
+-    if size < 0x84 + 12 * tag_count {
++    // Compute in u64: `12 * tag_count` and `offset + tag_size` can overflow u32 (and usize on
++    // 32-bit targets), wrapping past the bounds checks below.
++    let tag_list_end = 0x84u64 + 12 * tag_count as u64;
++    if (size as u64) < tag_list_end {
+         return Err(Error::IccParseFailure(
+             "unexpected end of profile while reading tag list",
+         ));
+     }
+ 
+     let mut tags = Vec::new();
+-    let tag_bytes = &profile[0x84..][..12 * tag_count as usize];
++    let tag_bytes = &profile[0x84..tag_list_end as usize];
+     for raw_tag in tag_bytes.chunks_exact(12) {
+         let tag = [raw_tag[0], raw_tag[1], raw_tag[2], raw_tag[3]];
+         let offset = u32::from_be_bytes([raw_tag[4], raw_tag[5], raw_tag[6], raw_tag[7]]);
+         let tag_size = u32::from_be_bytes([raw_tag[8], raw_tag[9], raw_tag[10], raw_tag[11]]);
+-        let tag_end = offset + tag_size;
+-        if size < tag_end {
++        let tag_end = offset as u64 + tag_size as u64;
++        if (size as u64) < tag_end {
+             return Err(Error::IccParseFailure(
+                 "unexpected end of profile while reading tag data",
+             ));

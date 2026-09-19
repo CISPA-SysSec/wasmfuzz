@@ -1,0 +1,52 @@
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index 87b211c..cf09b2d 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -494,6 +494,31 @@ pub fn patch(
+             let width = ref_patch_region.width as usize;
+             let height = ref_patch_region.height as usize;
+ 
++            let alpha_idx = matches!(
++                blending_info.mode,
++                PatchBlendMode::BlendAbove
++                    | PatchBlendMode::BlendBelow
++                    | PatchBlendMode::MulAddAbove
++                    | PatchBlendMode::MulAddBelow
++            )
++            .then_some(blending_info.alpha_channel as usize);
++
++            // Nothing to blend if the patch area is empty. A zero-sized channel buffer (e.g. a
++            // reference frame cropped away entirely) cannot be borrowed as a subgrid either;
++            // blending with it would be a no-op anyway (`blend_single` checks bounds).
++            let is_empty =
++                |g: Option<&ImageBuffer>| g.is_some_and(|g| g.width() == 0 || g.height() == 0);
++            let alpha_channel = alpha_idx.map(|a| a + color_channels);
++            if width == 0
++                || height == 0
++                || is_empty(patch_ref_grid.buffer().get(idx))
++                || is_empty(base_grid.buffer().get(idx))
++                || is_empty(alpha_channel.and_then(|a| patch_ref_grid.buffer().get(a)))
++                || is_empty(alpha_channel.and_then(|a| base_grid.buffer().get(a)))
++            {
++                continue;
++            }
++
+             let patch_left = ref_patch_region.left.abs_diff(ref_grid_region.left) as usize;
+             let patch_top = ref_patch_region.top.abs_diff(ref_grid_region.top) as usize;
+             let base_left = target_patch_region.left.abs_diff(base_grid_region.left) as usize;
+@@ -508,15 +533,6 @@ pub fn patch(
+                 image_header.metadata.bit_depth
+             };
+ 
+-            let alpha_idx = matches!(
+-                blending_info.mode,
+-                PatchBlendMode::BlendAbove
+-                    | PatchBlendMode::BlendBelow
+-                    | PatchBlendMode::MulAddAbove
+-                    | PatchBlendMode::MulAddBelow
+-            )
+-            .then_some(blending_info.alpha_channel as usize);
+-
+             let base_alpha;
+             let new_alpha;
+             let premultiplied;

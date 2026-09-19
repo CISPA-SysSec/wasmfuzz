@@ -25,3 +25,7 @@ git -C "$PROJECT/repo" apply ../fix-toc-permutation-index-bounds.patch
 git -C "$PROJECT/repo" apply ../fix-alloc-tracker-size-overflow.patch
 git -C "$PROJECT/repo" apply ../fix-grid-dimension-overflow.patch
 git -C "$PROJECT/repo" apply ../fix-patch-ref-channel-mismatch.patch
+git -C "$PROJECT/repo" apply ../fix-icc-tag-table-overflow.patch
+git -C "$PROJECT/repo" apply ../fix-patch-empty-ref-grid.patch
+git -C "$PROJECT/repo" apply ../fix-vardct-modular-region-block-aligned.patch
+git -C "$PROJECT/repo" apply ../fix-ma-table-bound-overflow.patch

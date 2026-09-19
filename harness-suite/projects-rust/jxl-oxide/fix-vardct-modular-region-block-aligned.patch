@@ -1,0 +1,22 @@
+diff --git a/crates/jxl-render/src/vardct/mod.rs b/crates/jxl-render/src/vardct/mod.rs
+index 11e0bb6..fa6ede0 100644
+--- a/crates/jxl-render/src/vardct/mod.rs
++++ b/crates/jxl-render/src/vardct/mod.rs
+@@ -123,8 +123,15 @@ pub(crate) fn render_vardct<S: Sample>(
+         width_rounded as u32 / 8,
+         height_rounded as u32 / 8,
+     ));
+-    let modular_region =
+-        modular::compute_modular_region(frame_header, &gmodular, aligned_region, false);
++    let modular_region = if gmodular.modular.has_palette() || gmodular.modular.has_squeeze() {
++        // The whole modular image is decoded. `compute_modular_region` sizes it to the color
++        // sample size, which need not be a whole number of (upsampled) 8x8 blocks when `region`
++        // doesn't cover the frame; the VarDCT frame buffer below is always block-aligned.
++        // Use the block-aligned full size, as a full-frame render would.
++        Region::with_size(width_rounded as u32, height_rounded as u32)
++    } else {
++        modular::compute_modular_region(frame_header, &gmodular, aligned_region, false)
++    };
+     let modular_lf_region =
+         modular::compute_modular_region(frame_header, &gmodular, aligned_lf_region, true)
+             .intersection(Region::with_size(

@@ -1,0 +1,29 @@
+diff --git a/crates/jxl-modular/src/ma.rs b/crates/jxl-modular/src/ma.rs
+index d76e09e..1e59b8f 100644
+--- a/crates/jxl-modular/src/ma.rs
++++ b/crates/jxl-modular/src/ma.rs
+@@ -502,6 +502,12 @@ impl MaTreeNode {
+         else {
+             return None;
+         };
++        // `value + 1` and `lower_bound - 1` below overflow i32 at the extremes (wrapping in
++        // release builds and producing out-of-range table indices). Fall back to the regular
++        // decision tree for such values.
++        if value == i32::MIN || value == i32::MAX {
++            return None;
++        }
+ 
+         let mut lower_bound = value;
+         let mut upper_bound = value;
+@@ -526,7 +532,10 @@ impl MaTreeNode {
+             };
+             let new_lower_bound = lower_bound.min(value);
+             let new_upper_bound = upper_bound.max(value);
+-            if new_upper_bound.abs_diff(new_lower_bound) > 1024 - 2 {
++            if value == i32::MIN
++                || value == i32::MAX
++                || new_upper_bound.abs_diff(new_lower_bound) > 1024 - 2
++            {
+                 range_nodes.push((node, *range.end()));
+                 continue;
+             }
