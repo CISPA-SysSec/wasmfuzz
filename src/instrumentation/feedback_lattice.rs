@@ -94,7 +94,7 @@ impl<K: Ord + Clone> AssociatedCoverageArray<K, ValueRange> {
         ctx: &mut InstrCtx,
         _pass: &P,
     ) {
-        let Some(slot) = self.val_ptr(key) else {
+        let Some((slot, dirty)) = self.val_ptr(key) else {
             return;
         };
 
@@ -105,6 +105,7 @@ impl<K: Ord + Clone> AssociatedCoverageArray<K, ValueRange> {
         };
 
         if ctx.state.options.kind == CompilationKind::Reusable {
+            super::mark_dirty(dirty, ctx);
             let slot_ptr = ctx.state.host_ptr(ctx.bcx, slot as *const _);
             let prev_low = ctx
                 .bcx
@@ -269,7 +270,7 @@ impl<const N: usize, K: Ord + Clone> AssociatedCoverageArray<K, ValueSet<N>> {
         ctx: &mut InstrCtx,
         _pass: &P,
     ) {
-        let Some(slot) = self.val_ptr(key) else {
+        let Some((slot, dirty)) = self.val_ptr(key) else {
             return;
         };
 
@@ -301,6 +302,7 @@ impl<const N: usize, K: Ord + Clone> AssociatedCoverageArray<K, ValueSet<N>> {
         };
 
         if ctx.state.options.kind == CompilationKind::Reusable {
+            super::mark_dirty(dirty, ctx);
             let slot_ptr = ctx.state.host_ptr(ctx.bcx, slot as *const _);
             ctx.state.host_call_with_types(
                 ctx.bcx,

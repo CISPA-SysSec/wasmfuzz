@@ -287,7 +287,19 @@ pub(crate) struct AssociatedCoverageArray<K: Ord + Clone, V: FeedbackLattice> {
     keys: Box<[K]>,
     entries: Box<[V]>,
     saved: Box<[V]>,
+    /// One byte per `DIRTY_CHUNK` entries, set by JIT code next to every
+    /// write into that chunk of `entries` (see [`Self::val_ptr`]).
+    /// `update_and_scan` only visits dirty chunks, so its cost scales with
+    /// what an execution touched instead of with the number of keys.
+    dirty: Box<[u8]>,
 }
+
+#[cfg(test)]
+mod tests;
+
+/// Entries per dirty byte in [`AssociatedCoverageArray`].
+const DIRTY_CHUNK: usize = 64;
+
 impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
     pub fn new(keys: &[K]) -> Self {
         let mut keys = keys.to_vec();
@@ -299,39 +311,70 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
         let keys = keys.into_boxed_slice();
         let entries = vec![V::bottom(); keys.len()].into_boxed_slice();
         let saved = vec![V::bottom(); keys.len()].into_boxed_slice();
+        let dirty = vec![0u8; keys.len().div_ceil(DIRTY_CHUNK)].into_boxed_slice();
         debug_assert!(!V::bottom().is_extended_by(&V::bottom()));
         debug_assert!(!V::bottom().is_top());
         Self {
             keys,
             entries,
             saved,
+            dirty,
         }
     }
 
-    fn val_ptr(&self, key: &K) -> Option<*const V> {
+    /// Pointers to the entry slot for `key` and to its chunk's dirty byte.
+    /// Code that writes through the slot pointer must also set the dirty byte
+    /// to a non-zero value, or `update_and_scan` won't see the write.
+    fn val_ptr(&self, key: &K) -> Option<(*const V, *const u8)> {
         let index = self.keys.binary_search(key).ok()?;
-        Some(&self.entries[index] as *const _)
+        Some((
+            &self.entries[index] as *const _,
+            &self.dirty[index / DIRTY_CHUNK] as *const _,
+        ))
     }
 
     pub fn update_and_scan(&mut self) -> bool {
         tracy_full::zone!("AssociatedCoverageArray::update_and_scan");
-        self.entries
-            .iter()
-            .zip(self.saved.iter_mut())
-            .fold(false, |mut res, (a, b)| {
-                res |= b.is_extended_by(a);
-                *b = b.unify(a);
-                res
-            })
+        // Runs after every execution. `entries` only change through JIT
+        // writes (which mark their chunk dirty) and resets to bottom (which
+        // can't extend `saved`), so clean chunks were fully joined by an
+        // earlier scan and can be skipped.
+        // Short executions on large modules leave most of `dirty` zero, so
+        // skip clean blocks of dirty bytes with a vectorizable OR first.
+        const BLOCK: usize = 32;
+        let mut res = false;
+        for (block_idx, block) in self.dirty.chunks_mut(BLOCK).enumerate() {
+            if block.iter().fold(0u8, |acc, &d| acc | d) == 0 {
+                continue;
+            }
+            for (i, dirty) in block.iter_mut().enumerate() {
+                if *dirty == 0 {
+                    continue;
+                }
+                *dirty = 0;
+                let start = (block_idx * BLOCK + i) * DIRTY_CHUNK;
+                let end = (start + DIRTY_CHUNK).min(self.entries.len());
+                for (a, b) in self.entries[start..end]
+                    .iter()
+                    .zip(self.saved[start..end].iter_mut())
+                {
+                    res |= b.is_extended_by(a);
+                    *b = b.unify(a);
+                }
+            }
+        }
+        res
     }
 
     pub fn reset(&mut self) {
         self.entries.fill(V::bottom());
         self.saved.fill(V::bottom());
+        self.dirty.fill(0);
     }
 
     pub fn reset_keep_saved(&mut self) {
         self.entries.fill(V::bottom());
+        self.dirty.fill(0);
     }
 
     pub fn saved_val(&self, key: &K) -> V {
@@ -468,13 +511,14 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice + FeedbackLatticeCodegen>
         &self,
         key: &K,
         val: ir::Value,
-        ctx: InstrCtx,
+        mut ctx: InstrCtx,
         _pass: &P,
     ) {
-        let Some(slot) = self.val_ptr(key) else {
+        let Some((slot, dirty)) = self.val_ptr(key) else {
             return;
         };
         if ctx.state.options.kind == CompilationKind::Reusable {
+            mark_dirty(dirty, &mut ctx);
             // TODO: don't require loading the slot for single-write passes?
             let slot_ptr = ctx.state.host_ptr(ctx.bcx, slot as *const _);
             let prev = ctx.bcx.ins().load(
@@ -489,6 +533,15 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice + FeedbackLatticeCodegen>
                 .store(MemFlagsData::trusted(), val, slot_ptr, 0);
         }
     }
+}
+
+/// Emits `*dirty = 1`; see [`AssociatedCoverageArray::val_ptr`].
+pub(crate) fn mark_dirty(dirty: *const u8, ctx: &mut InstrCtx) {
+    let dirty_ptr = ctx.state.host_ptr(ctx.bcx, dirty);
+    let one = ctx.bcx.ins().iconst(ir::types::I8, 1);
+    ctx.bcx
+        .ins()
+        .store(MemFlagsData::trusted(), one, dirty_ptr, 0);
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
