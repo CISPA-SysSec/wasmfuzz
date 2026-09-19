@@ -74,8 +74,12 @@ def main():
         sys.exit(1)
 
     targets = []
+    all_stems = {t.stem for t in suite_dir.glob("*.wasm")}
+    # Exact harness names match only themselves; other filters match substrings.
+    def target_match(stem: str) -> bool:
+        return any(s == stem if s in all_stems else s in stem for s in args.target)
     for t in sorted(suite_dir.glob("*.wasm")):
-        if args.target and not any(s in t.stem for s in args.target):
+        if args.target and not target_match(t.stem):
             continue
         if args.tag and not all(x in tags[t.stem] for x in args.tag):
             continue
