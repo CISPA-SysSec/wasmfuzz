@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
+import errno
 import json
+import random
 import re
 import shutil
 import signal
@@ -287,16 +289,33 @@ def save_corpus(corpus_dir: Path, corpora_dir: str, dest_name: str) -> None:
     if not corpora_dir:
         return
     dest = Path(corpora_dir) / dest_name
-    dest.mkdir(parents=True, exist_ok=True)
+    # Concurrent runs can race to create shared parents on NFS. Retry stale
+    # lookups, but do not mask permanent errors such as permission failures.
+    for attempt in range(10):
+        try:
+            os.makedirs(dest, exist_ok=True)
+            break
+        except OSError as e:
+            if attempt == 9 or e.errno not in (errno.EEXIST, errno.ENOENT, errno.ESTALE):
+                print(f"[hq-run] save_corpus: mkdir {dest} failed: {e!r}", file=sys.stderr)
+                return
+            time.sleep(0.2 + random.random())
     try:
-        for item in corpus_dir.iterdir():
-            dst = dest / item.name
+        items = list(corpus_dir.iterdir())
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        print(f"[hq-run] save_corpus: listing {corpus_dir} failed: {e}", file=sys.stderr)
+        return
+    for item in items:
+        dst = dest / item.name
+        try:
             if item.is_dir():
                 shutil.copytree(item, dst, dirs_exist_ok=True)
             else:
                 shutil.copy2(item, dst)
-    except FileNotFoundError:
-        pass
+        except OSError as e:
+            print(f"[hq-run] save_corpus: copy {item} to {dest} failed: {e}", file=sys.stderr)
 
 
 def main() -> int:
@@ -419,14 +438,16 @@ def main() -> int:
             fuzzer.terminate()
 
         cgroup.cleanup()
-        save_corpus(corpus_dir, corpora_dir, f"{target_stem}-{bucket}")
-        # The fuzzer only exits before the deadline when it found a crash.
-        if exited_early:
-            save_corpus(corpus_dir, crash_corpora_dir, job_id)
         if final_rc != 0 or exited_early:
             sys.stdout.flush()
             sys.stderr.flush()
             save_log_tails(runs_dir.parent / "logs", job_id)
+        # Preserve run boundaries so per-run coverage differences remain recoverable.
+        save_corpus(corpus_dir, corpora_dir, f"{target_stem}-{bucket}/{job_id}")
+        # The fuzzer only exits before the deadline when it found a crash.
+        if exited_early:
+            save_corpus(corpus_dir, crash_corpora_dir, job_id)
+
         shutil.rmtree(corpus_dir, ignore_errors=True)
 
 
