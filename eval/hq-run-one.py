@@ -301,6 +301,13 @@ def main() -> int:
         f"{os.environ.get('HQ_JOB_ID', 'x')}.{os.environ.get('HQ_TASK_ID', '0')}"
     )
     out_file = runs_dir / f"{job_id}.jsonl"
+    config_log_dir = runs_dir.parent / "configlog"
+    config_env = {}
+    try:
+        config_log_dir.mkdir(parents=True, exist_ok=True)
+        config_env["WASMFUZZ_CONFIG_LOG"] = str(config_log_dir / f"{job_id}.jsonl")
+    except OSError as e:
+        print(f"[hq-run] could not create config log directory: {e}", file=sys.stderr)
     if os.environ.get("HQ_TASK_DIR"):
         task_dir = Path(os.environ["HQ_TASK_DIR"])
     else:
@@ -343,7 +350,10 @@ def main() -> int:
         fuzzer = Child(
             "fuzzer",
             fuzz_cmd,
-            env={"WASMFUZZ_METRICS_JSON": str(task_dir / 'metrics.json')},
+            env={
+                "WASMFUZZ_METRICS_JSON": str(task_dir / 'metrics.json'),
+                **config_env,
+            },
             cgroup=cgroup.leaf("fuzzer", memory_limit_gb=10),
         )
 

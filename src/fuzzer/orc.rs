@@ -128,6 +128,7 @@ impl OrchestratorHandle {
                             OrcMessage::RespOk
                         }
                         OrcMessage::ReqShutdown => {
+                            orc.flush_config_record();
                             tx.send(OrcMessage::RespOk).unwrap();
                             break;
                         }
@@ -331,6 +332,10 @@ pub(crate) struct Orchestrator {
     init_edges: HashSet<Edge>,
     config_epoch: usize,
     frontier_bbs: Vec<Location>,
+    // Coverage between successive config suggestions, not per-worker coverage.
+    // Workers overlap with --cores > 1, so attribution is only useful on one core.
+    config_log: Option<std::fs::File>,
+    pending_config_record: Option<serde_json::Value>,
 }
 
 impl Orchestrator {
@@ -373,6 +378,12 @@ impl Orchestrator {
             config_epoch: 0,
             frontier_bbs: Vec::new(),
             metrics,
+            config_log: std::env::var_os("WASMFUZZ_CONFIG_LOG").and_then(|path| {
+                std::fs::File::create(&path)
+                    .inspect_err(|err| eprintln!("could not open config log {path:?}: {err}"))
+                    .ok()
+            }),
+            pending_config_record: None,
         }
     }
 
@@ -429,7 +440,45 @@ impl Orchestrator {
         res
     }
 
+    fn flush_config_record(&mut self) {
+        use std::io::Write;
+        let Some(mut record) = self.pending_config_record.take() else {
+            return;
+        };
+        record["t_end"] = self.start.elapsed().as_secs_f64().into();
+        record["edges_end"] = self.codecov_sess.get_edge_cov().unwrap_or(0).into();
+        if let Some(file) = self.config_log.as_mut()
+            && let Err(err) = writeln!(file, "{record}")
+        {
+            eprintln!("could not write config log: {err}");
+            self.config_log = None;
+        }
+    }
+
     pub fn suggest(&mut self) -> Config {
+        self.flush_config_record();
+        let config = self.suggest_config();
+        if self.config_log.is_some() {
+            let swarm = &config.swarm;
+            self.pending_config_record = Some(serde_json::json!({
+                "epoch": self.config_epoch,
+                "t_start": self.start.elapsed().as_secs_f64(),
+                "edges_start": self.codecov_sess.get_edge_cov().unwrap_or(0),
+                "lifetime_s": config.timeout.as_secs_f64(),
+                "input_size_limit": swarm.input_size_limit,
+                "instruction_limit": swarm.instruction_limit,
+                "memory_limit_pages": swarm.memory_limit_pages,
+                "must_include": swarm.must_include_functions.len()
+                    + swarm.must_include_bbs.len() + swarm.must_include_edges.len(),
+                "avoid": swarm.avoid_functions.len() + swarm.avoid_bbs.len()
+                    + swarm.avoid_edges.len(),
+                "passes": config.passes.opts,
+            }));
+        }
+        config
+    }
+
+    fn suggest_config(&mut self) -> Config {
         let mut timeout = *self.opts.config_interval;
         if let Some(tm) = self.opts.timeout.as_deref() {
             let tm_remaining = (*tm).saturating_sub(self.start.elapsed());
