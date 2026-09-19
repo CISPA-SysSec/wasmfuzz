@@ -307,7 +307,7 @@ lod = [
     # "expat-xml_parsebuffer_UTF-8",
     "firefox-fuzz_target_qcms",
     "fontations-fuzz_skrifa_outline", "freetype2-ftfuzzer", "goblin-parse",
-    "graphite-font", #"image-script_png",
+    "graphite-font", "graphite-segment", "image-script_png",
     "image-script_jpeg", "image-script_tiff",
     "image-script_ico", # "image-script_webp", # "image-script_guess",
     "jxl-oxide-libfuzzer-decode", "jxl-rs-decode", "libjxl-djxl", "lcms-cms_transform_all",
@@ -323,9 +323,9 @@ lod = [
     #"stb-png_read",
     "symphonia-decode_any",
     "vorbis-decode", "woff2-convert_woff2ttf",
-    "x509-parser-certreq",
+    # "x509-parser-certreq",
     #"x509-parser-crl",
-    # "x509-parser-x509_parse",
+    "x509-parser-x509_parse",
     "zune-image-zune-jpeg-decode_incremental",
     # Note: these seem saturated in both lod and no-lod?
     # "claxon-decode_full", "zip2-zip2-read"
