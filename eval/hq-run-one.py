@@ -15,6 +15,7 @@ _terminate_signal = 0
 _children: list["Child"] = []
 
 CGROUP_MOUNT = Path("/sys/fs/cgroup")
+FINAL_REPORT_SLACK_SECONDS = 120
 
 
 def read_self_cgroup_v2() -> Path:
@@ -286,6 +287,7 @@ def main() -> int:
     monitor_interval = str(task.get("monitor_interval") or "60s")
     monitor_grace_seconds = parse_duration_seconds(monitor_interval) * 1.5
     corpora_dir = str(task.get("corpora_dir") or "")
+    crash_corpora_dir = str(task.get("crash_corpora_dir") or "")
     exp_arg = str(task.get("experiment_arg") or "")
     env_assigns = str(task.get("env_assignments") or "")
 
@@ -318,6 +320,7 @@ def main() -> int:
     monitor: Child | None = None
     fuzzer: Child | None = None
     cgroup = Cgroup()
+    exited_early = False
 
     print(f"[hq-run] job={job_id} cores={cores} target={target} bucket={bucket}")
     print(f"[hq-run] exp_arg='{exp_arg}' env='{env_assigns}'")
@@ -357,8 +360,18 @@ def main() -> int:
             cgroup=cgroup.leaf("fuzzer", memory_limit_gb=10),
         )
 
-        reason, rc = supervise(fuzzer, monitor, time.monotonic() + timeout_seconds)
-        print(f"[hq-run] {reason} rc={rc}; cleaning up")
+        # The fuzzer stops itself at --timeout and then hands its last worker's
+        # corpus to the orchestrator (which writes it to disk). Killing it at
+        # exactly the deadline would drop up to one config interval of finds.
+        fuzzer_start = time.monotonic()
+        reason, rc = supervise(
+            fuzzer, monitor, fuzzer_start + timeout_seconds + FINAL_REPORT_SLACK_SECONDS
+        )
+        exited_early = (
+            reason == "fuzzer_exited"
+            and time.monotonic() - fuzzer_start < timeout_seconds - 5
+        )
+        print(f"[hq-run] {reason} rc={rc} early={exited_early}; cleaning up")
 
         if reason in ("fuzzer_exited", "timeout"):
             fuzzer.terminate()
@@ -377,6 +390,9 @@ def main() -> int:
 
         cgroup.cleanup()
         save_corpus(corpus_dir, corpora_dir, f"{target_stem}-{bucket}")
+        # The fuzzer only exits before the deadline when it found a crash.
+        if exited_early:
+            save_corpus(corpus_dir, crash_corpora_dir, job_id)
         shutil.rmtree(corpus_dir, ignore_errors=True)
 
 

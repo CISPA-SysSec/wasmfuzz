@@ -44,6 +44,8 @@ def main():
     ap.add_argument("--timeout", default="1h", help="Length of each task")
     ap.add_argument("--monitor-interval", default="5m", help="monitor-cov sampling interval")
     ap.add_argument("--corpora-dir", default="", help="Optional output directory for corpora")
+    ap.add_argument("--crash-corpora-dir", default="",
+                    help="Optional output directory for corpora of runs that exited early (crashes)")
     ap.add_argument("--runner", default="./eval/hq-run-one.py", help="Runner script")
     ap.add_argument("--submit-cwd", default="/tmp", help="Working directory for 'hq submit'")
     args = ap.parse_args()
@@ -102,6 +104,7 @@ def main():
                     "timeout": args.timeout,
                     "monitor_interval": args.monitor_interval,
                     "corpora_dir": args.corpora_dir,
+                    "crash_corpora_dir": args.crash_corpora_dir,
                     "experiment_arg": exp_arg,
                     "env_assignments": env_assigns,
                 })
