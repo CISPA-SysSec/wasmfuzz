@@ -255,6 +255,34 @@ def supervise(fuzzer: Child, monitor: Child, deadline: float) -> tuple[str, int]
             pass
 
 
+def save_log_tails(logs_dir: Path, job_id: str, max_lines: int = 400) -> None:
+    """Copy the tail of this task's hq stdout/stderr (node-local by default) to
+    shared storage so runs that exit abnormally can be inspected afterwards."""
+    submit_dir = os.environ.get("HQ_SUBMIT_DIR", "/tmp")
+    hq_job, hq_task = os.environ.get("HQ_JOB_ID"), os.environ.get("HQ_TASK_ID")
+    if not (hq_job and hq_task):
+        return
+    for stream in ("stdout", "stderr"):
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            src = Path(submit_dir) / f"job-{hq_job}" / f"{hq_task}.{stream}"
+            if not src.is_file():
+                continue
+            with open(src, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                offset = max(0, fh.tell() - 256 * 1024)
+                fh.seek(offset)
+                if offset:
+                    fh.readline()  # Discard a possibly truncated snapshot/log line.
+                # Monitor snapshots (one large JSON line each) would crowd out the log.
+                lines = [line for line in fh.read().splitlines()
+                         if not line.startswith(b'{"i":')]
+                lines = lines[-max_lines:]
+            (logs_dir / f"{job_id}.{stream}").write_bytes(b"\n".join(lines) + b"\n")
+        except OSError as e:
+            print(f"[hq-run] failed to save {stream} tail: {e}", file=sys.stderr)
+
+
 def save_corpus(corpus_dir: Path, corpora_dir: str, dest_name: str) -> None:
     if not corpora_dir:
         return
@@ -321,6 +349,7 @@ def main() -> int:
     fuzzer: Child | None = None
     cgroup = Cgroup()
     exited_early = False
+    final_rc: int | None = None
 
     print(f"[hq-run] job={job_id} cores={cores} target={target} bucket={bucket}")
     print(f"[hq-run] exp_arg='{exp_arg}' env='{env_assigns}'")
@@ -381,6 +410,7 @@ def main() -> int:
             )
             monitor.wait_for_exit(monitor_grace_seconds)
 
+        final_rc = rc
         return rc
     finally:
         if monitor is not None:
@@ -393,6 +423,10 @@ def main() -> int:
         # The fuzzer only exits before the deadline when it found a crash.
         if exited_early:
             save_corpus(corpus_dir, crash_corpora_dir, job_id)
+        if final_rc != 0 or exited_early:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            save_log_tails(runs_dir.parent / "logs", job_id)
         shutil.rmtree(corpus_dir, ignore_errors=True)
 
 
