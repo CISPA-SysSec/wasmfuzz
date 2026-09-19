@@ -36,7 +36,7 @@ pub(crate) struct WorkerSchedule {
     /// Set by [`Self::start`] when the main fuzz loop begins; idle timeout
     /// only applies after this point.
     fuzz_start: Option<Instant>,
-    /// Fuzz-phase deadline (`fuzz_start` + `timeout`), set in [`Self::start`].
+    /// Worker deadline (`epoch` + `timeout`), set in [`Self::start`].
     deadline: Option<Instant>,
     pub(crate) steps: u64,
 
@@ -79,7 +79,8 @@ impl WorkerSchedule {
         self.fuzz_start.is_some()
     }
 
-    /// Begin the fuzz-phase timer and idle-activity baseline. Idempotent.
+    /// Begin fuzzing and reset the idle-activity baseline. Idempotent.
+    /// Setup time is included in the worker's wall-clock budget.
     pub(crate) fn start(&mut self) {
         if self.fuzz_start.is_some() {
             return;
@@ -87,8 +88,10 @@ impl WorkerSchedule {
         let now = Instant::now();
         self.fuzz_start = Some(now);
         self.last_activity = now;
+        // The orchestrator caps this budget at the session's remaining time.
+        // Starting it after corpus loading would let workers overrun the session.
         if let Some(timeout) = self.timeout {
-            self.deadline = Some(now + timeout);
+            self.deadline = Some(self.epoch + timeout);
         }
     }
 
@@ -105,8 +108,7 @@ impl WorkerSchedule {
             .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
-    /// Caps corpus load / setup before [`Self::start`] using the same duration
-    /// as the fuzz-phase timeout (measured from `epoch`).
+    /// Enforce the worker's budget during setup, before [`Self::start`].
     pub(crate) fn is_setup_timeout(&self) -> bool {
         !self.fuzzing()
             && self

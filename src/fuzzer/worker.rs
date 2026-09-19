@@ -510,6 +510,9 @@ impl Worker {
                     self.stats.exhaustive_execs += 1;
                     det.next(input.as_mut());
                     self.schedule.step();
+                    if self.schedule.timed_out() {
+                        return Ok(WorkerExit::Timeout);
+                    }
                     let _interesting = match self.run_input(input.as_ref())? {
                         InputVerdict::Interesting => true,
                         InputVerdict::NotInteresting => false,
@@ -579,6 +582,9 @@ impl Worker {
                 }
 
                 self.schedule.step();
+                if self.schedule.timed_out() {
+                    return Ok(WorkerExit::Timeout);
+                }
                 let _interesting = match self.run_input(input.as_ref())? {
                     InputVerdict::Interesting => true,
                     InputVerdict::NotInteresting => false,
