@@ -47,8 +47,12 @@ def main():
     ap.add_argument("--crash-corpora-dir", default="",
                     help="Optional output directory for corpora of runs that exited early (crashes)")
     ap.add_argument("--runner", default="./eval/hq-run-one.py", help="Runner script")
+    ap.add_argument("--cpus", type=int, default=1,
+                    help="Cores per task (the runner passes them to `wasmfuzz fuzz --cores`)")
     ap.add_argument("--submit-cwd", default="/tmp", help="Working directory for 'hq submit'")
     args = ap.parse_args()
+    if args.cpus < 1:
+        ap.error("--cpus must be positive")
 
     variants = args.variant or ["default"]
 
@@ -100,7 +104,7 @@ def main():
                     "monitor": str(cas_monitor),
                     "target": str(cas_targets[target]),
                     "runs_dir": str(runs_dir),
-                    "bucket": f"{fuzzer_id}-{bucket_suffix}",
+                    "bucket": f"{fuzzer_id}-{bucket_suffix}" + (f"-c{args.cpus}" if args.cpus > 1 else ""),
                     "timeout": args.timeout,
                     "monitor_interval": args.monitor_interval,
                     "corpora_dir": args.corpora_dir,
@@ -119,6 +123,7 @@ def main():
             '--from-json', tmp_fh.name,
             '--task-dir',
             '--time-request', args.timeout,
+            '--cpus', str(args.cpus),
             '--name', f"{cas_fuzzer.stem}-{'-'.join(variants)}",
             str(cas_runner)],
             cwd=Path(args.submit_cwd).expanduser())

@@ -386,7 +386,7 @@ def main() -> int:
                 "WASMFUZZ_METRICS_JSON": str(task_dir / 'metrics.json'),
                 **config_env,
             },
-            cgroup=cgroup.leaf("fuzzer", memory_limit_gb=10),
+            cgroup=cgroup.leaf("fuzzer", memory_limit_gb=max(10, 3 * cores)),
         )
 
         # The fuzzer stops itself at --timeout and then hands its last worker's
