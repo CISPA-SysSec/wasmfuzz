@@ -1,0 +1,23 @@
+diff --git a/jxl/src/frame/modular/transforms/step.rs b/jxl/src/frame/modular/transforms/step.rs
+index a75a445..7ff0ae5 100644
+--- a/jxl/src/frame/modular/transforms/step.rs
++++ b/jxl/src/frame/modular/transforms/step.rs
+@@ -228,10 +228,16 @@ impl SqueezeInfo {
+         let next_avg_grid = if let Some(pos) = pos_next {
+             let grid = buf_avg.get_grid_idx(output_grid_kind, pos);
+             if grid == in_grid {
++                // Only borrow the first row/column of the next tile if the channel actually
++                // extends past this tile: a channel can be smaller than the frame grid suggests
++                // (e.g. a squeezed residual channel), in which case this tile is its last one.
++                let chan_size = buf_avg.info.size;
+                 if avg_rect.size.0 > 0 && avg_rect.size.1 > 0 {
+                     if vertical {
+-                        avg_rect.size.1 += 1;
+-                    } else {
++                        if avg_rect.origin.1 + avg_rect.size.1 < chan_size.1 {
++                            avg_rect.size.1 += 1;
++                        }
++                    } else if avg_rect.origin.0 + avg_rect.size.0 < chan_size.0 {
+                         avg_rect.size.0 += 1;
+                     }
+                 }
