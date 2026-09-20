@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import functools
+import re
 import subprocess
 from pathlib import Path
 import argparse
@@ -17,6 +18,9 @@ parser.add_argument('--build', action='store_true')
 parser.add_argument('--git-add', action='store_true')
 parser.add_argument('--skip-update', action='store_true')
 parser.add_argument('--skip-unmodified', action='store_true')
+parser.add_argument('--from-prepare', action='store_true',
+                    help="also bump projects that have no built module in out/, "
+                         "by parsing their prepare.sh")
 
 args = parser.parse_args()
 harness_dir = Path(args.suite_dir) / "out"
@@ -27,6 +31,46 @@ def get_remote_head(remote: str):
     return subprocess.check_output([
         "git", "ls-remote", remote, "HEAD"
     ]).decode().split()[0]
+
+
+CLONE_RE = re.compile(
+    r'^\s*git clone-rev\.sh\s+(?P<url>\S+)\s+(?P<path>\S+)\s+(?P<rev>[0-9a-f]{40})',
+    re.M,
+)
+
+
+def project_dirs(suite_dir):
+    dirs = []
+    for group in ("projects-clike", "projects-rust"):
+        base = Path(suite_dir) / group
+        if base.exists():
+            dirs += sorted(x for x in base.iterdir() if (x / "prepare.sh").exists())
+    return dirs
+
+
+def update_from_prepare(proj_dir):
+    """Bump every pinned revision named in prepare.sh to its remote HEAD.
+
+    suite-update.py normally reads the pins out of the git-metadata.csv section of
+    the built modules in out/. Projects that currently build no module at all are
+    invisible that way, so fall back to parsing prepare.sh directly.
+    """
+    prepare = proj_dir / "prepare.sh"
+    text = prepare.read_text()
+    changed = []
+    for m in CLONE_RE.finditer(text):
+        try:
+            head = get_remote_head(m.group("url"))
+        except subprocess.CalledProcessError as e:
+            print("    !!", m.group("url"), e)
+            continue
+        if head and head != m.group("rev"):
+            changed.append((m.group("url"), m.group("rev"), head))
+    for url, old, head in changed:
+        text = text.replace(old, head)
+    if changed:
+        prepare.write_text(text)
+    return changed
 
 
 if not args.skip_update:
@@ -66,7 +110,31 @@ for harness in harness_dir.glob("*.wasm"):
             print("[+]", row["origin"])
 
 
+if args.from_prepare and not args.skip_update:
+    print("Updating revisions of projects without a built module ...")
+    seen = set()
+    for harness in harness_dir.glob("*.wasm"):
+        try:
+            md = subprocess.check_output(
+                ["llvm-objcopy", "--dump-section", "git-metadata.csv=-", harness])
+        except Exception:
+            continue
+        for row in csv.DictReader(io.StringIO(md.decode())):
+            seen.add(Path(row["path"]).parts[2])
+    for proj_dir in project_dirs(args.suite_dir):
+        if proj_dir.name in seen:
+            continue
+        if args.only_target is not None and args.only_target not in proj_dir.name:
+            continue
+        if any(x in proj_dir.name for x in args.ignore_target):
+            continue
+        changed = update_from_prepare(proj_dir)
+        print(("[-] " if changed else "[+] ") + str(proj_dir))
+        for url, old, new in changed:
+            print(f"      {url} {old[:12]} -> {new[:12]}")
+
 stale_patch = []
+
 build_failed = []
 
 if args.build:
