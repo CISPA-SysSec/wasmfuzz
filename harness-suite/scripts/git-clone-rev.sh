@@ -16,7 +16,14 @@ else
     mkdir -p "$path"
     git -C "$path" init --initial-branch=x --quiet
     git -C "$path" remote add origin $origin
-    git -C "$path" fetch --depth 1 origin $pin
+    if [[ $* == *--sparse=* ]]; then
+        # monorepos (firefox): only materialize the listed directories (comma-separated)
+        sparse=$(echo "$*" | sed -E 's/.*--sparse=([^ ]+).*/\1/' | tr ',' ' ')
+        git -C "$path" sparse-checkout set --no-cone $sparse
+        git -C "$path" fetch --depth 1 --filter=blob:none origin $pin
+    else
+        git -C "$path" fetch --depth 1 origin $pin
+    fi
     git -C "$path" checkout --quiet FETCH_HEAD
 fi
 
