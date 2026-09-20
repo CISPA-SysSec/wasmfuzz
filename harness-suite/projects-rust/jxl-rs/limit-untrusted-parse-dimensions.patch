@@ -1,8 +1,8 @@
 diff --git a/jxl/src/api/inner/box_parser.rs b/jxl/src/api/inner/box_parser.rs
-index 0f2485c..4cf3c33 100644
+index e08f48e..eb36dce 100644
 --- a/jxl/src/api/inner/box_parser.rs
 +++ b/jxl/src/api/inner/box_parser.rs
-@@ -671,7 +671,8 @@ impl BoxParser {
+@@ -693,7 +693,8 @@ impl BoxParser {
                      if self.ooo_jxlp_buffer.contains_key(&idx) {
                          return Err(Error::InvalidBox);
                      }
@@ -13,7 +13,7 @@ index 0f2485c..4cf3c33 100644
                      }
                      self.state = ParseState::OOOJxlp(idx, content_len);
 diff --git a/jxl/src/api/inner/codestream_parser/frame_info.rs b/jxl/src/api/inner/codestream_parser/frame_info.rs
-index 8e9a39a..53610c5 100644
+index 4a3d0e1..2b31b16 100644
 --- a/jxl/src/api/inner/codestream_parser/frame_info.rs
 +++ b/jxl/src/api/inner/codestream_parser/frame_info.rs
 @@ -156,6 +156,19 @@ impl FrameInfo {
@@ -65,7 +65,7 @@ index 8e9a39a..53610c5 100644
              self.toc_parser = Some(IncrementalTocReader::new(num_toc_entries as u32, br)?);
          }
  
-@@ -198,7 +231,19 @@ impl FrameInfo {
+@@ -195,7 +228,19 @@ impl FrameInfo {
          output_profile: &JxlColorProfile,
          process_mode: ProcessMode,
      ) -> Result<()> {
@@ -86,7 +86,7 @@ index 8e9a39a..53610c5 100644
          self.ready_section_data = 0;
  
          self.lf_global_section = None;
-@@ -406,9 +451,11 @@ impl FrameInfo {
+@@ -403,9 +448,11 @@ impl FrameInfo {
                  }
                  let len = buf.data.len();
                  if len > ready {
@@ -136,13 +136,13 @@ index a4658da..9614035 100644
  
      pub(super) fn can_read_more(&self) -> bool {
 diff --git a/jxl/src/frame/decode.rs b/jxl/src/frame/decode.rs
-index d5e0e2b..6aec131 100644
+index e3e5018..0562a1e 100644
 --- a/jxl/src/frame/decode.rs
 +++ b/jxl/src/frame/decode.rs
-@@ -198,6 +198,10 @@ impl Frame {
+@@ -199,6 +199,10 @@ impl Frame {
          toc: Toc,
          mut decoder_state: DecoderState,
-     ) -> Result<Self> {
+     ) -> Result<Box<Self>> {
 +        // The group count is derived from untrusted frame header dimensions and is used
 +        // to size allocations further down (via `GroupStatus::new`); reject overflow here.
 +        let (gw, gh) = frame_header.size_groups();
@@ -150,7 +150,7 @@ index d5e0e2b..6aec131 100644
          if frame_header.is_visible() {
              decoder_state.visible_frame_index += 1;
              decoder_state.nonvisible_frame_index = 0;
-@@ -375,7 +379,12 @@ impl Frame {
+@@ -376,7 +380,12 @@ impl Frame {
  
              if self.header.has_splines() {
                  info!("decoding splines");
@@ -210,7 +210,7 @@ index 6a4e047..5470250 100644
              return Err(Error::InvalidPermutationSize { size, skip, end });
          }
 diff --git a/jxl/src/headers/toc.rs b/jxl/src/headers/toc.rs
-index 3b7946b..5ade497 100644
+index eaae4ef..0b70113 100644
 --- a/jxl/src/headers/toc.rs
 +++ b/jxl/src/headers/toc.rs
 @@ -41,6 +41,10 @@ pub struct IncrementalTocReader {
