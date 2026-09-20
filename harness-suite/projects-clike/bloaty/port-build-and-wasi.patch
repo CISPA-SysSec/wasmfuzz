@@ -51,7 +51,7 @@ index 05b5289..4dda2df 100644
      list(APPEND LIBBLOATY_DEPS  re2)
    endif()
 diff --git a/src/bloaty.cc b/src/bloaty.cc
-index 5232959..25e2322 100644
+index dd05ab8..559ab8f 100644
 --- a/src/bloaty.cc
 +++ b/src/bloaty.cc
 @@ -45,7 +45,9 @@ typedef size_t z_size_t;
@@ -123,13 +123,13 @@ index aab0771..dcfc711 100644
            assert(i == 0 || !continuous);
            continuous = false;
 diff --git a/src/util.cc b/src/util.cc
-index 7e24568..820e4a3 100644
+index db1bf29..78db1b4 100644
 --- a/src/util.cc
 +++ b/src/util.cc
-@@ -20,7 +20,15 @@ namespace bloaty {
+@@ -19,7 +19,15 @@ using std::string_view;
+ namespace bloaty {
  
- ABSL_ATTRIBUTE_NORETURN
- void Throw(const char *str, int line) {
+ [[noreturn]] void Throw(const char* str, int line) {
 +#ifndef __wasi__
    throw bloaty::Error(str, __FILE__, line);
 +#else

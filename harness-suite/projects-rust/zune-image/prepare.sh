@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/etemesi254/zune-image "$PROJECT/repo" 1b1486a96a11264dd2ed809e48e316d5a241ee3e
+git clone-rev.sh https://github.com/etemesi254/zune-image "$PROJECT/repo" 2fa0e4176cc6f99d241032f50afb3428aa84b078
 git -C "$PROJECT/repo" apply "$PROJECT/fuzz-disable-idct.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fuzz-png-roundtrip-api.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-zcursor-read-overflow.patch"

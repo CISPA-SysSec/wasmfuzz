@@ -1,8 +1,8 @@
 diff --git a/gix-path/src/convert.rs b/gix-path/src/convert.rs
-index 3cc2e3f3a..de7a1f9f5 100644
+index ba2b9a3..dcf372a 100644
 --- a/gix-path/src/convert.rs
 +++ b/gix-path/src/convert.rs
-@@ -6,6 +6,11 @@ use std::{
+@@ -6,10 +6,15 @@ use std::{
  
  use bstr::{BStr, BString};
  
@@ -11,10 +11,15 @@ index 3cc2e3f3a..de7a1f9f5 100644
 +#[cfg(all(not(unix), target_os = "wasi"))]
 +use std::os::wasi::ffi::{OsStrExt as _, OsStringExt as _};
 +
- #[derive(Debug)]
  /// The error type returned by [`into_bstr()`] and others may suffer from failed conversions from or to bytes.
- pub struct Utf8Error;
-@@ -52,22 +57,20 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>
+ pub type Utf8Error = gix_error::ValidationError;
+ 
+-#[cfg(not(unix))]
++#[cfg(all(not(unix), not(target_os = "wasi")))]
+ fn utf8_error() -> Utf8Error {
+     Utf8Error::new("Could not convert to UTF8 or from UTF8 due to ill-formed input")
+ }
+@@ -48,22 +53,20 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>
      let path = path.into();
      let path_str = match path {
          Cow::Owned(path) => Cow::Owned({
@@ -26,7 +31,7 @@ index 3cc2e3f3a..de7a1f9f5 100644
              };
 -            #[cfg(not(unix))]
 +            #[cfg(all(not(unix), not(target_os = "wasi")))]
-             let p: BString = path.into_os_string().into_string().map_err(|_| Utf8Error)?.into();
+             let p: BString = path.into_os_string().into_string().map_err(|_| utf8_error())?.into();
              p
          }),
          Cow::Borrowed(path) => Cow::Borrowed({
@@ -38,10 +43,10 @@ index 3cc2e3f3a..de7a1f9f5 100644
              };
 -            #[cfg(not(unix))]
 +            #[cfg(all(not(unix), not(target_os = "wasi")))]
-             let p: &BStr = path.to_str().ok_or(Utf8Error)?.as_bytes().into();
+             let p: &BStr = path.to_str().ok_or_else(utf8_error)?.as_bytes().into();
              p
          }),
-@@ -96,12 +99,11 @@ pub fn join_bstr_unix_pathsep<'a, 'b>(base: impl Into<Cow<'a, BStr>>, path: impl
+@@ -92,12 +95,11 @@ pub fn join_bstr_unix_pathsep<'a, 'b>(base: impl Into<Cow<'a, BStr>>, path: impl
  /// There are some potential Git versions and Windows installations which produce malformed UTF-16
  /// if certain emojis are in the path. It's as rare as it sounds, but possible.
  pub fn try_from_byte_slice(input: &[u8]) -> Result<&Path, Utf8Error> {
@@ -53,10 +58,10 @@ index 3cc2e3f3a..de7a1f9f5 100644
      };
 -    #[cfg(not(unix))]
 +    #[cfg(all(not(unix), not(target_os = "wasi")))]
-     let p = Path::new(std::str::from_utf8(input).map_err(|_| Utf8Error)?);
+     let p = Path::new(std::str::from_utf8(input).map_err(|_| utf8_error())?);
      Ok(p)
  }
-@@ -123,12 +125,11 @@ pub fn from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Cow<'a, Path> {
+@@ -119,12 +121,11 @@ pub fn from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Cow<'a, Path> {
  /// Similar to [`try_from_bstr()`], but takes and produces owned data.
  pub fn try_from_bstring(input: impl Into<BString>) -> Result<PathBuf, Utf8Error> {
      let input = input.into();

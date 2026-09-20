@@ -1,8 +1,8 @@
 diff --git a/src/pcre2_fuzzsupport.c b/src/pcre2_fuzzsupport.c
-index 89135620..2f7cb6a5 100644
+index 5706965..0443d2c 100644
 --- a/src/pcre2_fuzzsupport.c
 +++ b/src/pcre2_fuzzsupport.c
-@@ -19,8 +19,10 @@ Further updates March/April/May 2024 by PH
+@@ -61,8 +61,10 @@ Further updates March/April/May 2024 by PH
  #include <unistd.h>
  
  /* stack size adjustment */
@@ -11,21 +11,21 @@ index 89135620..2f7cb6a5 100644
  #include <sys/resource.h>
 +#endif
  
- #define STACK_SIZE_MB 256
+ #define STACK_SIZE_MB  256
  #define JIT_SIZE_LIMIT (200 * 1024)
-@@ -251,6 +253,7 @@ int LLVMFuzzerTestOneInput(unsigned char *, size_t);
- 
- int LLVMFuzzerInitialize(int *argc, char ***argv)
+@@ -289,6 +291,7 @@ int LLVMFuzzerTestOneInput(unsigned char *, size_t);
+ int
+ LLVMFuzzerInitialize(int *argc, char ***argv)
  {
 +#if !defined(__wasi__)
- int rc;
- struct rlimit rlim;
- getrlimit(RLIMIT_STACK, &rlim);
-@@ -266,6 +269,7 @@ if (rc != 0)
-   fprintf(stderr, "Failed to expand stack size\n");
-   _exit(1);
+   int rc;
+   struct rlimit rlim;
+   getrlimit(RLIMIT_STACK, &rlim);
+@@ -305,6 +308,7 @@ LLVMFuzzerInitialize(int *argc, char ***argv)
+     fprintf(stderr, "Failed to expand stack size\n");
+     _exit(1);
    }
 +#endif
  
- (void)argc;  /* Avoid "unused parameter" warnings */
- (void)argv;
+   (void)argc; // Avoid "unused parameter" warnings
+   (void)argv;

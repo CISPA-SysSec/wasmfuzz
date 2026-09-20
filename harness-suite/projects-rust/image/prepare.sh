@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" 6812e732343b0eaaeeef90ca751dd0e73430fb15
+git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" 075e65d618a323e5cb48c1d8710a2eca25d690c6
 git -C "$PROJECT/repo" apply "$PROJECT/limit-bmp-icc-profile.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-ico-bmp-zero-height.patch"
 

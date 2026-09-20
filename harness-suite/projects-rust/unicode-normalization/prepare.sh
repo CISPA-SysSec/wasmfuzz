@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/unicode-rs/unicode-normalization.git "$PROJECT/repo" 576ae0b1407dd14854876c93f1a348df0c19dffe
+git clone-rev.sh https://github.com/unicode-rs/unicode-normalization.git "$PROJECT/repo" b77212b847ead642538c9c63060ac59f7a8563c5

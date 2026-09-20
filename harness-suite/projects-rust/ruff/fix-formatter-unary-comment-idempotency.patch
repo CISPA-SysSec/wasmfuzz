@@ -87,7 +87,7 @@ index c0f9c8b..ffcced8 100644
 +) -> bool {
 +    match parent {
 +        AnyNodeRef::ExprCompare(compare) => compare
-+            .comparators
++            .comparators()
 +            .last()
 +            .is_some_and(|comparator| comparator.range() == unary_op.range()),
 +        AnyNodeRef::ExprBinOp(bin_op) => bin_op.right.range() == unary_op.range(),

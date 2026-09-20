@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/trifectatechfoundation/libzstd-rs-sys "$PROJECT/repo" fe2c02929fb414c339eead1eccc6d56dc5f44d33
+git clone-rev.sh https://github.com/trifectatechfoundation/libzstd-rs-sys "$PROJECT/repo" 621902bafdbbe6282f5d2dc8294ca4e2bc6f3bca
 git -C "$PROJECT/repo" apply "$PROJECT/fuzz-wasm-skip-c-oracle.patch"
