@@ -19,8 +19,12 @@ cd "$PROJECT/freetype"
     --with-harfbuzz=no --with-brotli=no --with-png=no --with-bzip2=no
 make -j8
 
-# Note: The configure step here is very slow. Is it building optimized binaries for every include test?
 cd "$PROJECT/libarchive"
+# LTO is broken for this target under wasi-sdk 25 (see projects-clike/libarchive/build.sh),
+# and it makes cmake's configure-time CheckFunctionExists/CheckIncludeFile probes
+# (libarchive's CMakeLists runs dozens of them) each pay for a full thin-LTO
+# clang+wasm-ld invocation, which is what made this configure step very slow.
+export CFLAGS="${CFLAGS/-flto=thin /}"
 cmake . -DWASI_SDK_PREFIX="${WASI_SDK_PREFIX}" \
     -DBUILD_SHARED_LIBS=OFF \
     -DENABLE_WERROR=OFF \
