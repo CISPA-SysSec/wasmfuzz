@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = []
 license = "Apache-2.0 OR MIT"
 edition = "2024"
-rust-version = "1.100"
+rust-version = "1.98"
 
 [dependencies]
 wat = "1.0"
