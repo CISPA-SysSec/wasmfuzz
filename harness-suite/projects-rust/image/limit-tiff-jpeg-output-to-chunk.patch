@@ -1,0 +1,38 @@
+--- a/src/decoder/image.rs
++++ b/src/decoder/image.rs
+@@ -534,6 +534,7 @@
+         #[cfg_attr(not(feature = "jpeg"), allow(unused_variables))] jpeg_tables: Option<&[u8]>,
+         #[cfg_attr(not(feature = "fax"), allow(unused_variables))] dimensions: (u32, u32),
+         #[cfg_attr(not(feature = "webp"), allow(unused_variables))] samples: u16,
++        #[cfg_attr(not(feature = "jpeg"), allow(unused_variables))] max_chunk_bytes: usize,
+     ) -> TiffResult<Box<dyn Read + 'r>> {
+         Ok(match compression_method {
+             CompressionMethod::None => Box::new(reader),
+@@ -607,6 +608,19 @@
+ 
+                 decoder.set_options(options);
+ 
++                // The nominal chunk dimensions come from the IFD and can be absurd
++                // (a few hundred bytes of strip may claim 65535 x 65535), so bounding
++                // the frame by them alone still lets zune-jpeg allocate a GiB-sized
++                // output buffer up front. The decoded chunk never needs more than
++                // `max_chunk_bytes`, so refuse a frame that claims more than that.
++                // `None` means the frame's width * height * components overflows a
++                // usize, which on wasm32 is a 4 GiB product; zune-jpeg's `decode`
++                // unwraps that and panics.
++                match decoder.output_buffer_size() {
++                    Some(size) if size <= max_chunk_bytes => {}
++                    _ => return Err(TiffError::LimitsExceeded),
++                }
++
+                 let data = decoder.decode()?;
+ 
+                 Box::new(Cursor::new(data))
+@@ -966,6 +980,7 @@
+             self.jpeg_tables.as_deref().map(|a| &**a),
+             chunk_dims,
+             self.samples,
++            required_chunk_bytes,
+         )?;
+ 
+         if is_output_chunk_rows && is_all_bits {

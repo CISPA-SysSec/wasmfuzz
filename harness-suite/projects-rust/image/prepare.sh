@@ -23,6 +23,8 @@ curl -fsSL -o "$PROJECT/tiff.crate" https://static.crates.io/crates/tiff/tiff-0.
 mkdir -p "$PROJECT/tiff"
 tar -xzf "$PROJECT/tiff.crate" -C "$PROJECT/tiff" --strip-components=1
 patch -d "$PROJECT/tiff" -p1 <"$PROJECT/fix-tiff-chunk-row-bounds.patch"
+patch -d "$PROJECT/tiff" -p1 <"$PROJECT/limit-tiff-jpeg-frame-to-chunk.patch"
+patch -d "$PROJECT/tiff" -p1 <"$PROJECT/limit-tiff-jpeg-output-to-chunk.patch"
 rm -f "$PROJECT/tiff.crate"
 
 curl -fsSL -o "$PROJECT/moxcms.crate" https://static.crates.io/crates/moxcms/0.8.1/download

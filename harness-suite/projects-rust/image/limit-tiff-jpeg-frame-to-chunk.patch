@@ -1,0 +1,23 @@
+--- a/src/decoder/image.rs
++++ b/src/decoder/image.rs
+@@ -585,9 +585,18 @@
+                 let mut jpeg_data = Vec::new();
+                 jpeg_reader.read_to_end(&mut jpeg_data)?;
+ 
+-                let mut decoder =
+-                    zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(jpeg_data));
++                // Bound the JPEG frame by the TIFF chunk it decodes into: without this a
++                // few-hundred-byte strip can declare a 65535x65535 frame and zune-jpeg
++                // allocates its full coefficient/upsampling buffers (hundreds of MiB)
++                // before any scan data is read.
+                 let mut options: zune_core::options::DecoderOptions = Default::default();
++                options = options
++                    .set_max_width(dimensions.0 as usize)
++                    .set_max_height(dimensions.1 as usize);
++                let mut decoder = zune_jpeg::JpegDecoder::new_with_options(
++                    zune_core::bytestream::ZCursor::new(jpeg_data),
++                    options,
++                );
+ 
+                 // Disable color conversion by setting the output colorspace to the input
+                 // colorspace.
