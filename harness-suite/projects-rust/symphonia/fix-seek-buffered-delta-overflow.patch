@@ -1,0 +1,24 @@
+diff --git a/symphonia-core/src/io/media_source_stream.rs b/symphonia-core/src/io/media_source_stream.rs
+index 64c0634..32cfe73 100644
+--- a/symphonia-core/src/io/media_source_stream.rs
++++ b/symphonia-core/src/io/media_source_stream.rs
+@@ -533,13 +533,15 @@ impl SeekBuffered for MediaSourceStream<'_> {
+ 
+         // Forward seek.
+         let delta = if pos > old_pos {
+-            assert!(pos - old_pos < isize::MAX as u64);
+-            (pos - old_pos) as isize
++            // The delta may exceed `isize::MAX` on targets with a narrow pointer width (32-bit
++            // `usize`). Saturate instead of panicking: `seek_buffered_rel` clamps the delta to the
++            // length of the buffer, which is always far smaller than `isize::MAX`, so a saturated
++            // delta seeks to the same place an exact one would.
++            (pos - old_pos).min(isize::MAX as u64) as isize
+         }
+         else if pos < old_pos {
+             // Backward seek.
+-            assert!(old_pos - pos < isize::MAX as u64);
+-            -((old_pos - pos) as isize)
++            -((old_pos - pos).min(isize::MAX as u64) as isize)
+         }
+         else {
+             0

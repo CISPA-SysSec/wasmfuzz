@@ -1,0 +1,30 @@
+diff --git a/symphonia-format-isomp4/src/atoms/trun.rs b/symphonia-format-isomp4/src/atoms/trun.rs
+index 8bce4e8..7671c83 100644
+--- a/symphonia-format-isomp4/src/atoms/trun.rs
++++ b/symphonia-format-isomp4/src/atoms/trun.rs
+@@ -49,6 +49,12 @@ impl TrunAtom {
+ 
+     // Indicates if the duration of the first sample is provided.
+     pub fn is_first_sample_duration_present(&self) -> bool {
++        // Sample durations are only recorded when the sample-duration-present flag is set. Without
++        // a recorded duration there is nothing for the first sample to override.
++        if self.sample_duration.is_empty() {
++            return false;
++        }
++
+         match self.first_sample_flags {
+             Some(flags) => flags & TrunAtom::FIRST_SAMPLE_FLAGS_PRESENT != 0,
+             None => false,
+@@ -62,6 +68,12 @@ impl TrunAtom {
+ 
+     /// Indicates if the size for the first sample is provided.
+     pub fn is_first_sample_size_present(&self) -> bool {
++        // Sample sizes are only recorded when the sample-size-present flag is set. Without a
++        // recorded size there is nothing for the first sample to override.
++        if self.sample_size.is_empty() {
++            return false;
++        }
++
+         match self.first_sample_flags {
+             Some(flags) => flags & TrunAtom::SAMPLE_SIZE_PRESENT != 0,
+             None => false,

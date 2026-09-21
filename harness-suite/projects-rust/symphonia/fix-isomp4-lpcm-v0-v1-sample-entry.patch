@@ -1,0 +1,32 @@
+diff --git a/symphonia-format-isomp4/src/atoms/stsd.rs b/symphonia-format-isomp4/src/atoms/stsd.rs
+index 73cb913..0a8fc96 100644
+--- a/symphonia-format-isomp4/src/atoms/stsd.rs
++++ b/symphonia-format-isomp4/src/atoms/stsd.rs
+@@ -213,6 +213,13 @@ impl Atom for AudioSampleEntry {
+                 // Version 0.
+                 if is_pcm_codec {
+                     entry.codec_id = pcm_codec_id(header.atom_type);
++
++                    // The LPCM sample entry atom type only describes the PCM sample format in
++                    // version 2 sample entries. It carries no format in version 0 or 1.
++                    if entry.codec_id == CODEC_ID_NULL_AUDIO {
++                        return decode_error("isomp4: lpcm sample entry requires version 2");
++                    }
++
+                     let bits_per_sample = 8 * bytes_per_pcm_sample(entry.codec_id);
+ 
+                     // Validate the codec-derived bytes-per-sample equals the declared
+@@ -246,6 +253,13 @@ impl Atom for AudioSampleEntry {
+ 
+                 if is_pcm_codec {
+                     entry.codec_id = pcm_codec_id(header.atom_type);
++
++                    // The LPCM sample entry atom type only describes the PCM sample format in
++                    // version 2 sample entries. It carries no format in version 0 or 1.
++                    if entry.codec_id == CODEC_ID_NULL_AUDIO {
++                        return decode_error("isomp4: lpcm sample entry requires version 2");
++                    }
++
+                     let codec_bytes_per_sample = bytes_per_pcm_sample(entry.codec_id);
+ 
+                     // Validate the codec-derived bytes-per-sample equals the declared
