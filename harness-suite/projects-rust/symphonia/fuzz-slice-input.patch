@@ -1,0 +1,211 @@
+diff --git a/symphonia/fuzz/fuzz_targets/decode_aac.rs b/symphonia/fuzz/fuzz_targets/decode_aac.rs
+index 0cb1f06..121bee4 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_aac.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_aac.rs
+@@ -5,7 +5,7 @@ use symphonia::core::codecs::audio::{AudioCodecParameters, well_known::CODEC_ID_
+ use symphonia::default::codecs::AacDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     let mut codec_params = AudioCodecParameters::new();
+     codec_params
+         .for_codec(CODEC_ID_AAC)
+@@ -14,5 +14,5 @@ fuzz_target!(|data: Vec<u8>| {
+ 
+     // We initialize the AAC decoder in raw mode (no extra_data/ASC), relying on
+     // provided parameters. This allows the fuzzer to directly attack the packet decoding logic.
+-    fuzz_audio_decoder::<AacDecoder>(&codec_params, data);
++    fuzz_audio_decoder::<AacDecoder>(&codec_params, data.to_vec());
+ });
+diff --git a/symphonia/fuzz/fuzz_targets/decode_adpcm.rs b/symphonia/fuzz/fuzz_targets/decode_adpcm.rs
+index d7a8920..d2c745b 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_adpcm.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_adpcm.rs
+@@ -6,7 +6,7 @@ use symphonia::core::codecs::registry::RegisterableAudioDecoder;
+ use symphonia::default::codecs::AdpcmDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     if data.is_empty() {
+         return;
+     }
+diff --git a/symphonia/fuzz/fuzz_targets/decode_alac.rs b/symphonia/fuzz/fuzz_targets/decode_alac.rs
+index 6fc6557..c1d2af7 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_alac.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_alac.rs
+@@ -4,7 +4,7 @@ use symphonia::core::codecs::audio::{AudioCodecParameters, well_known::CODEC_ID_
+ use symphonia::default::codecs::AlacDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     let mut codec_params = AudioCodecParameters::new();
+     codec_params.for_codec(CODEC_ID_ALAC);
+ 
+diff --git a/symphonia/fuzz/fuzz_targets/decode_flac.rs b/symphonia/fuzz/fuzz_targets/decode_flac.rs
+index d7b05b8..5fed799 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_flac.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_flac.rs
+@@ -4,7 +4,7 @@ use symphonia::core::codecs::audio::{AudioCodecParameters, well_known::CODEC_ID_
+ use symphonia::default::codecs::FlacDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     let mut codec_params = AudioCodecParameters::new();
+     codec_params.for_codec(CODEC_ID_FLAC);
+ 
+diff --git a/symphonia/fuzz/fuzz_targets/decode_mpa.rs b/symphonia/fuzz/fuzz_targets/decode_mpa.rs
+index 608adf2..c3f9082 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_mpa.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_mpa.rs
+@@ -5,7 +5,7 @@ use symphonia::core::codecs::registry::RegisterableAudioDecoder;
+ use symphonia::default::codecs::MpaDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     if data.is_empty() {
+         return;
+     }
+diff --git a/symphonia/fuzz/fuzz_targets/decode_pcm.rs b/symphonia/fuzz/fuzz_targets/decode_pcm.rs
+index fd91668..3e23d0f 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_pcm.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_pcm.rs
+@@ -6,7 +6,7 @@ use symphonia::core::codecs::registry::RegisterableAudioDecoder;
+ use symphonia::default::codecs::PcmDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     if data.is_empty() {
+         return;
+     }
+diff --git a/symphonia/fuzz/fuzz_targets/decode_vorbis.rs b/symphonia/fuzz/fuzz_targets/decode_vorbis.rs
+index 90b9e44..dd33c9c 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_vorbis.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_vorbis.rs
+@@ -4,7 +4,7 @@ use symphonia::core::codecs::audio::{AudioCodecParameters, well_known::CODEC_ID_
+ use symphonia::default::codecs::VorbisDecoder;
+ use symphonia_fuzz::fuzz_audio_decoder;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     let mut codec_params = AudioCodecParameters::new();
+     codec_params.for_codec(CODEC_ID_VORBIS);
+ 
+@@ -19,7 +19,7 @@ fuzz_target!(|data: Vec<u8>| {
+         return;
+     }
+ 
+-    codec_params.extra_data = Some(data.clone().into_boxed_slice());
++    codec_params.extra_data = Some(data.to_vec().into_boxed_slice());
+ 
+     // If we successfully created a decoder (fuzzer guessed valid headers!),
+     // we try to decode an empty packet or we could try to split the data.
+diff --git a/symphonia/fuzz/fuzz_targets/demux_aiff.rs b/symphonia/fuzz/fuzz_targets/demux_aiff.rs
+index 19c39a1..5511cd3 100644
+--- a/symphonia/fuzz/fuzz_targets/demux_aiff.rs
++++ b/symphonia/fuzz/fuzz_targets/demux_aiff.rs
+@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
+ use symphonia::default::formats::AiffReader;
+ use symphonia_fuzz::fuzz_demuxer;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     fuzz_demuxer!(data, |mss, fmt: &FormatOptions, _: &MetadataOptions| AiffReader::try_new(
+         mss,
+         fmt.clone()
+diff --git a/symphonia/fuzz/fuzz_targets/demux_caf.rs b/symphonia/fuzz/fuzz_targets/demux_caf.rs
+index e52586d..11ce327 100644
+--- a/symphonia/fuzz/fuzz_targets/demux_caf.rs
++++ b/symphonia/fuzz/fuzz_targets/demux_caf.rs
+@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
+ use symphonia::default::formats::CafReader;
+ use symphonia_fuzz::fuzz_demuxer;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     fuzz_demuxer!(data, |mss, fmt: &FormatOptions, _: &MetadataOptions| CafReader::try_new(
+         mss,
+         fmt.clone()
+diff --git a/symphonia/fuzz/fuzz_targets/demux_flac.rs b/symphonia/fuzz/fuzz_targets/demux_flac.rs
+index 7c91090..04ddbf9 100644
+--- a/symphonia/fuzz/fuzz_targets/demux_flac.rs
++++ b/symphonia/fuzz/fuzz_targets/demux_flac.rs
+@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
+ use symphonia::default::formats::FlacReader;
+ use symphonia_fuzz::fuzz_demuxer;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     fuzz_demuxer!(data, |mss, fmt: &FormatOptions, _: &MetadataOptions| FlacReader::try_new(
+         mss,
+         fmt.clone()
+diff --git a/symphonia/fuzz/fuzz_targets/demux_isomp4.rs b/symphonia/fuzz/fuzz_targets/demux_isomp4.rs
+index 79dfde9..ef65051 100644
+--- a/symphonia/fuzz/fuzz_targets/demux_isomp4.rs
++++ b/symphonia/fuzz/fuzz_targets/demux_isomp4.rs
+@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
+ use symphonia::default::formats::IsoMp4Reader;
+ use symphonia_fuzz::fuzz_demuxer;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     fuzz_demuxer!(data, |mss, fmt: &FormatOptions, _: &MetadataOptions| IsoMp4Reader::try_new(
+         mss,
+         fmt.clone()
+diff --git a/symphonia/fuzz/fuzz_targets/demux_mkv.rs b/symphonia/fuzz/fuzz_targets/demux_mkv.rs
+index 02136b9..8a8e16a 100644
+--- a/symphonia/fuzz/fuzz_targets/demux_mkv.rs
++++ b/symphonia/fuzz/fuzz_targets/demux_mkv.rs
+@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
+ use symphonia::default::formats::MkvReader;
+ use symphonia_fuzz::fuzz_demuxer;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     fuzz_demuxer!(data, |mss, fmt: &FormatOptions, _: &MetadataOptions| MkvReader::try_new(
+         mss,
+         fmt.clone()
+diff --git a/symphonia/fuzz/fuzz_targets/demux_ogg.rs b/symphonia/fuzz/fuzz_targets/demux_ogg.rs
+index f2f275b..cad5928 100644
+--- a/symphonia/fuzz/fuzz_targets/demux_ogg.rs
++++ b/symphonia/fuzz/fuzz_targets/demux_ogg.rs
+@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
+ use symphonia::default::formats::OggReader;
+ use symphonia_fuzz::fuzz_demuxer;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     fuzz_demuxer!(data, |mss, fmt: &FormatOptions, _: &MetadataOptions| OggReader::try_new(
+         mss,
+         fmt.clone()
+diff --git a/symphonia/fuzz/fuzz_targets/demux_wav.rs b/symphonia/fuzz/fuzz_targets/demux_wav.rs
+index cee089b..ac4ca7d 100644
+--- a/symphonia/fuzz/fuzz_targets/demux_wav.rs
++++ b/symphonia/fuzz/fuzz_targets/demux_wav.rs
+@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
+ use symphonia::default::formats::WavReader;
+ use symphonia_fuzz::fuzz_demuxer;
+ 
+-fuzz_target!(|data: Vec<u8>| {
++fuzz_target!(|data: &[u8]| {
+     fuzz_demuxer!(data, |mss, fmt: &FormatOptions, _: &MetadataOptions| WavReader::try_new(
+         mss,
+         fmt.clone()
+diff --git a/symphonia/fuzz/src/demuxer.rs b/symphonia/fuzz/src/demuxer.rs
+index 4cdd808..5d786c4 100644
+--- a/symphonia/fuzz/src/demuxer.rs
++++ b/symphonia/fuzz/src/demuxer.rs
+@@ -5,7 +5,7 @@ macro_rules! fuzz_demuxer {
+         use symphonia::core::io::MediaSourceStream;
+         use symphonia::core::meta::MetadataOptions;
+ 
+-        let cursor = std::io::Cursor::new($data);
++        let cursor = std::io::Cursor::new($data.to_vec());
+         let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+ 
+         let format_opts = FormatOptions::default();
