@@ -1,0 +1,15 @@
+diff --git a/src/truetype/ttgxvar.c b/src/truetype/ttgxvar.c
+index fd39ecf6d..a7d3922fc 100644
+--- a/src/truetype/ttgxvar.c
++++ b/src/truetype/ttgxvar.c
+@@ -5166,6 +5166,10 @@
+       FT_FREE( blend->tuplecoords );
+       FT_FREE( blend->glyphoffsets );
+       FT_FREE( blend );
++
++      /* `ft_var_load_gvar` calls this on a failed private blend setup */
++      /* and the face stays alive; don't leave a dangling pointer.     */
++      ttface->blend = NULL;
+     }
+   }
+ 

@@ -7,3 +7,4 @@ git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/zlib" d81c2d7eb705
 git -C freetype apply ../freetype2-testing/fuzzing/settings/freetype2/ftoption.patch
 git -C freetype apply ../port-freetype-wasi-sjlj.patch
 git -C libarchive apply ../port-libarchive-stubs.patch
+git -C freetype apply ../fix-ttvarc-dangling-blend.patch
