@@ -368,7 +368,7 @@ impl Orchestrator {
         #[cfg(feature = "covexp")]
         let covexp_sink = opts.live_covexp_db.as_ref().map(|path| {
             use crate::cli::covexp::{CovexpSink, Observed};
-            let mut sink = CovexpSink::open(path, &module, "fuzz-live", None, None, false)
+            let mut sink = CovexpSink::open(path, &module, "fuzz-live", None, None, false, false)
                 .unwrap_or_else(|err| {
                     eprintln!("--live-covexp-db: {err}");
                     std::process::exit(1);

@@ -23,10 +23,16 @@ pub(crate) struct CovexpImportOpts {
     pub seed_files: Vec<String>,
     #[clap(long)]
     pub dir: Option<String>,
+    /// Database to import into. One that already holds an import of this module gets
+    /// `--group` added to it, so several corpora (the arms of an experiment) share a database.
     #[clap(long, default_value = "covexp.db")]
     pub db: PathBuf,
+    /// Group the inputs' testcases go into.
     #[clap(long, default_value = "wasmfuzz")]
     pub group: String,
+    /// Allow `--group` to name a group the database already has; the inputs are added to it.
+    #[clap(long)]
+    pub extend_group: bool,
     /// Prefix for the per-input testcase labels. Defaults to the input's file name.
     #[clap(long)]
     pub testcase_label: Option<String>,
@@ -118,9 +124,14 @@ struct PendingTestcase {
 impl CovexpSink {
     /// Open `db` and import `mod_spec`'s structure into it.
     ///
-    /// A database that already holds an import is refused unless `reset` is
-    /// set, in which case it's emptied in place: unlinking and recreating the
-    /// file would leave a running `covexp serve` reading the deleted one.
+    /// A database that already holds an import of this very module is appended
+    /// to: `group` becomes one more group next to the ones already there, which
+    /// is how the arms of an experiment end up comparable in one database. A
+    /// group of that name that is already there is refused unless `extend_group`
+    /// is set, so running an import twice doesn't double its testcases. An
+    /// import of anything else is refused unless `reset` is set, in which case
+    /// the database is emptied in place: unlinking and recreating the file
+    /// would leave a running `covexp serve` reading the deleted one.
     pub(crate) fn open(
         db: &Path,
         mod_spec: &ModuleSpec,
@@ -128,6 +139,7 @@ impl CovexpSink {
         source_root: Option<&Path>,
         strip_prefix: Option<&str>,
         reset: bool,
+        extend_group: bool,
     ) -> Result<Self, String> {
         let conn = covexp_core::schema::open(db.to_string_lossy().as_ref())
             .map_err(|err| format!("failed to open covexp db {}: {err:#}", db.display()))?;
@@ -138,10 +150,15 @@ impl CovexpSink {
             .is_empty();
         if has_import {
             if !reset {
-                return Err(format!(
-                    "covexp db {} already contains an import: reset it or point at a fresh file",
-                    db.display()
-                ));
+                return Self::append(
+                    conn,
+                    db,
+                    mod_spec,
+                    group,
+                    source_root,
+                    strip_prefix,
+                    extend_group,
+                );
             }
             clear_database(&conn)
                 .map_err(|err| format!("failed to reset covexp db {}: {err}", db.display()))?;
@@ -153,6 +170,55 @@ impl CovexpSink {
             source_root,
             strip_prefix,
         ))
+    }
+
+    /// Add `group` to a database that already holds an import.
+    ///
+    /// The structural import is deterministic and always starts from an empty
+    /// database, so replaying it into a scratch one yields the very row IDs the
+    /// first import got, if it was of this module with these path options. The
+    /// fingerprints say whether it was.
+    fn append(
+        conn: Connection,
+        db: &Path,
+        mod_spec: &ModuleSpec,
+        group: &str,
+        source_root: Option<&Path>,
+        strip_prefix: Option<&str>,
+        extend_group: bool,
+    ) -> Result<Self, String> {
+        let scratch = covexp_core::schema::open_in_memory()
+            .map_err(|err| format!("failed to create scratch covexp db: {err:#}"))?;
+        let structure = import_structure(&scratch, mod_spec, source_root, strip_prefix);
+        let fingerprint = |conn: &Connection| {
+            covexp_core::query::structure_fingerprint(conn)
+                .map_err(|err| format!("failed to read covexp db {}: {err:#}", db.display()))
+        };
+        if fingerprint(&scratch)? != fingerprint(&conn)? {
+            return Err(format!(
+                "covexp db {} already contains an import of a different module (or of this one \
+                 with other --source-root/--strip-prefix): reset it or point at a fresh file",
+                db.display()
+            ));
+        }
+        let groups = covexp_core::query::list_groups(&conn)
+            .map_err(|err| format!("failed to read covexp db {}: {err:#}", db.display()))?;
+        if !extend_group && groups.iter().any(|existing| existing.name == group) {
+            return Err(format!(
+                "covexp db {} already has a group {group:?}: pick another --group, or pass \
+                 --extend-group to add to it",
+                db.display()
+            ));
+        }
+        let group = Importer::new(&conn)
+            .add_group(group)
+            .map_err(|err| format!("failed to add group to covexp db {}: {err:#}", db.display()))?;
+        Ok(Self {
+            conn,
+            group,
+            structure,
+            pending: Vec::new(),
+        })
     }
 
     pub(crate) fn attach(
@@ -642,7 +708,7 @@ pub(crate) fn import_snapshot(
     group: &str,
     testcase_label: Option<&str>,
 ) {
-    let mut sink = CovexpSink::open(db, mod_spec.as_ref(), group, None, None, false)
+    let mut sink = CovexpSink::open(db, mod_spec.as_ref(), group, None, None, false, false)
         .unwrap_or_else(|err| {
             eprintln!("{err}");
             std::process::exit(1);
@@ -660,6 +726,7 @@ pub(crate) fn run(mod_spec: Arc<ModuleSpec>, input_paths: &[PathBuf], opts: &Cov
         opts.source_root.as_deref(),
         opts.strip_prefix.as_deref(),
         opts.reset,
+        opts.extend_group,
     )
     .unwrap_or_else(|err| {
         eprintln!("{err}");
@@ -995,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn test_covexp_open_refuses_to_clobber_an_import() {
+    fn test_covexp_open_appends_groups_but_refuses_other_modules() {
         let db =
             std::env::temp_dir().join(format!("wasmfuzz-covexp-open-{}.db", std::process::id()));
         let remove = || {
@@ -1008,15 +1075,45 @@ mod tests {
         remove();
         let mod_spec = wat_harness("nop");
         let function_count = {
-            let sink = CovexpSink::open(&db, &mod_spec, "a", None, None, false).unwrap();
+            let sink = CovexpSink::open(&db, &mod_spec, "a", None, None, false, false).unwrap();
             query::list_functions(sink.conn()).unwrap().len()
         };
-        assert!(CovexpSink::open(&db, &mod_spec, "b", None, None, false).is_err());
-        let sink = CovexpSink::open(&db, &mod_spec, "b", None, None, true).unwrap();
-        assert_eq!(
-            query::list_functions(sink.conn()).unwrap().len(),
-            function_count
-        );
+        // The same module again: a second group over the structure that's there.
+        {
+            let mut stats = Stats::default();
+            let mut sess = coverage_session(mod_spec.clone(), &mut stats);
+            sess.reset_pass_coverage();
+            let _ = sess.run(b"", &mut stats);
+            let mut sink = CovexpSink::open(&db, &mod_spec, "b", None, None, false, false).unwrap();
+            sink.add_testcase(&sess, Observed::Accumulated, Some("b0"), None);
+            assert_eq!(
+                query::list_functions(sink.conn()).unwrap().len(),
+                function_count
+            );
+            let groups = query::list_groups(sink.conn()).unwrap();
+            assert_eq!(groups.len(), 2, "{groups:?}");
+            let b = groups.iter().find(|group| group.name == "b").unwrap();
+            let covered = query::group_coverage_bitmap(sink.conn(), Some(b.id)).unwrap();
+            assert!(!covered.is_empty());
+            // The appended bitmap speaks the first import's edge IDs.
+            let fresh = import_runs(&mod_spec, &[b""]);
+            let fresh_tc = query::list_testcases(fresh.conn()).unwrap()[0].id;
+            assert_eq!(
+                covered,
+                query::testcase_coverage_bitmap(fresh.conn(), fresh_tc).unwrap()
+            );
+        }
+        // A group that's already there only takes more testcases when asked to.
+        assert!(CovexpSink::open(&db, &mod_spec, "b", None, None, false, false).is_err());
+        {
+            let sink = CovexpSink::open(&db, &mod_spec, "b", None, None, false, true).unwrap();
+            assert_eq!(query::list_groups(sink.conn()).unwrap().len(), 2);
+        }
+        // Another module's edge IDs would mean nothing here.
+        let other = wat_harness("local.get 1 if call $callee end");
+        assert!(CovexpSink::open(&db, &other, "c", None, None, false, false).is_err());
+        assert!(CovexpSink::open(&db, &other, "c", None, None, false, true).is_err());
+        let sink = CovexpSink::open(&db, &other, "c", None, None, true, false).unwrap();
         let groups = query::list_groups(sink.conn()).unwrap();
         assert_eq!(groups.len(), 1, "{groups:?}");
         drop(sink);
