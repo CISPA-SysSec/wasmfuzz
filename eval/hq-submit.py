@@ -4,6 +4,7 @@ import base64
 import csv
 import hashlib
 import json
+import itertools
 import random
 import shutil
 import subprocess
@@ -39,7 +40,9 @@ def main():
                     help="Repeatable. e.g. 'default', 'snapshot'.")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--hq-dir", default="~/hq")
-    ap.add_argument("--fuzzer", default="./target/release/wasmfuzz", help="Fuzzer path")
+    ap.add_argument("--fuzzer", action="append", default=None,
+                    help="Fuzzer path (default ./target/release/wasmfuzz); repeat to interleave several "
+                         "binaries in one job, so their arms share nodes and NUMA placement")
     ap.add_argument("--monitor", default="~/.cargo/bin/wasmfuzz", help="Monitor path")
     ap.add_argument("--timeout", default="1h", help="Length of each task")
     ap.add_argument("--monitor-interval", default="5m", help="monitor-cov sampling interval")
@@ -49,6 +52,10 @@ def main():
     ap.add_argument("--runner", default="./eval/hq-run-one.py", help="Runner script")
     ap.add_argument("--cpus", type=int, default=1,
                     help="Cores per task (the runner passes them to `wasmfuzz fuzz --cores`)")
+    ap.add_argument("--env", action="append", default=[],
+                    help="KEY=VALUE set for every task (e.g. WASMFUZZ_LOD=html); repeatable")
+    ap.add_argument("--arm-tag", default="",
+                    help="suffix for every bucket (arm name), e.g. to tell an --env arm from the plain one")
     ap.add_argument("--submit-cwd", default="/tmp", help="Working directory for 'hq submit'")
     args = ap.parse_args()
     if args.cpus < 1:
@@ -93,16 +100,19 @@ def main():
     cas_dir = hq_dir / "cas"
     cas_dir.mkdir(parents=True, exist_ok=True)
     cas_targets = {target: cas_copy_target(target, cas_dir) for target in targets}
-    cas_fuzzer = cas_copy_target(Path(args.fuzzer).expanduser(), cas_dir)
+    cas_fuzzers = [cas_copy_target(Path(f).expanduser(), cas_dir)
+                   for f in (args.fuzzer or ["./target/release/wasmfuzz"])]
     cas_monitor = cas_copy_target(Path(args.monitor).expanduser(), cas_dir)
     cas_runner = cas_copy_target(Path(args.runner).expanduser(), cas_dir)
-    fuzzer_id = cas_fuzzer.stem.split("-")[-1]
 
     tasks = []
     for _ in range(args.repeat):
         for target in targets:
-            for variant in variants:
+            for cas_fuzzer, variant in itertools.product(cas_fuzzers, variants):
+                fuzzer_id = cas_fuzzer.stem.split("-")[-1]
                 bucket_suffix, exp_arg, env_assigns = variant_to_args(variant)
+                if args.arm_tag:
+                    bucket_suffix += f"-{args.arm_tag}"
                 tasks.append({
                     "fuzzer": str(cas_fuzzer),
                     "monitor": str(cas_monitor),
@@ -114,7 +124,7 @@ def main():
                     "corpora_dir": args.corpora_dir,
                     "crash_corpora_dir": args.crash_corpora_dir,
                     "experiment_arg": exp_arg,
-                    "env_assignments": env_assigns,
+                    "env_assignments": " ".join(filter(None, [env_assigns, *args.env])),
                 })
     random.shuffle(tasks)
 
@@ -128,7 +138,7 @@ def main():
             '--task-dir',
             '--time-request', args.timeout,
             '--cpus', str(args.cpus),
-            '--name', f"{cas_fuzzer.stem}-{'-'.join(variants)}",
+            '--name', f"{'+'.join(f.stem for f in cas_fuzzers)}-{'-'.join(variants)}",
             str(cas_runner)],
             cwd=Path(args.submit_cwd).expanduser())
 

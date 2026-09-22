@@ -17,7 +17,7 @@ _terminate_signal = 0
 _children: list["Child"] = []
 
 CGROUP_MOUNT = Path("/sys/fs/cgroup")
-FINAL_REPORT_SLACK_SECONDS = 120
+FINAL_REPORT_SLACK_SECONDS = 300
 
 
 def read_self_cgroup_v2() -> Path:
