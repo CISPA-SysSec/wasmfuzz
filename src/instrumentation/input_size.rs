@@ -72,7 +72,9 @@ impl KVInstrumentationPass for InputSizePass {
         let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
         let cost_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
         let zero = ctx.bcx.ins().iconst(ir::types::I16, 0);
-        ctx.bcx.ins().store(MemFlagsData::trusted(), zero, cost_ptr, 0);
+        ctx.bcx
+            .ins()
+            .store(MemFlagsData::trusted(), zero, cost_ptr, 0);
     }
 
     fn instrument_fuzz_trampoline(

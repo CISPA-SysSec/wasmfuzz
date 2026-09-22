@@ -421,7 +421,9 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             // traps before we dispatch to a bad pointer
             let sig_offset = bcx.ins().imul_imm_u(callee_idx, 4);
             let sig_addr = bcx.ins().iadd(sig_ptr, sig_offset);
-            let slot_sig = bcx.ins().load(I32, ir::MemFlagsData::trusted(), sig_addr, 0);
+            let slot_sig = bcx
+                .ins()
+                .load(I32, ir::MemFlagsData::trusted(), sig_addr, 0);
             let want_sig = bcx.ins().iconst(I32, expected_sig);
             let sig_mismatch = bcx.ins().icmp(IntCC::NotEqual, slot_sig, want_sig);
             bcx.ins().trapnz(

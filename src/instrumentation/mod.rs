@@ -484,7 +484,9 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice + FeedbackLatticeCodegen>
                 0,
             );
             let val = <V as FeedbackLatticeCodegen>::unify(val, prev, ctx.bcx);
-            ctx.bcx.ins().store(MemFlagsData::trusted(), val, slot_ptr, 0);
+            ctx.bcx
+                .ins()
+                .store(MemFlagsData::trusted(), val, slot_ptr, 0);
         }
     }
 }

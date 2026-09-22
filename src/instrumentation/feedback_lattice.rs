@@ -110,14 +110,18 @@ impl<K: Ord + Clone> AssociatedCoverageArray<K, ValueRange> {
                 .bcx
                 .ins()
                 .load(ir::types::I64, MemFlagsData::trusted(), slot_ptr, 0);
-            let prev_high = ctx
-                .bcx
-                .ins()
-                .load(ir::types::I64, MemFlagsData::trusted(), slot_ptr, 8);
+            let prev_high =
+                ctx.bcx
+                    .ins()
+                    .load(ir::types::I64, MemFlagsData::trusted(), slot_ptr, 8);
             let low = ctx.bcx.ins().umin(val, prev_low);
             let high = ctx.bcx.ins().umax(val, prev_high);
-            ctx.bcx.ins().store(MemFlagsData::trusted(), low, slot_ptr, 0);
-            ctx.bcx.ins().store(MemFlagsData::trusted(), high, slot_ptr, 8);
+            ctx.bcx
+                .ins()
+                .store(MemFlagsData::trusted(), low, slot_ptr, 0);
+            ctx.bcx
+                .ins()
+                .store(MemFlagsData::trusted(), high, slot_ptr, 8);
         }
     }
 }
@@ -280,11 +284,17 @@ impl<const N: usize, K: Ord + Clone> AssociatedCoverageArray<K, ValueSet<N>> {
 
         match ty {
             ir::types::F32 => {
-                val = ctx.bcx.ins().bitcast(ir::types::I32, MemFlagsData::new(), val);
+                val = ctx
+                    .bcx
+                    .ins()
+                    .bitcast(ir::types::I32, MemFlagsData::new(), val);
                 val = ctx.bcx.ins().uextend(ir::types::I64, val);
             }
             ir::types::F64 => {
-                val = ctx.bcx.ins().bitcast(ir::types::I64, MemFlagsData::new(), val);
+                val = ctx
+                    .bcx
+                    .ins()
+                    .bitcast(ir::types::I64, MemFlagsData::new(), val);
             }
             ir::types::I64 => {}
             _ => val = ctx.bcx.ins().uextend(ir::types::I64, val),
