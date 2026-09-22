@@ -3,3 +3,4 @@ git clone-rev.sh https://gitlab.gnome.org/GNOME/libxml2.git "$PROJECT/libxml2" c
 git clone-rev.sh https://github.com/libarchive/libarchive.git "$PROJECT/libarchive" caacb791cc9487eacc2a8826875871a77f57bdf0
 git -C "$PROJECT/libxml2" apply ../port-libxml2-stub-dup.patch
 git -C "$PROJECT/libarchive" apply ../port-libarchive-stubs.patch
+git -C "$PROJECT/libarchive" apply ../fix-stale-errno-in-string-conversion.patch

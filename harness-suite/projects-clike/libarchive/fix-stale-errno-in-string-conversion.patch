@@ -1,0 +1,60 @@
+diff --git a/libarchive/archive_string.c b/libarchive/archive_string.c
+index d30c0f63..b5d6b130 100644
+--- a/libarchive/archive_string.c
++++ b/libarchive/archive_string.c
+@@ -2023,6 +2023,7 @@ archive_strncat_l(struct archive_string *as, const void *_p, size_t n,
+ 	const void *s;
+ 	size_t length = 0;
+ 	int i, r = 0, r2;
++	errno = 0;	/* callers check errno == ENOMEM after a failure */
+ 
+ 	if (_p != NULL && n > 0) {
+ 		if (sc != NULL && (sc->flag & SCONV_FROM_UTF16))
+@@ -3956,6 +3957,7 @@ archive_mstring_get_utf8(struct archive *a, struct archive_mstring *aes,
+ {
+ 	struct archive_string_conv *sc;
+ 	int r;
++	errno = 0;	/* callers check errno == ENOMEM after a failure */
+ 
+ 	/* If we already have a UTF8 form, return that immediately. */
+ 	if (aes->aes_set & AES_SET_UTF8) {
+@@ -4017,6 +4019,7 @@ archive_mstring_get_mbs(struct archive *a, struct archive_mstring *aes,
+ {
+ 	struct archive_string_conv *sc;
+ 	int r, ret = 0;
++	errno = 0;	/* callers check errno == ENOMEM after a failure */
+ 
+ 	/* If we already have an MBS form, return that immediately. */
+ 	if (aes->aes_set & AES_SET_MBS) {
+@@ -4063,6 +4066,7 @@ archive_mstring_get_wcs(struct archive *a, struct archive_mstring *aes,
+     const wchar_t **wp)
+ {
+ 	int r, ret = 0;
++	errno = 0;	/* callers check errno == ENOMEM after a failure */
+ 
+ 	(void)a;/* UNUSED */
+ 	/* Return WCS form if we already have it. */
+@@ -4122,6 +4126,7 @@ archive_mstring_get_mbs_l(struct archive *a, struct archive_mstring *aes,
+     const char **p, size_t *length, struct archive_string_conv *sc)
+ {
+ 	int ret = 0;
++	errno = 0;	/* callers check errno == ENOMEM after a failure */
+ #if defined(_WIN32) && !defined(__CYGWIN__)
+ 	int r;
+ 
+@@ -4249,6 +4254,7 @@ archive_mstring_copy_mbs_len_l(struct archive_mstring *aes,
+     const char *mbs, size_t len, struct archive_string_conv *sc)
+ {
+ 	int r;
++	errno = 0;	/* callers check errno == ENOMEM after a failure */
+ 
+ 	if (mbs == NULL) {
+ 		aes->aes_set = 0;
+@@ -4343,6 +4349,7 @@ archive_mstring_update_utf8(struct archive *a, struct archive_mstring *aes,
+ {
+ 	struct archive_string_conv *sc;
+ 	int r;
++	errno = 0;	/* callers check errno == ENOMEM after a failure */
+ 
+ 	if (utf8 == NULL) {
+ 		aes->aes_set = 0;
