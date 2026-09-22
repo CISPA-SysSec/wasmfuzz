@@ -13,6 +13,7 @@ pub mod signals;
 pub mod tracing;
 pub mod util;
 pub mod vmcontext;
+pub mod wasi;
 
 use std::{
     collections::BTreeSet,

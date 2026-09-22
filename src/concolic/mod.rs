@@ -920,6 +920,20 @@ impl ConcolicContext {
             .copy_within((src as usize)..(src as usize + len as usize), dst as usize);
     }
 
+    // Shadow labels of a guest memory range, for host code that copies
+    // guest bytes elsewhere (e.g. into an emulated file).
+    pub(crate) fn heap_shadow_read(&mut self, pos: u32, len: u32) -> Vec<SymValRef> {
+        self.ensure_heap_init_for(pos, len);
+        self.heap[pos as usize..][..len as usize].to_vec()
+    }
+
+    // Counterpart of `heap_shadow_read`: host code wrote `labels.len()` bytes
+    // to guest memory at `pos` and knows their labels.
+    pub(crate) fn heap_shadow_write(&mut self, pos: u32, labels: &[SymValRef]) {
+        self.ensure_heap_init_for(pos, labels.len() as u32);
+        self.heap[pos as usize..][..labels.len()].copy_from_slice(labels);
+    }
+
     fn ensure_heap_init_for(&mut self, pos: u32, len: u32) {
         if self.heap.len() < pos as usize + len as usize {
             self.heap

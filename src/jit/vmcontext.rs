@@ -47,6 +47,8 @@ pub(crate) struct VMContext {
     pub host_ptrs_backing: RefCell<Vec<usize>>,
     pub tainted: bool,
     pub random_get_seed: u64,
+    // In-memory WASI filesystem, wiped on every restore. See `jit::wasi`.
+    pub memfs: super::wasi::MemFs,
 }
 
 // Snapshot/restore strategy for the guest heap. Override with
@@ -197,6 +199,7 @@ impl VMContext {
             concolic: ConcolicContext::new(module.globals.len()),
             tainted: false,
             random_get_seed: 0xdeadbeefdeadbeef,
+            memfs: Default::default(),
         })
     }
 
@@ -217,6 +220,15 @@ impl VMContext {
     // restore leaves stale bytes behind.
     pub(crate) fn mark_heap_dirty(&mut self, offset: usize, len: usize) {
         self.heap_alloc.mark_dirty(offset, len);
+    }
+
+    // Bounds-checked read-only view of a guest memory range.
+    pub(crate) fn heap_ref(&mut self, offset: usize, len: usize) -> Option<&[u8]> {
+        let end = offset.checked_add(len)?;
+        if end > self.heap_alloc.accessible_size() {
+            return None;
+        }
+        Some(&self.heap_alloc.as_slice()[offset..end])
     }
 
     // Hands out a writable slice of guest memory and marks it dirty. Returns
@@ -250,6 +262,7 @@ impl VMContext {
         self.input_size = 0;
         self.tainted = false;
         self.random_get_seed = 0xdeadbeefdeadbeef;
+        self.memfs.reset();
     }
 
     /// Resets the instance

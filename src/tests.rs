@@ -101,6 +101,38 @@ impl TestModule {
         Self::compile_simple_rust_expr("path-cov-test", &expr)
     }
 
+    // Round-trips the input through the emulated WASI filesystem: write it to
+    // a file, read it back through a fresh handle, compare against a magic.
+    fn file_roundtrip_u64_cmp() -> Self {
+        Self::compile_simple_rust_expr(
+            "file-roundtrip-u64-cmp",
+            "{
+                use std::io::{Read, Seek, SeekFrom, Write};
+                if data.len() != 8 { return; }
+                // a stale file from a previous execution must never be visible
+                assert!(std::fs::metadata(\"/tmp/roundtrip.bin\").is_err());
+                assert!(std::fs::read(\"/tmp/never-written\").is_err());
+                let mut f = std::fs::File::create(\"/tmp/roundtrip.bin\").unwrap();
+                f.write_all(&data[..4]).unwrap();
+                f.write_all(&data[4..]).unwrap();
+                drop(f);
+                let mut f = std::fs::File::open(\"/tmp/roundtrip.bin\").unwrap();
+                let mut tail = [0u8; 4];
+                f.seek(SeekFrom::Start(4)).unwrap();
+                f.read_exact(&mut tail).unwrap();
+                f.seek(SeekFrom::Start(0)).unwrap();
+                let mut all = Vec::new();
+                f.read_to_end(&mut all).unwrap();
+                assert_eq!(all.len(), 8);
+                assert_eq!(&all[4..], &tail);
+                assert_eq!(std::fs::metadata(\"/tmp/roundtrip.bin\").unwrap().len(), 8);
+                std::fs::remove_file(\"/tmp/roundtrip.bin\").unwrap();
+                assert!(std::fs::metadata(\"/tmp/roundtrip.bin\").is_err());
+                u64::from_be_bytes(all.try_into().unwrap()) == 0xdeadbeefcafebabe
+            }",
+        )
+    }
+
     fn input_len_eq_2048() -> Self {
         Self::compile_simple_rust_expr("input-len-eq-2048", "data.len() == 2048")
     }
@@ -609,6 +641,56 @@ fn test_path_cov() {
         opts.i.path_hash_edge = true.into();
     })
     .assert_solves(TestModule::path_cov_test(), 5_000_000);
+}
+
+#[test]
+fn test_wasi_memfs_roundtrip_solves_with_cmplog() {
+    Fuzzer::with_config(|opts| {
+        opts.i.cov_funcs = true.into();
+        opts.i.cmpcov_hamming = false.into();
+        opts.x.use_cmplog = true.into();
+    })
+    .assert_solves(TestModule::file_roundtrip_u64_cmp(), 300_000);
+}
+
+// Bytes that went through the emulated filesystem must keep their concolic
+// labels, so the final comparison shows up as a symbolic path constraint.
+#[test]
+fn test_wasi_memfs_keeps_concolic_labels() {
+    let test_module = TestModule::file_roundtrip_u64_cmp();
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    let mut stats = Stats::default();
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(crate::jit::FeedbackOptions {
+            live_funcs: true,
+            ..crate::jit::FeedbackOptions::nothing()
+        })
+        .tracing(crate::jit::TracingOptions {
+            concolic: true,
+            ..Default::default()
+        })
+        .build();
+    sess.initialize(&mut stats);
+    sess.run_tracing_fresh(&[1, 2, 3, 4, 5, 6, 7, 8], &mut stats)
+        .expect("tracing run should not trap");
+    let vmctx = &sess.tracing_stage.instance.as_ref().unwrap().vmctx;
+    let symbolic_branches = vmctx
+        .concolic
+        .events
+        .iter()
+        .filter(|ev| {
+            matches!(
+                ev,
+                crate::concolic::ConcolicEvent::PathConstraint { condition, .. }
+                    if !condition.is_concrete()
+            )
+        })
+        .count();
+    assert!(
+        symbolic_branches > 0,
+        "no symbolic path constraint after file round trip: {:?}",
+        vmctx.concolic.events
+    );
 }
 
 #[test]

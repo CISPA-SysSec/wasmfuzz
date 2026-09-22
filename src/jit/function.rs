@@ -12,11 +12,10 @@ use ir::types::{I32, I64, Type};
 use wasmparser::FuncType;
 
 use super::{
-    CompilationKind, CompilationOptions,
+    CompilationOptions,
     builtins::{
-        builtin_debug_wasmfuzz_write_stdout, builtin_memory_copy, builtin_memory_fill,
-        builtin_memory_grow, builtin_memory_size, builtin_random_get,
-        builtin_trace_wasmfuzz_write_stdout, fetch_vmctx, signature, translate_debug_log,
+        builtin_memory_copy, builtin_memory_fill, builtin_memory_grow, builtin_memory_size,
+        builtin_random_get, fetch_vmctx, signature, translate_debug_log,
     },
     concolic::{
         translate_build_concolic_binop, translate_build_concolic_memory_load,
@@ -596,107 +595,6 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                     translate_concolic_memory_copy(dst_pos, src_pos, len, self, bcx);
                 }
             }
-            "wasi_snapshot_preview1::fd_write" => {
-                /*
-                int fd_write(int fd, __wasi_ciovec_t* iovs, int iovs_len, int* nwritten);
-                typedef struct __wasi_ciovec_t {
-                    const void *buf;
-                    size_t buf_len;
-                } __wasi_ciovec_t;
-                */
-                let nwritten_addr = self.pop1(I32, bcx);
-                let iovs_len = self.pop1(I32, bcx);
-                let iovs_addr = self.pop1(I32, bcx);
-                let _fd = self.pop1(I32, bcx);
-
-                let block = bcx.create_block();
-                let block_iovs_addr = bcx.append_block_param(block, I32);
-                let block_iovs_len = bcx.append_block_param(block, I32);
-                let block_count = bcx.append_block_param(block, I32);
-
-                let end = bcx.create_block();
-                let end_count = bcx.append_block_param(end, I32);
-
-                let zero = bcx.ins().iconst(I32, 0);
-                bcx.ins()
-                    .jump(block, &[iovs_addr.into(), iovs_len.into(), zero.into()]);
-
-                bcx.switch_to_block(block);
-
-                // Note: This is not correct but is probably fine.
-                self.set_concolic_concrete(I32, block_iovs_addr, bcx);
-                self.set_concolic_concrete(I32, block_iovs_len, bcx);
-                self.set_concolic_concrete(I32, block_count, bcx);
-
-                // write_stdout(iovs[0]->buf, iovs[0]->len);
-                self.push1(I32, block_iovs_addr);
-                translate_memory(&MemoryInstruction::I32Load(memarg_offset(0)), self, bcx); // iovs[0]->buf
-                self.push1(I32, block_iovs_addr);
-                translate_memory(&MemoryInstruction::I32Load(memarg_offset(4)), self, bcx); // iovs[0]->len
-
-                let iov_len = self.pop1(I32, bcx);
-                let iov_ptr = self.pop1(I32, bcx);
-
-                match self.options.kind {
-                    CompilationKind::Reusable => {
-                        if std::env::var("STDOUTDEBUG")
-                            .as_ref()
-                            .map(|x| &**x)
-                            .unwrap_or("0")
-                            == "1"
-                        {
-                            self.host_call(
-                                bcx,
-                                builtin_debug_wasmfuzz_write_stdout
-                                    as unsafe extern "C" fn(_, _, _),
-                                &[iov_ptr, iov_len],
-                            );
-                        }
-                    }
-                    CompilationKind::Tracing => {
-                        if self.options.tracing.stdout {
-                            self.host_call(
-                                bcx,
-                                builtin_trace_wasmfuzz_write_stdout
-                                    as unsafe extern "C" fn(_, _, _),
-                                &[iov_ptr, iov_len],
-                            );
-                        }
-                    }
-                }
-
-                // count += iovs[0]->len;
-                let count = bcx.ins().iadd(block_count, iov_len);
-
-                // iovs = &iovs[1] (+= 8)
-                let iovs = bcx.ins().iadd_imm_u(block_iovs_addr, 8);
-
-                // iov_len -= 1
-                let one = bcx.ins().iconst(I32, 1);
-                let iovs_len = bcx.ins().isub(block_iovs_len, one);
-
-                // if (iov_len == 0) break;
-                bcx.ins().brif(
-                    iovs_len,
-                    block,
-                    &[iovs.into(), iovs_len.into(), count.into()],
-                    end,
-                    &[count.into()],
-                );
-
-                bcx.seal_block(block);
-                bcx.seal_block(end);
-                bcx.switch_to_block(end);
-                self.set_concolic_concrete(I32, end_count, bcx);
-
-                // *nwritten = count;
-                self.push1(I32, nwritten_addr);
-                self.push1(I32, end_count);
-                translate_memory(&MemoryInstruction::I32Store(memarg_offset(0)), self, bcx);
-
-                // return success
-                self.push_i32(0, bcx);
-            }
             "wasi_snapshot_preview1::clock_time_get" => {
                 // consume arguments
                 let time_ptr = self.pop1(I32, bcx);
@@ -718,11 +616,6 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 // return 0 (indicate success)
                 self.push_i32(0, bcx);
             }
-            "wasi_snapshot_preview1::fd_fdstat_get" => {
-                // error out, only used for isatty?
-                self.adjust_pop_push(&[I32, I32], &[]);
-                self.push_i32(1, bcx);
-            }
             "wasi_snapshot_preview1::environ_sizes_get" => {
                 let environ_buf_size_addr = self.pop1(I32, bcx);
                 let environ_count_addr = self.pop1(I32, bcx);
@@ -738,11 +631,6 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 translate_memory(&MemoryInstruction::I32Store(memarg_offset(0)), self, bcx);
                 // success
                 self.push_i32(0, bcx);
-            }
-            "wasi_snapshot_preview1::fd_prestat_get" => {
-                // ignore args and return __WASI_ERRNO_BADF (8)
-                self.adjust_pop_push(&[I32, I32], &[]);
-                self.push_i32(8, bcx);
             }
             "wasi_snapshot_preview1::random_get" => {
                 // fill the buffer with a pseudo-random but static sequence generated
@@ -763,6 +651,10 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             "wasmfuzz::exit_testcase" => {
                 self.trap_here(TrapKind::ExitTestcase(Some(self.loc())), bcx);
             }
+
+            name if name
+                .strip_prefix("wasi_snapshot_preview1::")
+                .is_some_and(|n| self.translate_wasi_fs(n, bcx)) => {}
 
             _ => {
                 self.adjust_pop_push_fty(ty.unwrap());
@@ -1097,6 +989,7 @@ mod fn_sig_impls {
     impl_ty!(u16 => I16);
     impl_ty!(u32 => I32);
     impl_ty!(u64 => I64);
+    impl_ty!(i64 => I64);
     impl_ty!(usize => I64);
 
     impl_ty!(UnaryOp => I8);

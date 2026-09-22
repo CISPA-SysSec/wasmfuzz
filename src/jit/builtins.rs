@@ -151,36 +151,6 @@ pub(crate) fn fetch_vmctx(bcx: &mut FunctionBuilder) -> Value {
         .expect("Missing vmctx parameter")
 }
 
-pub(crate) unsafe extern "C" fn builtin_trace_wasmfuzz_write_stdout(
-    buf: u32,
-    n: u32,
-    vmctx: *mut VMContext,
-) {
-    unsafe {
-        let vmctx = &mut *vmctx;
-        let buf = &vmctx.heap()[buf as usize..][..n as usize].to_vec();
-        assert!(buf.len() == n as usize);
-        if !buf.is_empty() {
-            vmctx.feedback.stdout.extend_from_slice(buf);
-        }
-    }
-}
-
-pub(crate) unsafe extern "C" fn builtin_debug_wasmfuzz_write_stdout(
-    buf: u32,
-    n: u32,
-    vmctx: *mut VMContext,
-) {
-    unsafe {
-        let vmctx = &mut *vmctx;
-        let buf = &vmctx.heap()[buf as usize..][..n as usize].to_vec();
-        assert!(buf.len() == n as usize);
-        if !buf.is_empty() {
-            eprintln!("[STDOUT] {:?}", String::from_utf8_lossy(buf));
-        }
-    }
-}
-
 unsafe extern "C" fn builtin_debug_log(idx: u32, vmctx: *mut VMContext) {
     unsafe {
         let vmctx = &mut *vmctx;
