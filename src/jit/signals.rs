@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     sync::Once,
 };
 
@@ -152,6 +152,40 @@ thread_local! {
     static TRAP_INFO: Cell<Option<TrapInfo>> = const { Cell::new(None) };
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     static INSTALL: Once = const { Once::new() };
+}
+
+// How much stack space to reserve for host calls made from JITted code.
+const HOST_STACK_RESERVE: usize = 1 << 20;
+
+thread_local! {
+    static STACK_LIMIT: OnceCell<usize> = const { OnceCell::new() };
+}
+
+/// The lowest native stack address guest code on this thread may use: the
+/// thread's stack bottom (as reported by pthread) plus a host reserve.
+/// 0 (no limit) if the bounds can't be determined.
+pub(crate) fn guest_stack_limit() -> usize {
+    STACK_LIMIT.with(|x| {
+        *x.get_or_init(|| {
+            let limit = unsafe {
+                let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+                if libc::pthread_getattr_np(libc::pthread_self(), &mut attr) != 0 {
+                    0
+                } else {
+                    let mut addr = std::ptr::null_mut();
+                    let mut size = 0;
+                    let ok = libc::pthread_attr_getstack(&attr, &mut addr, &mut size) == 0;
+                    libc::pthread_attr_destroy(&mut attr);
+                    if !ok || addr.is_null() || size == 0 {
+                        0
+                    } else {
+                        addr as usize + HOST_STACK_RESERVE.min(size / 10)
+                    }
+                }
+            };
+            limit
+        })
+    })
 }
 
 pub(crate) unsafe fn raise_trap(trap_reason: TrapReason) -> ! {

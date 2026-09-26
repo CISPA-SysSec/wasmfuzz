@@ -404,6 +404,33 @@ impl<'s> ModuleTranslator<'s> {
             }
         }
 
+        let makes_calls = func.operators.iter().any(|op| {
+            matches!(
+                op,
+                crate::ir::WFOperator::Control(
+                    crate::ir::ControlInstruction::Call { .. }
+                        | crate::ir::ControlInstruction::CallIndirect { .. }
+                )
+            )
+        });
+        // We avoid stack overflows by checking against a pre-determined stack
+        // limit in functions that could make recursive calls. Notably,
+        // `makes_calls` could be improved to detect actual candiates for
+        // recursion, but the overhead is just a load-and-compare.
+        if makes_calls {
+            let vmctx = functrans.get_vmctx(&mut bcx);
+            let limit = bcx.ins().load(
+                frontend_config.pointer_type(),
+                MemFlagsData::trusted(),
+                vmctx,
+                std::mem::offset_of!(VMContext, stack_limit) as i32,
+            );
+            let sp = bcx.ins().get_stack_pointer(frontend_config.pointer_type());
+            let below = bcx.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
+            let trap_code = functrans.get_trap_code(TrapKind::Abort(AbortCode::StackOverflow));
+            bcx.ins().trapnz(below, trap_code);
+        }
+
         if options.verbose {
             println!("/ {}", func.symbol);
         }

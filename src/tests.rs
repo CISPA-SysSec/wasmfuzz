@@ -185,6 +185,26 @@ impl TestModule {
         )
     }
 
+    // Unbounded recursion when the first input byte is 1. The recursive
+    // function takes more integer parameters than fit in registers, so the
+    // trailing vmctx parameter is passed on the native stack.
+    fn recurse_on_one() -> Self {
+        Self::from_wat(
+            "recurse-on-one",
+            r#"(module
+                (memory 2)
+                (func $rec (param i32 i32 i32 i32 i32 i32 i32 i32)
+                    (call $rec (local.get 0) (local.get 1) (local.get 2) (local.get 3)
+                               (local.get 4) (local.get 5) (local.get 6) (local.get 7)))
+                (func (export "malloc") (param $size i32) (result i32) (i32.const 0))
+                (func (export "LLVMFuzzerTestOneInput") (param $ptr i32) (param $len i32)
+                    (if (i32.eq (i32.load8_u (local.get $ptr)) (i32.const 1))
+                        (then (call $rec (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+                                         (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))))
+            )"#,
+        )
+    }
+
     // A store and a load that both carry a non-zero `offset=` immediate, at
     // addresses that don't depend on the input. The effective addresses are
     // 16 + 0x2000 and 32 + 0x3000.
@@ -430,6 +450,24 @@ fn test_symcache_resolves_two_modules_on_one_thread() {
 // novel even when it sits inside the range the range pass already covers -- and
 // should stop doing so once the site has collected more values than the set can
 // hold.
+// Guest recursion that exhausts the native stack is reported as a stack-overflow
+// abort, not a fault at an unregistered pc, and the session keeps running inputs
+// afterwards.
+#[test]
+fn test_unbounded_recursion_traps_as_stack_overflow() {
+    let test_module = TestModule::recurse_on_one();
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    let mut stats = Stats::default();
+    let mut sess = JitFuzzingSession::builder(mod_spec).build();
+    sess.initialize(&mut stats);
+    assert_eq!(sess.run(&[0], &mut stats).trap_kind, None);
+    assert_eq!(
+        sess.run(&[1], &mut stats).trap_kind,
+        Some(TrapKind::Abort(AbortCode::StackOverflow))
+    );
+    assert_eq!(sess.run(&[0], &mut stats).trap_kind, None);
+}
+
 #[test]
 fn test_instrumentation_call_params_value_set() {
     let test_module = TestModule::call_param_byte();

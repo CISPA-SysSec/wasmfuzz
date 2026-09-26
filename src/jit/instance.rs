@@ -45,6 +45,7 @@ impl ModuleInstance {
         tracy_full::zone!("ModuleInstance::enter");
         assert!(!self.vmctx.tainted);
         self.vmctx.fuel = self.vmctx.fuel_init;
+        self.vmctx.stack_limit = super::signals::guest_stack_limit();
         let vmctx_ptr = (&mut *self.vmctx) as *mut VMContext;
         // Safety: closure shouldn't and doesn't capture any Drops
         //         vmctx_ptr needs to be valid and ABI should match

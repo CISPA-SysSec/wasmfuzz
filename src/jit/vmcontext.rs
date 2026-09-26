@@ -21,6 +21,7 @@ pub(crate) struct VMContext {
     pub heap_dirty_map: *mut u8,
     pub host_ptrs: *const usize,
     pub fuel: u64,
+    pub stack_limit: usize,
     // ^^ Note: These fields are accessed by JITted code ^^
     pub fuel_init: u64,
     pub heap_alloc: Box<dyn ResettableMapping>,
@@ -181,6 +182,7 @@ impl VMContext {
             heap_pages_limit_hard: crate::MEMORY_PAGES_LIMIT,
             heap_pages_limit_module: module.initial_mem_pages_max.unwrap_or(u32::MAX),
             fuel: 0,
+            stack_limit: 0,
             fuel_init: u32::MAX as u64,
             heap_pages_snapshot: module.initial_mem_pages as u32,
             heap_alloc,
