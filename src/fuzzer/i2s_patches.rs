@@ -297,25 +297,8 @@ where
                 }
             }
             CmpLog::Memcmp(a, b) => {
-                'outer: for i in off..len {
-                    let mut size = core::cmp::min(a.len(), len - i);
-                    while size != 0 {
-                        if a[0..size] == input.mutator_bytes()[i..i + size] {
-                            input.mutator_bytes_mut()[i..i + size].copy_from_slice(&b[0..size]);
-                            result = MutationResult::Mutated;
-                            break 'outer;
-                        }
-                        size -= 1;
-                    }
-                    size = core::cmp::min(b.len(), len - i);
-                    while size != 0 {
-                        if b[0..size] == input.mutator_bytes()[i..i + size] {
-                            input.mutator_bytes_mut()[i..i + size].copy_from_slice(&b[0..size]);
-                            result = MutationResult::Mutated;
-                            break 'outer;
-                        }
-                        size -= 1;
-                    }
+                if patch_memcmp(input.mutator_bytes_mut(), off, a, b) {
+                    result = MutationResult::Mutated;
                 }
             }
         }
@@ -332,8 +315,58 @@ where
     }
 }
 
+/// Looks for a prefix of either memcmp operand in `bytes`, starting at `off`,
+/// and replaces it with the corresponding prefix of the other operand.
+fn patch_memcmp(bytes: &mut [u8], off: usize, a: &[u8], b: &[u8]) -> bool {
+    let len = bytes.len();
+    let max_size = core::cmp::min(a.len(), b.len());
+    for i in off..len {
+        for size in (1..=core::cmp::min(max_size, len - i)).rev() {
+            let window = &mut bytes[i..i + size];
+            if *window == a[..size] {
+                window.copy_from_slice(&b[..size]);
+                return true;
+            }
+        }
+        for size in (1..=core::cmp::min(max_size, len - i)).rev() {
+            let window = &mut bytes[i..i + size];
+            if *window == b[..size] {
+                window.copy_from_slice(&a[..size]);
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl Named for I2SRandReplace {
     fn name(&self) -> &Cow<'static, str> {
         &Cow::Borrowed("I2SRandReplace")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::patch_memcmp;
+
+    #[test]
+    fn test_patch_memcmp_both_directions() {
+        // input holds the first operand
+        let mut bytes = *b"xxMAGICxx";
+        assert!(patch_memcmp(&mut bytes, 0, b"MAGIC", b"hello"));
+        assert_eq!(&bytes, b"xxhelloxx");
+
+        // input holds the second operand, as in `memcmp(CONST, input)`
+        let mut bytes = *b"xxhelloxx";
+        assert!(patch_memcmp(&mut bytes, 0, b"MAGIC", b"hello"));
+        assert_eq!(&bytes, b"xxMAGICxx");
+
+        // partial match at the end of the input
+        let mut bytes = *b"xxxhel";
+        assert!(patch_memcmp(&mut bytes, 0, b"MAGIC", b"hello"));
+        assert_eq!(&bytes, b"xxxMAG");
+
+        let mut bytes = *b"zzzzz";
+        assert!(!patch_memcmp(&mut bytes, 0, b"MAGIC", b"hello"));
     }
 }
