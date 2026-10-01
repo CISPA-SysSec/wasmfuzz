@@ -26,8 +26,12 @@ pub trait MemFlagsExt {
 }
 
 impl MemFlagsExt for MemFlagsData {
+    /// Flags for loads of values that never change while JIT code runs (VMContext
+    /// fields such as `heap` and `host_ptrs`, and the `host_ptrs` entries).
+    /// `can_move` lets Cranelift deduplicate these loads and hoist them out of
+    /// loops; without it, every instrumentation site reloads its pointers.
     fn trusted_ro() -> MemFlagsData {
-        Self::trusted().with_readonly()
+        Self::trusted().with_readonly().with_can_move()
     }
 }
 
