@@ -148,9 +148,19 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             state.if_params.insert(state.ip, params);
             let cont = state.block(state.ip, bcx);
 
+            let then_block = bcx.create_block();
             let intermediate_block = bcx.create_block();
-            bcx.ins().brif(cond, cont, &[], intermediate_block, &[]);
+            bcx.ins()
+                .brif(cond, then_block, &[], intermediate_block, &[]);
+            bcx.seal_block(then_block);
             bcx.seal_block(intermediate_block);
+
+            bcx.switch_to_block(then_block);
+            let edge = crate::instrumentation::Edge::new(state.fidx, state.ip, state.ip.inc());
+            state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
+            if !state.dead(bcx) {
+                bcx.ins().jump(cont, &[]);
+            }
 
             bcx.switch_to_block(intermediate_block);
             if let Some(else_index) = else_operator_index {
@@ -162,11 +172,14 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 }
                 bcx.seal_block(else_block);
             } else {
-                // No else arm: the false edge skips to the `end`, passing the
-                // if's params through as its results (validation ensures they
-                // have the same types).
-                let edge =
-                    crate::instrumentation::Edge::new(state.fidx, state.ip, *end_operator_index);
+                // No else arm: the false edge skips to after the `end`, passing
+                // the if's params through as its results (validation ensures
+                // they have the same types).
+                let edge = crate::instrumentation::Edge::new(
+                    state.fidx,
+                    state.ip,
+                    end_operator_index.inc(),
+                );
                 state.iter_passes(bcx, |pass, ctx| pass.instrument_edge(edge, ctx));
                 let end_block = state.block(*end_operator_index, bcx);
                 let mut params = state.peekn(param_tys.len(), bcx);

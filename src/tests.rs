@@ -561,6 +561,48 @@ fn test_block_values() {
     }
 }
 
+// Both arms of every `if` (with and without else) are distinct edges, and
+// every edge the CFG reports is reachable.
+#[test]
+fn test_if_edges_covered() {
+    use crate::instrumentation::EdgeCoveragePass;
+    let test_module = TestModule::from_wat(
+        "if-edges",
+        r#"(module
+            (memory 1)
+            (global $g (mut i32) (i32.const 0))
+            (func (export "malloc") (param i32) (result i32) (i32.const 0))
+            (func (export "LLVMFuzzerTestOneInput") (param $ptr i32) (param $len i32)
+                (if (local.get $len) (then (global.set $g (i32.const 1))))
+                (if (i32.gt_u (local.get $len) (i32.const 1))
+                    (then (global.set $g (i32.const 2)))
+                    (else (global.set $g (i32.const 3)))))
+        )"#,
+    );
+    let opts = Fuzzer::with_config(|opts| {
+        // function coverage lets `initialize` see progress in malloc
+        opts.i.cov_funcs = true.into();
+        opts.i.cov_edges = true.into();
+    })
+    .opts;
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    let mut stats = Stats::default();
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(opts.i.to_feedback_opts())
+        .build();
+    sess.initialize(&mut stats);
+
+    let mut novel = Vec::new();
+    for len in [0, 1, 2] {
+        novel.push(sess.run(&vec![0; len], &mut stats).novel_coverage);
+    }
+    assert_eq!(novel, [true, true, true]);
+    let cov = &sess.get_pass::<EdgeCoveragePass>().coverage;
+    // two edges per if
+    assert_eq!(cov.keys.len(), 4);
+    assert_eq!(cov.saved.count_ones(), 4, "uncovered edges");
+}
+
 #[test]
 fn test_instrumentation_call_params_value_set() {
     let test_module = TestModule::call_param_byte();

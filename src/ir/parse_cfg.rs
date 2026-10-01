@@ -218,10 +218,13 @@ impl FuncCFG {
             prev_idx = Some(idx);
             match op {
                 Operator::If { .. } => {
+                    // true: (if, if+1) via fallthrough; false: to the else arm,
+                    // or past the end if there is none
                     if let Some(else_idx) = if_elses.get(&idx) {
                         insn_edges.push((idx, *else_idx));
+                    } else {
+                        insn_edges.push((idx, if_ends[&idx].inc()));
                     }
-                    insn_edges.push((idx, if_ends[&idx].inc()));
                 }
                 Operator::Br { .. } | Operator::BrIf { .. } => {
                     let target = br_blocks
