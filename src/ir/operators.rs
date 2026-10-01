@@ -227,19 +227,30 @@ pub(crate) enum ControlInstruction {
         end_operator_index: InsnIdx,
         target_params: FuncType,
     },
+    // Branch targets come in two flavors: `cfg_target` is the instruction the
+    // CFG (and thus edge coverage) considers the successor, `block_target` is
+    // the instruction whose JIT block receives the branch's values. They
+    // differ for blocks: the CFG skips over the `end` to `end+1`, while the
+    // values have to be passed to the `end`'s block, which joins all paths
+    // leaving the wasm block.
     Br {
         cfg_target: InsnIdx,
+        block_target: InsnIdx,
         // relative_depth: u32,
         target_params: FuncType,
     },
     BrIf {
         cfg_target: InsnIdx,
+        block_target: InsnIdx,
         // relative_depth: u32,
         target_params: FuncType,
     },
     BrTable {
         targets: Vec<InsnIdx>,
         default: InsnIdx,
+        block_targets: Vec<InsnIdx>,
+        block_default: InsnIdx,
+        target_params: FuncType,
     },
     Return,
     Call {

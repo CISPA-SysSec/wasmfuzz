@@ -58,6 +58,8 @@ pub(crate) struct FuncTranslator<'a, 's> {
     stack: Vec<StackEntry>,
     stack_control_depths: Vec<usize>,
     pub blocks: HashMap<InsnIdx, ir::Block>,
+    // stack entries an `if` started with, for re-use in its `else` arm
+    pub if_params: HashMap<InsnIdx, Vec<StackEntry>>,
     pub dead_bbs: HashSet<ir::Block>,
     pub concolic_vals: HashMap<Value, Value>,
     pub func_refs: HashMap<FuncId, FuncRef>,
@@ -97,6 +99,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             stack: Vec::new(),
             stack_control_depths: vec![0],
             blocks: HashMap::default(),
+            if_params: HashMap::default(),
             dead_bbs: HashSet::default(),
             concolic_vals: HashMap::default(),
             func_refs,
@@ -153,6 +156,16 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             .collect();
         self.stack.truncate(self.stack.len() - n);
         rvals
+    }
+
+    // Moves stack entries around without materializing them, see `If`/`Else`.
+    pub(crate) fn pop_entries(&mut self, n: usize) -> Vec<StackEntry> {
+        assert!(self.stack.len() >= n);
+        self.stack.split_off(self.stack.len() - n)
+    }
+
+    pub(crate) fn push_entries(&mut self, entries: &[StackEntry]) {
+        self.stack.extend_from_slice(entries);
     }
 
     pub(crate) fn peekn(&mut self, n: usize, bcx: &mut FunctionBuilder) -> Vec<ir::Value> {

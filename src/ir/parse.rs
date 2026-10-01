@@ -214,9 +214,7 @@ impl ModuleSpec {
         }
         */
         let block_ty = |block_ty: &wasmparser::BlockType| match block_ty {
-            wasmparser::BlockType::FuncType(idx) => {
-                spec.types[spec.func_tyidxs[*idx as usize] as usize].clone()
-            }
+            wasmparser::BlockType::FuncType(idx) => spec.types[*idx as usize].clone(),
             wasmparser::BlockType::Empty => wasmparser::FuncType::new([], []),
             wasmparser::BlockType::Type(ty) => wasmparser::FuncType::new(
                 [],
@@ -225,6 +223,29 @@ impl ModuleSpec {
                     _ => unreachable!(),
                 },
             ),
+        };
+        // Resolves a branch label to (CFG successor, JIT block target, label types).
+        // Branches to a block carry the block's results, branches to a loop
+        // carry the loop's params.
+        let branch_label = |entry: &StackEntry| match *entry {
+            StackEntry::Block(source) => {
+                let end = cfg.block_ends[&source];
+                let ty = block_ty(&cfg.source_tys[&source]);
+                (
+                    end.inc(),
+                    end,
+                    wasmparser::FuncType::new(ty.results().iter().cloned(), []),
+                )
+            }
+            StackEntry::Loop(source) => {
+                let ty = block_ty(&cfg.source_tys[&source]);
+                (
+                    source,
+                    source,
+                    wasmparser::FuncType::new(ty.params().iter().cloned(), []),
+                )
+            }
+            _ => unreachable!(),
         };
         let mut current_bb = InsnIdx(0);
         for (ip, el) in body
@@ -242,23 +263,17 @@ impl ModuleSpec {
                     end_operator_index: cfg.if_ends[&ip],
                 }),
                 Operator::Br { .. } | Operator::BrIf { .. } => {
-                    let cfg_target = cfg
-                        .br_blocks
-                        .get(&ip)
-                        .map(|block| cfg.block_ends[block].inc())
-                        .or_else(|| cfg.br_loops.get(&ip).copied())
-                        .unwrap();
-                    let target_params = cfg
-                        .end_tys
-                        .get(&cfg_target)
-                        .map(|ty| {
-                            wasmparser::FuncType::new(block_ty(ty).results().iter().cloned(), [])
-                        })
-                        .unwrap_or_else(|| wasmparser::FuncType::new([], []));
+                    let entry = if let Some(&block) = cfg.br_blocks.get(&ip) {
+                        StackEntry::Block(block)
+                    } else {
+                        StackEntry::Loop(cfg.br_loops[&ip])
+                    };
+                    let (cfg_target, block_target, target_params) = branch_label(&entry);
                     match op {
                         Operator::Br { relative_depth: _ } => {
                             WFOperator::Control(ControlInstruction::Br {
                                 cfg_target,
+                                block_target,
                                 target_params,
                                 // relative_depth,
                             })
@@ -266,6 +281,7 @@ impl ModuleSpec {
                         Operator::BrIf { relative_depth: _ } => {
                             WFOperator::Control(ControlInstruction::BrIf {
                                 cfg_target,
+                                block_target,
                                 target_params,
                                 // relative_depth,
                             })
@@ -274,17 +290,25 @@ impl ModuleSpec {
                     }
                 }
                 Operator::BrTable { .. } => {
-                    let targets = cfg.br_table_insns.get(&ip).unwrap();
-                    let mut targets = targets
+                    let labels = cfg.br_table_insns.get(&ip).unwrap();
+                    let (mut targets, mut block_targets): (Vec<_>, Vec<_>) = labels
                         .iter()
-                        .map(|e| match *e {
-                            StackEntry::Block(idx) => cfg.block_ends[&idx].inc(),
-                            StackEntry::Loop(idx) => idx,
-                            _ => unreachable!(),
+                        .map(|e| {
+                            let (cfg_target, block_target, _) = branch_label(e);
+                            (cfg_target, block_target)
                         })
-                        .collect::<Vec<_>>();
+                        .unzip();
+                    // all labels of a br_table have the same arity
+                    let (_, _, target_params) = branch_label(labels.last().unwrap());
                     let default = targets.pop().unwrap();
-                    WFOperator::Control(ControlInstruction::BrTable { targets, default })
+                    let block_default = block_targets.pop().unwrap();
+                    WFOperator::Control(ControlInstruction::BrTable {
+                        targets,
+                        default,
+                        block_targets,
+                        block_default,
+                        target_params,
+                    })
                 }
                 Operator::Loop { blockty } => WFOperator::Control(ControlInstruction::Loop {
                     ty: block_ty(&blockty),

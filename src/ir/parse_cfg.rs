@@ -30,7 +30,6 @@ pub(crate) struct FuncCFG {
     #[expect(unused)]
     pub loop_ends: HashMap<InsnIdx, InsnIdx>,
     pub br_table_insns: HashMap<InsnIdx, Vec<StackEntry>>,
-    #[expect(unused)]
     pub source_tys: HashMap<InsnIdx, BlockType>,
     pub end_tys: HashMap<InsnIdx, BlockType>,
     pub block_starts: HashSet<InsnIdx>,
@@ -124,7 +123,7 @@ impl FuncCFG {
                     match cfg_stack.pop() {
                         Some(StackEntry::If(source)) => {
                             if_ends.insert(source, ip);
-                            if let Some(el) = source_tys.remove(&source) {
+                            if let Some(&el) = source_tys.get(&source) {
                                 end_tys.insert(ip, el);
                             }
                         }
@@ -134,19 +133,19 @@ impl FuncCFG {
                         }) => {
                             if_ends.insert(if_source, ip);
                             else_ends.insert(else_source, ip);
-                            if let Some(el) = source_tys.remove(&if_source) {
+                            if let Some(&el) = source_tys.get(&if_source) {
                                 end_tys.insert(ip, el);
                             }
                         }
                         Some(StackEntry::Block(source)) => {
                             block_ends.insert(source, ip);
-                            if let Some(el) = source_tys.remove(&source) {
+                            if let Some(&el) = source_tys.get(&source) {
                                 end_tys.insert(ip, el);
                             }
                         }
                         Some(StackEntry::Loop(source)) => {
                             loop_ends.insert(source, ip);
-                            if let Some(el) = source_tys.remove(&source) {
+                            if let Some(&el) = source_tys.get(&source) {
                                 end_tys.insert(ip, el);
                             }
                         }

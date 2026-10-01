@@ -468,6 +468,99 @@ fn test_unbounded_recursion_traps_as_stack_overflow() {
     assert_eq!(sess.run(&[0], &mut stats).trap_kind, None);
 }
 
+// Branches that carry values out of blocks, `br_table`s with values, `if`s
+// with params, loops with params and multi-value block types. Every result is
+// checked in-guest, so a miscompile shows up as an `unreachable` trap (or, in
+// debug builds, as a verifier error).
+fn block_values_module() -> TestModule {
+    TestModule::from_wat(
+        "block-values",
+        r#"(module
+            (memory 1)
+            (func $check (param $got i32) (param $want i32)
+                (if (i32.ne (local.get $got) (local.get $want)) (then unreachable)))
+            (func (export "malloc") (param i32) (result i32) (i32.const 0))
+            (func (export "LLVMFuzzerTestOneInput") (param $ptr i32) (param $len i32)
+                (local $t i32)
+                ;; br_if out of a block with a result
+                (block (result i32)
+                    (i32.const 7) (local.get $len) (br_if 0) (drop) (i32.const 9))
+                (call $check (select (i32.const 7) (i32.const 9) (local.get $len)))
+
+                ;; br_if to an inner block whose end is directly followed by
+                ;; the outer block's end
+                (block $o (result i32)
+                    (i32.const 5)
+                    (block $i (i32.const 6) (local.get $len) (br_if $i) (drop)))
+                (call $check (i32.const 5))
+
+                ;; br_if past two block ends
+                (block $o (result i32)
+                    (block $i (result i32)
+                        (i32.const 1) (local.get $len) (br_if $o) (drop) (i32.const 2)))
+                (call $check (select (i32.const 1) (i32.const 2) (local.get $len)))
+
+                ;; br_table carrying a value to different blocks
+                (block $a (result i32)
+                    (block $b (result i32)
+                        (i32.const 10) (local.get $len) (br_table $b $a $b))
+                    (i32.const 100) (i32.add))
+                (call $check (select (i32.const 10) (i32.const 110)
+                    (i32.eq (local.get $len) (i32.const 1))))
+
+                ;; if with params, without and with an else arm
+                (i32.const 3) (local.get $len)
+                (if (param i32) (result i32) (then (i32.const 1) (i32.add)))
+                (call $check (select (i32.const 4) (i32.const 3) (local.get $len)))
+                (i32.const 3) (local.get $len)
+                (if (param i32) (result i32)
+                    (then (i32.const 1) (i32.add))
+                    (else (i32.const 2) (i32.mul)))
+                (call $check (select (i32.const 4) (i32.const 6) (local.get $len)))
+
+                ;; loop with a param carried by the back edge
+                (i32.const 0)
+                (loop $l (param i32) (result i32)
+                    (i32.const 1) (i32.add)
+                    (local.tee $t) (i32.lt_u (local.get $t) (i32.const 5)) (br_if $l))
+                (call $check (i32.const 5))
+
+                ;; multi-value block type (refers to a type index, not a function)
+                (i32.const 4)
+                (block (param i32) (result i32 i32) (local.get $len) (br 0))
+                (i32.add)
+                (call $check (i32.add (i32.const 4) (local.get $len))))
+        )"#,
+    )
+}
+
+#[test]
+fn test_block_values() {
+    use crate::jit::{FeedbackOptions, TracingOptions};
+    let test_module = block_values_module();
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    for feedback in [
+        FeedbackOptions::nothing(),
+        FeedbackOptions::all_instrumentation(),
+    ] {
+        let mut stats = Stats::default();
+        let mut sess = JitFuzzingSession::builder(mod_spec.clone())
+            .feedback(feedback)
+            .tracing(TracingOptions {
+                concolic: true,
+                ..Default::default()
+            })
+            .build();
+        sess.initialize(&mut stats);
+        for len in 0..4 {
+            let input = vec![0u8; len];
+            assert_eq!(sess.run(&input, &mut stats).trap_kind, None, "len={len}");
+            sess.run_tracing_fresh(&input, &mut stats)
+                .expect("tracing run should not trap");
+        }
+    }
+}
+
 #[test]
 fn test_instrumentation_call_params_value_set() {
     let test_module = TestModule::call_param_byte();
