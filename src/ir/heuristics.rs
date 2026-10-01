@@ -14,7 +14,11 @@ pub(crate) enum Libfunc {
 
 pub(crate) fn recognize_libfunc(func: &FuncSpec) -> Option<Libfunc> {
     let symbol = func._symbol.as_ref()?;
-    if symbol == "memcmp" && *func.ty.params() == [I32, I32, I32] && *func.ty.results() == [I32] {
+    // bcmp only reports equality, which is all the memcmp tracing cares about
+    if (symbol == "memcmp" || symbol == "bcmp")
+        && *func.ty.params() == [I32, I32, I32]
+        && *func.ty.results() == [I32]
+    {
         return Some(Libfunc::Memcmp);
     }
     if symbol == "strncmp" && *func.ty.params() == [I32, I32, I32] && *func.ty.results() == [I32] {
