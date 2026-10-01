@@ -253,6 +253,14 @@ impl VMContext {
         self.heap_snapshot_is_initial = false;
     }
 
+    /// Restores globals, memory contents and `memory.size` to the snapshot.
+    ///
+    /// Note: the heap mapping is intentionally *not* shrunk back down. If a
+    /// previous input grew memory, those pages remain accessible (zeroed) for
+    /// later inputs, so accesses between `heap_pages` and the high-water mark
+    /// don't trap. Accesses past `memory.size` only happen after the harness
+    /// already corrupted its own state, which should be noticeable in other
+    /// ways, and skipping the `mprotect` keeps restores syscall-free.
     pub(crate) fn restore(&mut self) {
         tracy_full::zone!("VMContext::restore");
         self.globals.copy_from_slice(&self.globals_snapshot);

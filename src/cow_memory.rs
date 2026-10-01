@@ -49,6 +49,10 @@ pub trait ResettableMapping {
     fn snapshot(&mut self);
     fn restore(&mut self);
     // potential new pages are zeroed, accessible_size fit in mapping's size
+    //
+    // Implementations may ignore shrinking requests: once pages have been made
+    // accessible they stay accessible (and are restored to zero) across
+    // `restore()`. This is deliberate, see `VMContext::restore`.
     fn resize(&mut self, accessible_size: usize);
 
     // Announce a write that the mapping's own tracking can't observe.
