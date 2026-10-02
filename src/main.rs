@@ -17,6 +17,9 @@ pub(crate) use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod spec_testsuite;
+
 #[cfg(feature = "with_mimalloc")]
 mod with_mimalloc {
     #[global_allocator]
