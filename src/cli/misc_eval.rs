@@ -299,7 +299,7 @@ pub(crate) fn eval_snapshot_perf(pages: usize, touch: usize, iters: usize, threa
         let start = Instant::now();
         let chksum: usize = std::thread::scope(|scope| {
             let handles = (0..threads)
-                .map(|_| scope.spawn(&worker))
+                .map(|_| scope.spawn(worker))
                 .collect::<Vec<_>>();
             handles.into_iter().map(|h| h.join().unwrap()).sum()
         });

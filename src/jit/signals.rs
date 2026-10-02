@@ -166,24 +166,21 @@ thread_local! {
 /// 0 (no limit) if the bounds can't be determined.
 pub(crate) fn guest_stack_limit() -> usize {
     STACK_LIMIT.with(|x| {
-        *x.get_or_init(|| {
-            let limit = unsafe {
-                let mut attr: libc::pthread_attr_t = std::mem::zeroed();
-                if libc::pthread_getattr_np(libc::pthread_self(), &mut attr) != 0 {
+        *x.get_or_init(|| unsafe {
+            let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+            if libc::pthread_getattr_np(libc::pthread_self(), &mut attr) != 0 {
+                0
+            } else {
+                let mut addr = std::ptr::null_mut();
+                let mut size = 0;
+                let ok = libc::pthread_attr_getstack(&attr, &mut addr, &mut size) == 0;
+                libc::pthread_attr_destroy(&mut attr);
+                if !ok || addr.is_null() || size == 0 {
                     0
                 } else {
-                    let mut addr = std::ptr::null_mut();
-                    let mut size = 0;
-                    let ok = libc::pthread_attr_getstack(&attr, &mut addr, &mut size) == 0;
-                    libc::pthread_attr_destroy(&mut attr);
-                    if !ok || addr.is_null() || size == 0 {
-                        0
-                    } else {
-                        addr as usize + HOST_STACK_RESERVE.min(size / 10)
-                    }
+                    addr as usize + HOST_STACK_RESERVE.min(size / 10)
                 }
-            };
-            limit
+            }
         })
     })
 }

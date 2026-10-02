@@ -97,7 +97,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
     let start_rt = Instant::now();
     let start = SystemTime::now();
     let mut emit_meta = true;
-    for i in 1u32.. {
+    for i in 1u32..=u32::MAX {
         let mut has_find = false;
         let target_dur = (*interval) * i;
         if let Ok(sleep_dur) = (start + target_dur).duration_since(SystemTime::now()) {

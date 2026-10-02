@@ -8,7 +8,7 @@ rust-version = "1.98"
 
 [dependencies]
 wat = "1.0"
-wasmparser = "0.259"
+wasmparser = "0.260"
 rustc-demangle = "0.1"
 clap = { version = "4.4", features = ["derive", "env"] }
 md5 = "0.8"
@@ -51,7 +51,7 @@ libafl_bolts = { version = "0.16", default-features = false, features = [
     "derive",
     "serdeany_autoreg",
 ] }
-cranelift = { version = "0.135", features = [
+cranelift = { version = "0.136", features = [
     "jit",
     "module",
     "native",
@@ -60,8 +60,7 @@ cranelift = { version = "0.135", features = [
 libc = "0.2.158"
 
 # feat:concolic
-# Note: waiting for 0.3.1 upstream
-smtlib = { git = "https://github.com/oeb25/smtlib-rs.git", rev = "4f0fad92289ba02931276cbe2bbe45f87f7a6f3e", optional = true }
+smtlib = { version = "0.4.0", optional = true }
 z3 = { version = "0.21", optional = true }
 bitwuzla = { git = "https://github.com/Mrmaxmeier/bitwuzla-rs.git", optional = true }
 
@@ -122,4 +121,4 @@ opt-level = 3
 debug = true
 
 [dev-dependencies]
-wast = "259"
+wast = "260"
