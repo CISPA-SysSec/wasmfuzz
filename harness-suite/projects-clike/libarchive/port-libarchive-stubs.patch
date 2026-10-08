@@ -1,21 +1,5 @@
-diff --git a/libarchive/archive_read_disk_posix.c b/libarchive/archive_read_disk_posix.c
-index a3c9e58..9af54d4 100644
---- a/libarchive/archive_read_disk_posix.c
-+++ b/libarchive/archive_read_disk_posix.c
-@@ -97,8 +97,10 @@
- #include "archive_private.h"
- #include "archive_read_disk_private.h"
- 
-+static int fchdir(int fd) { abort(); }
-+
- #ifndef HAVE_FCHDIR
--#error fchdir function required.
-+// #error fchdir function required.
- #endif
- #ifndef O_BINARY
- #define O_BINARY	0
 diff --git a/libarchive/archive_read_disk_set_standard_lookup.c b/libarchive/archive_read_disk_set_standard_lookup.c
-index ecd675d..0089879 100644
+index ecd675db..00898793 100644
 --- a/libarchive/archive_read_disk_set_standard_lookup.c
 +++ b/libarchive/archive_read_disk_set_standard_lookup.c
 @@ -232,15 +232,7 @@ lookup_uname_helper(struct name_cache *cache, id_t id)
@@ -53,7 +37,7 @@ index ecd675d..0089879 100644
  #endif
  
 diff --git a/libarchive/archive_read_support_filter_program.c b/libarchive/archive_read_support_filter_program.c
-index 3a6eea5..32a98a6 100644
+index 3a6eea51..32a98a6e 100644
 --- a/libarchive/archive_read_support_filter_program.c
 +++ b/libarchive/archive_read_support_filter_program.c
 @@ -238,6 +238,7 @@ program_bidder_bid(struct archive_read_filter_bidder *b,
@@ -85,10 +69,10 @@ index 3a6eea5..32a98a6 100644
  	static const size_t out_buf_len = 65536;
  	char *out_buf;
 diff --git a/libarchive/archive_umask.c b/libarchive/archive_umask.c
-index e66c9ac..29c5c72 100644
+index 23b8aeda..c2800fc7 100644
 --- a/libarchive/archive_umask.c
 +++ b/libarchive/archive_umask.c
-@@ -46,6 +46,9 @@
+@@ -49,6 +49,9 @@
  mode_t
  __archive_get_umask(void)
  {
@@ -98,14 +82,14 @@ index e66c9ac..29c5c72 100644
  	mode_t mask;
  
  #ifdef __linux__
-@@ -91,4 +94,5 @@ __archive_get_umask(void)
+@@ -98,4 +101,5 @@ __archive_get_umask(void)
  
  	umask(mask = umask(0));
  	return (mask);
 +#endif
  }
 diff --git a/libarchive/archive_write_add_filter_program.c b/libarchive/archive_write_add_filter_program.c
-index 6b29018..29bf755 100644
+index 6b290180..29bf755f 100644
 --- a/libarchive/archive_write_add_filter_program.c
 +++ b/libarchive/archive_write_add_filter_program.c
 @@ -330,6 +330,7 @@ int
@@ -126,7 +110,7 @@ index 6b29018..29bf755 100644
  
  static void
 diff --git a/libarchive/archive_write_set_format_iso9660.c b/libarchive/archive_write_set_format_iso9660.c
-index fe5beed..5997c7b 100644
+index fe5beedf..5997c7ba 100644
 --- a/libarchive/archive_write_set_format_iso9660.c
 +++ b/libarchive/archive_write_set_format_iso9660.c
 @@ -2525,7 +2525,7 @@ get_tmfromtime(struct tm *tm, time_t *t)
@@ -159,4 +143,4 @@ index fe5beed..5997c7b 100644
 +	// archive_entry_set_gid(file->entry, getgid());
  	archive_entry_set_mode(file->entry, AE_IFREG | 0444);
  	archive_entry_set_nlink(file->entry, 1);
-
+ 
