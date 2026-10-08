@@ -1,0 +1,380 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 1ea29a9..89608dd 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -29,3 +29,7 @@ path = "fuzz_targets/buf_independent.rs"
+ [[bin]]
+ name = "roundtrip"
+ path = "fuzz_targets/roundtrip.rs"
++
++[[bin]]
++name = "chromium_skia"
++path = "fuzz_targets/chromium_skia.rs"
+diff --git a/fuzz/fuzz_targets/chromium_skia.rs b/fuzz/fuzz_targets/chromium_skia.rs
+new file mode 100644
+index 0000000..b4d2a21
+--- /dev/null
++++ b/fuzz/fuzz_targets/chromium_skia.rs
+@@ -0,0 +1,362 @@
++//! Mirrors how Chromium decodes PNGs with this crate: Skia's `SkPngRustCodec`
++//! (`third_party/skia/rust/png/FFI.rs` + `src/codec/SkPngRustCodec.cpp`).
++//!
++//! Compared to the upstream `decode` / `buf_independent` targets this exercises:
++//! * `DecodeOptions` as configured by Skia (default 64 MiB limits,
++//!   `set_ignore_text_chunk(true)`, `set_ignore_checksums(true)` as in Chromium
++//!   fuzzing builds),
++//! * `read_header_info` + Skia's `compute_transformations` (`EXPAND`, `STRIP_16`),
++//! * row-at-a-time decoding: `Reader::read_row` for non-interlaced images and
++//!   `Reader::next_interlaced_row` + `splat_interlaced_row` / `expand_interlaced_row`
++//!   for Adam7 images (into a full-canvas buffer, honoring APNG `fcTL` offsets),
++//! * APNG frame walking via `Reader::next_frame_info` (including `acTL` without
++//!   `fcTL` before `IDAT`), and metadata getters (cICP, mDCV, cLLI, eXIf, iCCP, ...),
++//! * incremental / streaming input: the input is revealed in growing prefixes and
++//!   decoding is resumed after `UnexpectedEof` (like Blink feeding partial data),
++//!   and the resulting frames are compared against a decode of the whole input.
++
++#![no_main]
++
++use libfuzzer_sys::fuzz_target;
++
++use std::cell::Cell;
++use std::io::{BufReader, ErrorKind, Read, Seek, SeekFrom};
++use std::rc::Rc;
++
++/// Skia's `BUF_CAPACITY`.
++const BUF_CAPACITY: usize = 32 * 1024;
++/// Keep the fuzzer fast: skip images whose output canvas is larger than this.
++const MAX_CANVAS_BYTES: usize = 8 << 20;
++const MAX_FRAMES: usize = 8;
++
++/// A reader that only exposes `avail` bytes of `data`; reading past that returns `Ok(0)`
++/// (which the `png` crate reports as `UnexpectedEof`), like a partially downloaded image.
++struct PartialInput {
++    data: Rc<Vec<u8>>,
++    pos: u64,
++    avail: Rc<Cell<usize>>,
++}
++
++impl Read for PartialInput {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        let avail = self.avail.get().min(self.data.len());
++        let pos = (self.pos as usize).min(avail);
++        let n = buf.len().min(avail - pos);
++        buf[..n].copy_from_slice(&self.data[pos..pos + n]);
++        self.pos += n as u64;
++        Ok(n)
++    }
++}
++
++impl Seek for PartialInput {
++    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
++        let new = match pos {
++            SeekFrom::Start(p) => p as i64,
++            SeekFrom::Current(d) => self.pos as i64 + d,
++            SeekFrom::End(d) => self.avail.get().min(self.data.len()) as i64 + d,
++        };
++        if new < 0 {
++            return Err(ErrorKind::InvalidInput.into());
++        }
++        self.pos = new as u64;
++        Ok(self.pos)
++    }
++}
++
++type PngReader = png::Reader<BufReader<PartialInput>>;
++
++struct Feed {
++    avail: Rc<Cell<usize>>,
++    total: usize,
++    step: usize,
++}
++
++impl Feed {
++    /// Returns true if more input was made available (i.e. the caller should retry).
++    fn more(&self, err: &png::DecodingError) -> bool {
++        let is_eof = matches!(err, png::DecodingError::IoError(e) if e.kind() == ErrorKind::UnexpectedEof);
++        if is_eof && self.avail.get() < self.total {
++            self.avail.set(self.avail.get().saturating_add(self.step).min(self.total));
++            true
++        } else {
++            false
++        }
++    }
++}
++
++/// Skia's `compute_transformations` (without `skia_png_new_gray16_behavior_for_crbug359245096`).
++fn compute_transformations(info: &png::Info) -> png::Transformations {
++    let mut result = match info.color_type {
++        png::ColorType::Rgba | png::ColorType::GrayscaleAlpha if (info.bit_depth as u8) < 8 => {
++            png::Transformations::EXPAND
++        }
++        png::ColorType::Rgb | png::ColorType::Grayscale => png::Transformations::EXPAND,
++        png::ColorType::Indexed | png::ColorType::Rgba | png::ColorType::GrayscaleAlpha => {
++            png::Transformations::IDENTITY
++        }
++    };
++    if info.bit_depth == png::BitDepth::Sixteen
++        && matches!(
++            info.color_type,
++            png::ColorType::Grayscale | png::ColorType::GrayscaleAlpha
++        )
++    {
++        result |= png::Transformations::STRIP_16;
++    }
++    result
++}
++
++fn new_reader(data: &Rc<Vec<u8>>, avail: &Rc<Cell<usize>>) -> Result<PngReader, png::DecodingError> {
++    let input = PartialInput {
++        data: data.clone(),
++        pos: 0,
++        avail: avail.clone(),
++    };
++    let input = BufReader::with_capacity(BUF_CAPACITY, input);
++    let mut options = png::DecodeOptions::default();
++    options.set_ignore_checksums(true);
++    options.set_ignore_text_chunk(true);
++    let mut decoder = png::Decoder::new_with_options(input, options);
++    let info = decoder.read_header_info()?;
++    let transformations = compute_transformations(info);
++    decoder.set_transformations(transformations);
++    decoder.read_info()
++}
++
++/// Touch all metadata that `SkPngRustCodec` queries.
++fn query_metadata(reader: &PngReader) -> u64 {
++    let info = reader.info();
++    let mut acc = 0u64;
++    let mut mix = |v: u64| acc = acc.wrapping_mul(31).wrapping_add(v);
++    mix(info.width as u64);
++    mix(info.height as u64);
++    mix(info.interlaced as u64);
++    mix(info.srgb.is_some() as u64);
++    if let Some(c) = &info.chrm_chunk {
++        mix(c.white.0.into_scaled() as u64);
++        mix(c.blue.1.into_scaled() as u64);
++    }
++    if let Some(g) = info.gama_chunk {
++        mix(g.into_scaled() as u64);
++    }
++    if let Some(c) = &info.coding_independent_code_points {
++        mix(c.color_primaries as u64);
++        mix(c.transfer_function as u64);
++        mix(c.matrix_coefficients as u64);
++        mix(c.is_video_full_range_image as u64);
++    }
++    if let Some(m) = &info.mastering_display_color_volume {
++        mix(m.max_luminance as u64);
++        mix(m.chromaticities.red.0.into_scaled() as u64);
++    }
++    if let Some(c) = &info.content_light_level {
++        mix(c.max_content_light_level as u64);
++    }
++    for chunk in [&info.exif_metadata, &info.icc_profile] {
++        if let Some(d) = chunk {
++            mix(d.len() as u64);
++        }
++    }
++    if let Some(t) = &info.trns {
++        mix(t.len() as u64);
++    }
++    if let Some(p) = &info.palette {
++        mix(p.len() as u64);
++    }
++    if let Some(a) = &info.animation_control {
++        mix(a.num_frames as u64);
++        mix(a.num_plays as u64);
++    }
++    if let Some(f) = &info.frame_control {
++        mix(f.width as u64 ^ f.x_offset as u64);
++        mix(f.delay_num as u64 ^ f.delay_den as u64);
++        mix(f.dispose_op as u64 ^ f.blend_op as u64);
++    }
++    if let Some(s) = &info.sbit {
++        mix(s.len() as u64);
++    }
++    acc
++}
++
++fn fnv(data: &[u8]) -> u64 {
++    let mut h = 0xcbf29ce484222325u64;
++    for &b in data {
++        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
++    }
++    h
++}
++
++/// Decodes one frame row-by-row into `canvas` (full image width, like Skia's dst).
++/// Returns `Err` on a decoding error (after retrying on `UnexpectedEof` when
++/// more input can be made available).
++fn decode_frame(reader: &mut PngReader, feed: &Feed, canvas: &mut [u8]) -> Result<(), ()> {
++    let info = reader.info();
++    let (width, height) = (info.width, info.height);
++    let interlaced = info.interlaced;
++    let (x_off, y_off, fw, fh) = match &info.frame_control {
++        Some(fc) => (fc.x_offset, fc.y_offset, fc.width, fc.height),
++        None => (0, 0, width, height),
++    };
++    if x_off.checked_add(fw).map_or(true, |r| r > width)
++        || y_off.checked_add(fh).map_or(true, |b| b > height)
++    {
++        return Err(());
++    }
++    let (ct, bd) = reader.output_color_type();
++    let bits_per_pixel = ct.samples() as u8 * bd as u8;
++    let stride = reader.output_line_size(width).ok_or(())?;
++    let frame_row = reader.output_line_size(fw).ok_or(())?;
++    let x_byte = (x_off as usize * bits_per_pixel as usize) / 8;
++    let frame_start = y_off as usize * stride + x_byte;
++    let frame_len = (fh as usize).saturating_sub(1) * stride + frame_row;
++    if frame_start + frame_len > canvas.len() {
++        return Err(());
++    }
++
++    if !interlaced {
++        let mut row = vec![0u8; stride];
++        let mut y = 0usize;
++        loop {
++            match reader.read_row(&mut row) {
++                Ok(Some(_)) => {
++                    if y < fh as usize {
++                        let dst = frame_start + y * stride;
++                        canvas[dst..dst + frame_row].copy_from_slice(&row[..frame_row]);
++                    }
++                    y += 1;
++                }
++                Ok(None) => return Ok(()),
++                Err(e) => {
++                    if !feed.more(&e) {
++                        return Err(());
++                    }
++                }
++            }
++        }
++    } else {
++        // `splat` needs whole rows for the full height of the frame; Skia falls
++        // back to `expand` for horizontally offset APNG frames.
++        let whole = fh as usize * stride;
++        let use_splat = y_off as usize * stride + whole <= canvas.len() && x_off == 0;
++        loop {
++            let eof = match reader.next_interlaced_row() {
++                Ok(Some(row)) => {
++                    if let png::InterlaceInfo::Adam7(adam7) = row.interlace() {
++                        if use_splat {
++                            let dst = &mut canvas[frame_start..frame_start + whole];
++                            png::splat_interlaced_row(dst, stride, row.data(), adam7, bits_per_pixel);
++                        } else {
++                            let dst = &mut canvas[frame_start..frame_start + frame_len];
++                            png::expand_interlaced_row(dst, stride, row.data(), adam7, bits_per_pixel);
++                        }
++                    }
++                    None
++                }
++                Ok(None) => return Ok(()),
++                Err(e) => Some(e),
++            };
++            if let Some(e) = eof {
++                if !feed.more(&e) {
++                    return Err(());
++                }
++            }
++        }
++    }
++}
++
++/// Returns the hashes of all successfully decoded frames.
++fn decode(data: &Rc<Vec<u8>>, step: Option<usize>) -> Vec<u64> {
++    let total = data.len();
++    let avail = Rc::new(Cell::new(match step {
++        Some(step) => step.min(total),
++        None => total,
++    }));
++    let mut feed = Feed {
++        avail: avail.clone(),
++        total,
++        step: step.unwrap_or(total).max(total / 16).max(1),
++    };
++
++    // Creating the reader is not resumable: restart from scratch on incomplete input
++    // (like Blink/Skia re-creating the codec once more data arrives).
++    let mut reader = loop {
++        match new_reader(data, &avail) {
++            Ok(r) => break r,
++            Err(e) => {
++                if !feed.more(&e) {
++                    return vec![];
++                }
++            }
++        }
++    };
++    feed.step = step.unwrap_or(total).max(1);
++    std::hint::black_box(query_metadata(&reader));
++
++    let info = reader.info();
++    let Some(stride) = reader.output_line_size(info.width) else {
++        return vec![];
++    };
++    let Some(canvas_len) = stride.checked_mul(info.height as usize) else {
++        return vec![];
++    };
++    if canvas_len > MAX_CANVAS_BYTES {
++        return vec![];
++    }
++
++    // `acTL` present but no `fcTL` before `IDAT`: the default image is not part of
++    // the animation. Skia skips it via `next_frame_info`.
++    let idat_not_part_of_animation =
++        info.animation_control.is_some() && info.frame_control.is_none();
++    let num_frames = info
++        .animation_control
++        .map_or(1, |a| a.num_frames as usize)
++        .clamp(1, MAX_FRAMES);
++
++    let mut hashes = vec![];
++    let mut canvas = vec![0u8; canvas_len];
++    let mut need_frame_info = idat_not_part_of_animation;
++    for _ in 0..num_frames {
++        if need_frame_info {
++            loop {
++                match reader.next_frame_info() {
++                    Ok(_) => break,
++                    Err(e) => {
++                        if !feed.more(&e) {
++                            return hashes;
++                        }
++                    }
++                }
++            }
++            std::hint::black_box(query_metadata(&reader));
++        }
++        need_frame_info = true;
++        if decode_frame(&mut reader, &feed, &mut canvas).is_err() {
++            return hashes;
++        }
++        hashes.push(fnv(&canvas));
++    }
++    // Android's `finish_decoding`.
++    loop {
++        match reader.finish() {
++            Err(e) if feed.more(&e) => continue,
++            _ => break,
++        }
++    }
++    hashes
++}
++
++fuzz_target!(|data: &[u8]| {
++    let Some(&last) = data.last() else { return };
++    let data = Rc::new(data.to_vec());
++    let full = decode(&data, None);
++    // Chunk size used for streaming the input is controlled by the last byte
++    // (trailing bytes after `IEND` are ignored by the decoder).
++    let step = 1 + (last as usize) * 13;
++    let streamed = decode(&data, Some(step));
++    let n = full.len().min(streamed.len());
++    assert_eq!(
++        full[..n],
++        streamed[..n],
++        "frames differ between whole-input and streamed decoding (step {step})"
++    );
++});

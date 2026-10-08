@@ -1,0 +1,21 @@
+diff --git a/fuzz/fuzz_targets/buf_independent.rs b/fuzz/fuzz_targets/buf_independent.rs
+index 1b531d2..9e5de91 100644
+--- a/fuzz/fuzz_targets/buf_independent.rs
++++ b/fuzz/fuzz_targets/buf_independent.rs
+@@ -238,9 +238,15 @@ fn test_data<'a>(data: &'a [u8]) -> Result<(), ()> {
+                 } else {
+                     None
+                 };
++                // `next_frame` and `finish` are retried separately: retrying
++                // `next_frame` after an intermittent EOF inside `finish` would
++                // report `PolledAfterEndOfImage` (a harness false positive).
+                 retry_after_eofs(eof_controller, || {
+                     png_reader.next_frame(buffer.as_mut_slice())
+-                        .and_then(|_| png_reader.finish())
++                })
++                .and_then(|output_info| {
++                    retry_after_eofs(eof_controller, || png_reader.finish())
++                        .map(|_| output_info)
+                 })
+             })
+             .assert_all_results_are_consistent()
