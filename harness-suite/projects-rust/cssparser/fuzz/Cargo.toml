@@ -1,0 +1,53 @@
+# Additional cargo-fuzz harnesses for Firefox's Rust CSS parsing stack:
+#  - cssparser 0.38.0 @ servo/rust-cssparser ddccc070 (firefox/Cargo.toml [patch.crates-io])
+#  - cssparser-color 0.5.0 from the same rust-cssparser revision (not shipped by Firefox;
+#    Stylo has its own color parser, but it's built on the same cssparser primitives)
+#  - selectors 0.26.0 from the Firefox tree (servo/components/selectors)
+# The upstream tokenizer harness lives in ../repo/fuzz and is built as well.
+# Cargo.lock pins crates.io deps to the versions in firefox/Cargo.lock where possible.
+
+[package]
+name = "cssparser-extra-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cssparser = { path = "../repo" }
+cssparser-color = { path = "../repo/color" }
+selectors = { path = "../firefox/servo/components/selectors" }
+precomputed-hash = "0.1"
+
+[patch.crates-io]
+cssparser = { path = "../repo" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "rules"
+path = "fuzz_targets/rules.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "nth"
+path = "fuzz_targets/nth.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "color"
+path = "fuzz_targets/color.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "selectors"
+path = "fuzz_targets/selectors.rs"
+test = false
+doc = false
