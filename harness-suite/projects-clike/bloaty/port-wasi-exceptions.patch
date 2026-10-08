@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a30979..93a742a 100644
+index 05b5289..1c85b81 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -327,7 +327,7 @@ list(APPEND LIBBLOATY_LIBS Threads::Threads)
+@@ -491,7 +491,7 @@ target_link_libraries(libbloaty ${LIBBLOATY_DEPS})
  
  if(DEFINED ENV{LIB_FUZZING_ENGINE})
    message("LIB_FUZZING_ENGINE set, building fuzz_target instead of Bloaty")
@@ -12,7 +12,7 @@ index 3a30979..93a742a 100644
  else()
    add_executable(bloaty src/main.cc)
 diff --git a/tests/fuzz_target.cc b/tests/fuzz_target.cc
-index cbddb0d..3495da3 100644
+index cc30534..d160015 100644
 --- a/tests/fuzz_target.cc
 +++ b/tests/fuzz_target.cc
 @@ -12,6 +12,15 @@
@@ -31,17 +31,17 @@ index cbddb0d..3495da3 100644
  #include <string_view>
  
  #include "bloaty.h"
-@@ -60,6 +69,9 @@ void RunBloaty(const InputFileFactory& factory,
+@@ -61,6 +70,9 @@ void RunBloaty(const InputFileFactory& factory,
  }  // namespace bloaty
  
- extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 +#ifdef __wasi__
 +  try {
 +#endif
-   const char *data2 = reinterpret_cast<const char*>(data);
+   const char* data2 = reinterpret_cast<const char*>(data);
    bloaty::StringPieceInputFileFactory factory(string_view(data2, size));
  
-@@ -71,5 +83,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+@@ -72,5 +84,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
    RunBloaty(factory, "inlines");
    RunBloaty(factory, "armembers");
  

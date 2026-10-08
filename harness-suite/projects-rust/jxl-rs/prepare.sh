@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/libjxl/jxl-rs "$PROJECT/repo" 624ce908afcf8eb0dc2585a671535eaabb5d88cc
+git clone-rev.sh https://github.com/libjxl/jxl-rs "$PROJECT/repo" fce6e280777bc0d0c76ad2f58af9d0e26fe94d5a
 git -C "$PROJECT/repo" apply "$PROJECT/port-disable-simd.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fuzz-decode-resource-limits.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/limit-untrusted-parse-dimensions.patch"
