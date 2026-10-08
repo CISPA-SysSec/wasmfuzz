@@ -57,6 +57,8 @@ def main():
     ap.add_argument("--arm-tag", default="",
                     help="suffix for every bucket (arm name), e.g. to tell an --env arm from the plain one")
     ap.add_argument("--submit-cwd", default="/tmp", help="Working directory for 'hq submit'")
+    ap.add_argument("--priority", type=int, default=0,
+                    help="hq task priority; negative lets other queued jobs take freed cores first")
     args = ap.parse_args()
     if args.cpus < 1:
         ap.error("--cpus must be positive")
@@ -138,6 +140,7 @@ def main():
             '--task-dir',
             '--time-request', args.timeout,
             '--cpus', str(args.cpus),
+            f'--priority={args.priority}',  # '=': hq reads a bare negative value as a flag
             '--name', f"{'+'.join(f.stem for f in cas_fuzzers)}-{'-'.join(variants)}",
             str(cas_runner)],
             cwd=Path(args.submit_cwd).expanduser())
