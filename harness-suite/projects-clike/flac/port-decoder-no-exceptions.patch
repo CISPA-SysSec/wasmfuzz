@@ -1,0 +1,58 @@
+diff --git a/oss-fuzz/decoder.cc b/oss-fuzz/decoder.cc
+index 40aa8e00..16074fa6 100644
+--- a/oss-fuzz/decoder.cc
++++ b/oss-fuzz/decoder.cc
+@@ -31,6 +31,13 @@
+ #include "FLAC++/metadata.h"
+ #include "common.h"
+ 
++#ifdef __wasi__
++/* Built with -fno-exceptions: the datasource exits the testcase when it runs
++ * out of input (see datasource.hpp), so the handlers are unreachable. */
++#define try if (true)
++#define catch(...) else
++#endif
++
+ template <> FLAC__MetadataType fuzzing::datasource::Base::Get<FLAC__MetadataType>(const uint64_t id) {
+     (void)id;
+     switch ( Get<uint8_t>() ) {
+diff --git a/oss-fuzz/fuzzing/datasource/datasource.hpp b/oss-fuzz/fuzzing/datasource/datasource.hpp
+index 3c9484eb..49a31810 100644
+--- a/oss-fuzz/fuzzing/datasource/datasource.hpp
++++ b/oss-fuzz/fuzzing/datasource/datasource.hpp
+@@ -32,6 +32,17 @@
+ #include <string>
+ #include <vector>
+ 
++#ifdef __wasi__
++/* wasm32-wasip1 has no C++ exceptions: running out of fuzzer input ends the
++ * testcase instead of unwinding to the harness' catch handler. */
++extern "C" void wasmfuzz_exit_testcase()
++    __attribute__((__noreturn__))
++    __attribute__((__import_module__("wasmfuzz"), __import_name__("exit_testcase")));
++#define FUZZING_THROW_OUT_OF_DATA() wasmfuzz_exit_testcase()
++#else
++#define FUZZING_THROW_OUT_OF_DATA() throw OutOfData()
++#endif
++
+ namespace fuzzing {
+ namespace datasource  {
+ 
+@@ -157,7 +168,7 @@ std::vector<uint8_t> Datasource::get(const size_t min, const size_t max, const u
+ 
+     uint32_t getSize;
+     if ( left < sizeof(getSize) ) {
+-        throw OutOfData();
++        FUZZING_THROW_OUT_OF_DATA();
+     }
+     memcpy(&getSize, data + idx, sizeof(getSize));
+     idx += sizeof(getSize);
+@@ -171,7 +182,7 @@ std::vector<uint8_t> Datasource::get(const size_t min, const size_t max, const u
+     }
+ 
+     if ( left < getSize ) {
+-        throw OutOfData();
++        FUZZING_THROW_OUT_OF_DATA();
+     }
+ 
+     std::vector<uint8_t> ret(getSize);
