@@ -9,8 +9,10 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import secrets
+from collections import deque
 from pathlib import Path
 
 _terminate_signal = 0
@@ -18,6 +20,12 @@ _children: list["Child"] = []
 
 CGROUP_MOUNT = Path("/sys/fs/cgroup")
 FINAL_REPORT_SLACK_SECONDS = 300
+# Children's output goes to a ring buffer instead of hq's stdout file: hq keeps
+# that file in the worker's /tmp, a tmpfs, and a long fuzzer run prints hundreds
+# of MB of progress lines, which add up over the tasks of a node. The tail is
+# printed when a run ends abnormally, so save_log_tails still finds it.
+TAIL_LINES = 2000
+TAIL_LINE_BYTES = 4096
 
 
 def read_self_cgroup_v2() -> Path:
@@ -193,14 +201,34 @@ class Child:
         env_ = os.environ.copy()
         env_.update(env)
         self.label = label
+        self.tail: deque[bytes] = deque(maxlen=TAIL_LINES)
         self.proc = subprocess.Popen(
             cmd, start_new_session=True, env=env_,
             preexec_fn=_make_preexec(cgroup),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
+        self._reader = threading.Thread(target=self._read_output, daemon=True)
+        self._reader.start()
         # start_new_session=True makes the child its own session leader,
         # so pgid == pid.
         self.pgid = self.proc.pid
         _children.append(self)
+
+    def _read_output(self) -> None:
+        assert self.proc.stdout is not None
+        for line in self.proc.stdout:
+            # Monitor snapshots (one large JSON line each) would crowd out the log.
+            if not line.startswith(b'{"i":'):
+                self.tail.append(line[:TAIL_LINE_BYTES].rstrip(b"\n"))
+
+    def dump_tail(self) -> None:
+        """Print the buffered output tail; grandchildren may keep the pipe open,
+        so don't wait for EOF for long."""
+        self._reader.join(timeout=2)
+        print(f"[hq-run] --- last {len(self.tail)} lines of {self.label} output ---")
+        sys.stdout.flush()
+        sys.stdout.buffer.write(b"\n".join(self.tail) + b"\n")
+        sys.stdout.buffer.flush()
 
     def poll(self) -> int | None:
         return self.proc.poll()
@@ -439,6 +467,9 @@ def main() -> int:
 
         cgroup.cleanup()
         if final_rc != 0 or exited_early:
+            for child in (monitor, fuzzer):
+                if child is not None:
+                    child.dump_tail()
             sys.stdout.flush()
             sys.stderr.flush()
             save_log_tails(runs_dir.parent / "logs", job_id)
