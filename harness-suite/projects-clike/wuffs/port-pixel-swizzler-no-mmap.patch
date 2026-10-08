@@ -1,0 +1,172 @@
+diff --git a/fuzz/c/std/pixel_swizzler_fuzzer.c b/fuzz/c/std/pixel_swizzler_fuzzer.c
+index a784a027..88e69606 100644
+--- a/fuzz/c/std/pixel_swizzler_fuzzer.c
++++ b/fuzz/c/std/pixel_swizzler_fuzzer.c
+@@ -60,8 +60,12 @@ It should print "PASS", amongst other information, and exit(0).
+ #define WUFFS_CONFIG__MODULES
+ #define WUFFS_CONFIG__MODULE__BASE
+ 
++#if defined(__wasm__)
++#include <stdlib.h>
++#else
+ #include <sys/mman.h>
+ #include <unistd.h>
++#endif
+ 
+ // If building this program in an environment that doesn't easily accommodate
+ // relative includes, you can use the script/inline-c-relative-includes.go
+@@ -95,7 +99,11 @@ const wuffs_base__pixel_blend blends[] = {
+ 
+ size_t  //
+ round_up_to_pagesize(size_t n) {
++#if defined(__wasm__)
++  size_t ps = 0x1000;
++#else
+   size_t ps = getpagesize();
++#endif
+   if (ps <= 0) {
+     return n;
+   }
+@@ -105,6 +113,7 @@ round_up_to_pagesize(size_t n) {
+ // allocate_guarded_pages allocates (2 * len) bytes of memory. The first half
+ // has read|write permissions. The second half has no permissions, so that
+ // attempting to read or write to it will cause a segmentation fault.
++#if !defined(__wasm__)
+ const char*  //
+ allocate_guarded_pages(uint8_t** ptr_out, size_t len) {
+   void* ptr =
+@@ -118,6 +127,31 @@ allocate_guarded_pages(uint8_t** ptr_out, size_t len) {
+   *ptr_out = ptr;
+   return NULL;
+ }
++#endif  // !defined(__wasm__)
++
++#if defined(__wasm__)
++// WebAssembly has no mmap/mprotect, but accessing past the end of linear
++// memory traps. wasm_guarded_end returns a pointer to the end of linear memory,
++// after (re-)growing memory by one 64 KiB page whenever something else (e.g.
++// malloc) has grown memory since the previous call. The 64 KiB just below the
++// returned pointer are writable; the byte at the returned pointer is not.
++//
++// Only one buffer can sit at the end of linear memory, so each fuzz_etc
++// function below uses otherwise unused hash bits to choose which of its
++// buffers gets the trapping guard; the others are unguarded static arrays.
++static uint8_t*  //
++wasm_guarded_end(void) {
++  static size_t our_end_pages = 0;
++  size_t cur = __builtin_wasm_memory_size(0);
++  if (cur != our_end_pages) {
++    if (__builtin_wasm_memory_grow(0, 1) == (size_t)-1) {
++      return NULL;
++    }
++    our_end_pages = __builtin_wasm_memory_size(0);
++  }
++  return (uint8_t*)(our_end_pages * 65536);
++}
++#endif  // defined(__wasm__)
+ 
+ // fuzz_swizzle_interleaved_from_slice tests that, regardless of the randomized
+ // inputs, calling wuffs_base__pixel_swizzler__swizzle_interleaved_from_slice
+@@ -166,6 +200,23 @@ fuzz_swizzle_interleaved_from_slice(wuffs_base__io_buffer* src, uint64_t hash) {
+     alloc_size = round_up_to_pagesize(0x100);
+   }
+ 
++#if defined(__wasm__)
++  static uint8_t dst_array[0x1000];
++  static uint8_t src_array[0x1000];
++  uint8_t* guarded_end = wasm_guarded_end();
++  if (!guarded_end) {
++    return "fuzz: internal error: memory.grow failed";
++  } else if (alloc_size > sizeof(dst_array)) {
++    return "fuzz: internal error: alloc_size is too large";
++  }
++  uint8_t* dst_alloc = dst_array;
++  uint8_t* src_alloc = src_array;
++  if (1 & (hash >> 40)) {
++    dst_alloc = guarded_end - alloc_size;
++  } else {
++    src_alloc = guarded_end - alloc_size;
++  }
++#else
+   static uint8_t* dst_alloc = NULL;
+   if (!dst_alloc) {
+     const char* z = allocate_guarded_pages(&dst_alloc, alloc_size);
+@@ -181,6 +232,7 @@ fuzz_swizzle_interleaved_from_slice(wuffs_base__io_buffer* src, uint64_t hash) {
+       return z;
+     }
+   }
++#endif  // defined(__wasm__)
+ 
+   // Position dst_slice and src_slice so that reading or writing one byte past
+   // their end will cause a segmentation fault.
+@@ -295,6 +347,46 @@ fuzz_swizzle_ycck(wuffs_base__io_buffer* src, uint64_t hash) {
+     dst_alloc_size = round_up_to_pagesize(8 * 64 * 64);
+   }
+ 
++#if defined(__wasm__)
++  // Bits 0..43 of hash are used above. Bits 44.. pick which of dst, src0,
++  // src1, src2 (or src3, if used) ends at the trapping end of linear memory.
++  static uint8_t dst_array[8 * 64 * 64];
++  static uint8_t src_array0[8 * 4 * 4 * 8 * 4 * 4];
++  static uint8_t src_array1[8 * 4 * 4 * 8 * 4 * 4];
++  static uint8_t src_array2[8 * 4 * 4 * 8 * 4 * 4];
++  static uint8_t src_array3[8 * 4 * 4 * 8 * 4 * 4];
++  uint8_t* guarded_end = wasm_guarded_end();
++  if (!guarded_end) {
++    return "fuzz: internal error: memory.grow failed";
++  } else if ((dst_alloc_size > sizeof(dst_array)) ||
++             (round_up_to_pagesize(sizeof(src_array0)) !=
++              sizeof(src_array0))) {
++    return "fuzz: internal error: wasm array sizes are wrong";
++  }
++  size_t src_alloc_size = sizeof(src_array0);
++  uint8_t* dst_alloc = dst_array;
++  uint8_t* src_alloc0 = src_array0;
++  uint8_t* src_alloc1 = src_array1;
++  uint8_t* src_alloc2 = src_array2;
++  uint8_t* src_alloc3 = src_array3;
++  switch ((hash >> 44) % (use_4th_component ? 5 : 4)) {
++    case 0:
++      dst_alloc = guarded_end - dst_alloc_size;
++      break;
++    case 1:
++      src_alloc0 = guarded_end - src_alloc_size;
++      break;
++    case 2:
++      src_alloc1 = guarded_end - src_alloc_size;
++      break;
++    case 3:
++      src_alloc2 = guarded_end - src_alloc_size;
++      break;
++    case 4:
++      src_alloc3 = guarded_end - src_alloc_size;
++      break;
++  }
++#else
+   static uint8_t* dst_alloc = NULL;
+   if (!dst_alloc) {
+     const char* z = allocate_guarded_pages(&dst_alloc, dst_alloc_size);
+@@ -302,6 +394,7 @@ fuzz_swizzle_ycck(wuffs_base__io_buffer* src, uint64_t hash) {
+       return z;
+     }
+   }
++#endif  // defined(__wasm__)
+ 
+   wuffs_base__pixel_buffer dst_pixbuf;
+   wuffs_base__pixel_config dst_pixcfg;
+@@ -321,6 +414,7 @@ fuzz_swizzle_ycck(wuffs_base__io_buffer* src, uint64_t hash) {
+     }
+   }
+ 
++#if !defined(__wasm__)
+   static size_t src_alloc_size = 0;
+   if (src_alloc_size == 0) {
+     src_alloc_size = round_up_to_pagesize(8 * 4 * 4 * 8 * 4 * 4);
+@@ -354,6 +448,7 @@ fuzz_swizzle_ycck(wuffs_base__io_buffer* src, uint64_t hash) {
+       return z;
+     }
+   }
++#endif  // !defined(__wasm__)
+ 
+   uint32_t src_len0 = width0 * height0;
+   uint32_t src_len1 = width1 * height1;

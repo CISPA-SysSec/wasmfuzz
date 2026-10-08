@@ -1,0 +1,18 @@
+diff --git a/fuzz/c/fuzzlib/fuzzlib.c b/fuzz/c/fuzzlib/fuzzlib.c
+index de34988f..0547a6f3 100644
+--- a/fuzz/c/fuzzlib/fuzzlib.c
++++ b/fuzz/c/fuzzlib/fuzzlib.c
+@@ -19,8 +19,13 @@
+ 
+ void  //
+ intentional_segfault() {
++#if defined(__wasm__)
++  // Writing to address 0 does not trap in WebAssembly linear memory.
++  __builtin_trap();
++#else
+   static volatile int* ptr = NULL;
+   *ptr = 0;
++#endif
+ }
+ 
+ static uint32_t  //
