@@ -1,0 +1,96 @@
+# Standalone cargo-fuzz crate for the ICU4X crates shipped in Chromium / Firefox,
+# built against the ICU4X checkout in ../repo.
+
+[package]
+name = "icu4x-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.4", features = ["derive"] }
+ixdtf = { path = "../repo/utils/ixdtf", features = ["duration"] }
+icu_locale_core = { path = "../repo/components/locale_core" }
+icu_locale = { path = "../repo/components/locale", features = ["compiled_data"] }
+icu_normalizer = { path = "../repo/components/normalizer", features = ["compiled_data", "utf8_iter", "utf16_iter"] }
+icu_casemap = { path = "../repo/components/casemap", features = ["compiled_data"] }
+icu_properties = { path = "../repo/components/properties", features = ["compiled_data"] }
+icu_collections = { path = "../repo/components/collections" }
+# Firefox: js/src/builtin/intl/collator_glue enables "latin1".
+icu_collator = { path = "../repo/components/collator", features = ["compiled_data", "latin1", "unstable"] }
+# Firefox: intl/lwbrk via icu_capi "segmenter" (auto = dictionary + LSTM models).
+icu_segmenter = { path = "../repo/components/segmenter", features = ["compiled_data", "auto"] }
+icu_calendar = { path = "../repo/components/calendar", features = ["compiled_data", "unstable"] }
+utf8_iter = "1.0.4"
+utf16_iter = "1.0.5"
+writeable = { path = "../repo/utils/writeable" }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "ixdtf"
+path = "fuzz_targets/ixdtf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "locale"
+path = "fuzz_targets/locale.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "normalizer_compare_self"
+path = "fuzz_targets/normalizer_compare_self.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "casemap"
+path = "fuzz_targets/casemap.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "collator"
+path = "fuzz_targets/collator.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "segmenter"
+path = "fuzz_targets/segmenter.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "properties"
+path = "fuzz_targets/properties.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "calendar_construction"
+path = "fuzz_targets/calendar_construction.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "calendar_add"
+path = "fuzz_targets/calendar_add.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "calendar_until"
+path = "fuzz_targets/calendar_until.rs"
+test = false
+doc = false
