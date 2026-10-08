@@ -1,0 +1,306 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index c8b37b8..cda684e 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -34,3 +34,7 @@ path = "fuzzers/fuzz_labels.rs"
+ [[bin]]
+ name = "fuzz_mem"
+ path = "fuzzers/fuzz_mem.rs"
++
++[[bin]]
++name = "fuzz_roundtrip"
++path = "fuzzers/fuzz_roundtrip.rs"
+diff --git a/fuzz/fuzzers/fuzz_roundtrip.rs b/fuzz/fuzzers/fuzz_roundtrip.rs
+new file mode 100644
+index 0000000..aa42904
+--- /dev/null
++++ b/fuzz/fuzzers/fuzz_roundtrip.rs
+@@ -0,0 +1,288 @@
++// Streaming decode -> encode roundtrip harness (added for wasmfuzz harness-suite).
++//
++// Input layout:
++//   byte 0: encoding index (all 40 WHATWG encodings)
++//   byte 1: flags
++//           bits 0-1: BOM handling (0 = sniff, 1 = remove, 2/3 = none)
++//           bit 2:    decode to UTF-16 (like Gecko's HTML parser) instead of UTF-8
++//           bit 3:    tight output buffers (exercise OutputFull paths)
++//   byte 2: number n (mod 16) of chunk-size bytes that follow
++//   n bytes: chunk sizes, cycled; used to split the decoder input and the
++//            encoder input
++//   rest:   payload bytes to decode
++//
++// Invariants checked:
++//   * streaming decode, with any chunking and output buffer sizes, equals the
++//     non-streaming Encoding::decode* result and is valid UTF-8 / UTF-16
++//   * streaming encode of the decoded text into the output encoding equals the
++//     non-streaming Encoding::encode result
++//   * encode(decode(encode(s))) == encode(s) (encoder output is stable under
++//     a decode/encode cycle)
++
++#![no_main]
++#[macro_use]
++extern crate libfuzzer_sys;
++extern crate encoding_rs;
++
++use encoding_rs::*;
++
++static ENCODINGS: [&'static Encoding; 40] = [
++    &UTF_8_INIT,
++    &REPLACEMENT_INIT,
++    &GBK_INIT,
++    &BIG5_INIT,
++    &EUC_JP_INIT,
++    &GB18030_INIT,
++    &UTF_16BE_INIT,
++    &UTF_16LE_INIT,
++    &SHIFT_JIS_INIT,
++    &EUC_KR_INIT,
++    &ISO_2022_JP_INIT,
++    &X_USER_DEFINED_INIT,
++    &WINDOWS_1250_INIT,
++    &WINDOWS_1251_INIT,
++    &WINDOWS_1252_INIT,
++    &WINDOWS_1253_INIT,
++    &WINDOWS_1254_INIT,
++    &WINDOWS_1255_INIT,
++    &WINDOWS_1256_INIT,
++    &WINDOWS_1257_INIT,
++    &WINDOWS_1258_INIT,
++    &KOI8_U_INIT,
++    &MACINTOSH_INIT,
++    &IBM866_INIT,
++    &KOI8_R_INIT,
++    &ISO_8859_2_INIT,
++    &ISO_8859_3_INIT,
++    &ISO_8859_4_INIT,
++    &ISO_8859_5_INIT,
++    &ISO_8859_6_INIT,
++    &ISO_8859_7_INIT,
++    &ISO_8859_8_INIT,
++    &ISO_8859_10_INIT,
++    &ISO_8859_13_INIT,
++    &ISO_8859_14_INIT,
++    &WINDOWS_874_INIT,
++    &ISO_8859_15_INIT,
++    &ISO_8859_16_INIT,
++    &ISO_8859_8_I_INIT,
++    &X_MAC_CYRILLIC_INIT,
++];
++
++struct Chunker<'a> {
++    sizes: &'a [u8],
++    pos: usize,
++}
++
++impl<'a> Chunker<'a> {
++    fn next(&mut self) -> usize {
++        if self.sizes.is_empty() {
++            return usize::MAX;
++        }
++        let s = self.sizes[self.pos % self.sizes.len()] as usize;
++        self.pos += 1;
++        s
++    }
++}
++
++fn check_utf16(data: &[u16]) {
++    assert!(String::from_utf16(data).is_ok(), "Bogus UTF-16");
++}
++
++fn stream_decode_utf8(mut decoder: Decoder, src: &[u8], chunker: &mut Chunker, tight: bool) -> String {
++    let mut out = Vec::new();
++    let mut offset: usize = 0;
++    loop {
++        let size = chunker.next().min(src.len() - offset);
++        let last = offset + size == src.len();
++        let mut chunk = &src[offset..offset + size];
++        offset += size;
++        loop {
++            let cap = if tight {
++                // Must be able to hold at least one replacement character.
++                4 + (chunker.next() & 7)
++            } else {
++                decoder.max_utf8_buffer_length(chunk.len()).unwrap()
++            };
++            let mut buf = vec![0u8; cap];
++            let (result, read, written, _) = decoder.decode_to_utf8(chunk, &mut buf, last);
++            assert!(read <= chunk.len());
++            assert!(written <= buf.len());
++            assert!(std::str::from_utf8(&buf[..written]).is_ok(), "Bogus UTF-8");
++            out.extend_from_slice(&buf[..written]);
++            chunk = &chunk[read..];
++            match result {
++                CoderResult::InputEmpty => {
++                    assert!(chunk.is_empty());
++                    break;
++                }
++                CoderResult::OutputFull => assert!(tight, "Bogus max size math"),
++            }
++        }
++        if last {
++            break;
++        }
++    }
++    String::from_utf8(out).expect("Bogus UTF-8")
++}
++
++fn stream_decode_utf16(mut decoder: Decoder, src: &[u8], chunker: &mut Chunker, tight: bool) -> Vec<u16> {
++    let mut out = Vec::new();
++    let mut offset: usize = 0;
++    loop {
++        let size = chunker.next().min(src.len() - offset);
++        let last = offset + size == src.len();
++        let mut chunk = &src[offset..offset + size];
++        offset += size;
++        loop {
++            let cap = if tight {
++                // Must be able to hold a surrogate pair.
++                2 + (chunker.next() & 7)
++            } else {
++                decoder.max_utf16_buffer_length(chunk.len()).unwrap()
++            };
++            let mut buf = vec![0u16; cap];
++            let (result, read, written, _) = decoder.decode_to_utf16(chunk, &mut buf, last);
++            assert!(read <= chunk.len());
++            assert!(written <= buf.len());
++            out.extend_from_slice(&buf[..written]);
++            chunk = &chunk[read..];
++            match result {
++                CoderResult::InputEmpty => {
++                    assert!(chunk.is_empty());
++                    break;
++                }
++                CoderResult::OutputFull => assert!(tight, "Bogus max size math"),
++            }
++        }
++        if last {
++            break;
++        }
++    }
++    check_utf16(&out);
++    out
++}
++
++fn stream_encode_utf8(encoding: &'static Encoding, src: &str, chunker: &mut Chunker) -> Vec<u8> {
++    let mut encoder = encoding.new_encoder();
++    let mut out = Vec::new();
++    let mut offset: usize = 0;
++    loop {
++        let mut end = offset.saturating_add(chunker.next()).min(src.len());
++        while !src.is_char_boundary(end) {
++            end += 1;
++        }
++        let last = end == src.len();
++        let mut chunk = &src[offset..end];
++        offset = end;
++        loop {
++            let needed = encoder
++                .max_buffer_length_from_utf8_if_no_unmappables(chunk.len())
++                .unwrap();
++            let mut buf = vec![0u8; needed];
++            let (result, read, written, _) = encoder.encode_from_utf8(chunk, &mut buf, last);
++            out.extend_from_slice(&buf[..written]);
++            chunk = &chunk[read..];
++            if result == CoderResult::InputEmpty {
++                assert!(chunk.is_empty());
++                break;
++            }
++        }
++        if last {
++            break;
++        }
++    }
++    out
++}
++
++fn stream_encode_utf16(encoding: &'static Encoding, src: &[u16], chunker: &mut Chunker) -> Vec<u8> {
++    let mut encoder = encoding.new_encoder();
++    let mut out = Vec::new();
++    let mut offset: usize = 0;
++    loop {
++        let mut end = offset.saturating_add(chunker.next()).min(src.len());
++        // Callers must not split surrogate pairs across input buffers.
++        if end > 0 && end < src.len() && (0xD800..0xDC00).contains(&src[end - 1])
++            && (0xDC00..0xE000).contains(&src[end])
++        {
++            end += 1;
++        }
++        let last = end == src.len();
++        let mut chunk = &src[offset..end];
++        offset = end;
++        loop {
++            let needed = encoder
++                .max_buffer_length_from_utf16_if_no_unmappables(chunk.len())
++                .unwrap();
++            let mut buf = vec![0u8; needed];
++            let (result, read, written, _) = encoder.encode_from_utf16(chunk, &mut buf, last);
++            out.extend_from_slice(&buf[..written]);
++            chunk = &chunk[read..];
++            if result == CoderResult::InputEmpty {
++                assert!(chunk.is_empty());
++                break;
++            }
++        }
++        if last {
++            break;
++        }
++    }
++    out
++}
++
++fuzz_target!(|data: &[u8]| {
++    if data.len() < 3 {
++        return;
++    }
++    let encoding = ENCODINGS[data[0] as usize % ENCODINGS.len()];
++    let flags = data[1];
++    let n = (data[2] & 15) as usize;
++    if data.len() < 3 + n {
++        return;
++    }
++    let mut sizes = &data[3..3 + n];
++    if sizes.iter().all(|&b| b == 0) {
++        // Only empty chunks would never make progress.
++        sizes = &[];
++    }
++    let payload = &data[3 + n..];
++    let bom_mode = flags & 3;
++    let to_utf16 = flags & 4 != 0;
++    let tight = flags & 8 != 0;
++
++    let (decoder, reference) = match bom_mode {
++        0 => (encoding.new_decoder(), encoding.decode(payload).0),
++        1 => (
++            encoding.new_decoder_with_bom_removal(),
++            encoding.decode_with_bom_removal(payload).0,
++        ),
++        _ => (
++            encoding.new_decoder_without_bom_handling(),
++            encoding.decode_without_bom_handling(payload).0,
++        ),
++    };
++
++    let mut chunker = Chunker { sizes, pos: 0 };
++    let (text, encoded) = if to_utf16 {
++        let utf16 = stream_decode_utf16(decoder, payload, &mut chunker, tight);
++        let text = String::from_utf16(&utf16).unwrap();
++        assert_eq!(text, reference, "streaming UTF-16 decode differs from one-shot decode");
++        let encoded = stream_encode_utf16(encoding.output_encoding(), &utf16, &mut chunker);
++        (text, encoded)
++    } else {
++        let text = stream_decode_utf8(decoder, payload, &mut chunker, tight);
++        assert_eq!(text, reference, "streaming UTF-8 decode differs from one-shot decode");
++        let encoded = stream_encode_utf8(encoding.output_encoding(), &text, &mut chunker);
++        (text, encoded)
++    };
++
++    // Encoding::encode uses the output encoding, as the streaming path above.
++    let (oneshot, used, _) = encoding.encode(&text);
++    assert_eq!(used, encoding.output_encoding());
++    assert_eq!(&encoded[..], &oneshot[..], "streaming encode differs from one-shot encode");
++
++    // Re-decoding the encoder output and encoding it again must be stable.
++    let (redecoded, _) = used.decode_without_bom_handling(&encoded);
++    let (reencoded, _, _) = used.encode(&redecoded);
++    assert_eq!(&reencoded[..], &encoded[..], "encode(decode(encode(s))) != encode(s)");
++});

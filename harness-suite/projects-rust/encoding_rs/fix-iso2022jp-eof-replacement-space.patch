@@ -1,0 +1,26 @@
+diff --git a/src/iso_2022_jp.rs b/src/iso_2022_jp.rs
+index 2703ad7..c38c4bd 100644
+--- a/src/iso_2022_jp.rs
++++ b/src/iso_2022_jp.rs
+@@ -129,6 +129,21 @@ impl Iso2022JpDecoder {
+         },
+         loop_preamble = {},
+         eof = {
++            match self.decoder_state {
++                Iso2022JpDecoderState::TrailByte
++                | Iso2022JpDecoderState::EscapeStart
++                | Iso2022JpDecoderState::Escape => {
++                    // The caller writes a REPLACEMENT CHARACTER for the
++                    // Malformed result below. The state may have been reached
++                    // by consuming the final byte without writing (e.g. ESC
++                    // after a lead byte, which itself already produced an
++                    // error), so there is no guarantee that space is left.
++                    if let Space::Full(dst_written) = dest.check_space_bmp() {
++                        return (DecoderResult::OutputFull, src_consumed, dst_written);
++                    }
++                }
++                _ => {}
++            }
+             match self.decoder_state {
+                 Iso2022JpDecoderState::TrailByte | Iso2022JpDecoderState::EscapeStart => {
+                     self.decoder_state = self.output_state;
