@@ -133,6 +133,36 @@ impl TestModule {
         )
     }
 
+    // pread/pwrite (sqlite's unixRead/unixWrite) on the emulated filesystem:
+    // positioned I/O must not move the fd's cursor.
+    fn file_pread_pwrite() -> Self {
+        Self::compile_simple_rust_expr(
+            "file-pread-pwrite",
+            "{
+                use std::io::{Seek, Write};
+                use std::os::fd::AsRawFd;
+                extern \"C\" {
+                    fn pread(fd: i32, buf: *mut u8, n: usize, off: i64) -> isize;
+                    fn pwrite(fd: i32, buf: *const u8, n: usize, off: i64) -> isize;
+                }
+                let mut f = std::fs::OpenOptions::new().read(true).write(true).create(true)
+                    .open(\"/tmp/pio.bin\").unwrap();
+                f.write_all(b\"abcdefgh\").unwrap();
+                let fd = f.as_raw_fd();
+                assert_eq!(unsafe { pwrite(fd, b\"XY\".as_ptr(), 2, 2) }, 2);
+                assert_eq!(unsafe { pwrite(fd, b\"ij\".as_ptr(), 2, 8) }, 2);
+                let mut buf = [0u8; 4];
+                assert_eq!(unsafe { pread(fd, buf.as_mut_ptr(), 4, 1) }, 4);
+                assert_eq!(&buf, b\"bXYe\");
+                assert_eq!(unsafe { pread(fd, buf.as_mut_ptr(), 4, 8) }, 2);
+                assert_eq!(f.stream_position().unwrap(), 8);
+                assert_eq!(std::fs::read(\"/tmp/pio.bin\").unwrap(), b\"abXYefghij\");
+                std::fs::remove_file(\"/tmp/pio.bin\").unwrap();
+                false
+            }",
+        )
+    }
+
     fn input_len_eq_2048() -> Self {
         Self::compile_simple_rust_expr("input-len-eq-2048", "data.len() == 2048")
     }
@@ -824,6 +854,19 @@ fn test_wasi_memfs_roundtrip_solves_with_cmplog() {
         opts.x.use_cmplog = true.into();
     })
     .assert_solves(TestModule::file_roundtrip_u64_cmp(), 300_000);
+}
+
+#[test]
+fn test_wasi_memfs_pread_pwrite() {
+    let test_module = TestModule::file_pread_pwrite();
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    let mut stats = Stats::default();
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(crate::jit::FeedbackOptions::nothing())
+        .build();
+    sess.initialize(&mut stats);
+    sess.run_tracing_fresh(&[0; 8], &mut stats)
+        .expect("pread/pwrite round trip should not trap");
 }
 
 // Bytes that went through the emulated filesystem must keep their concolic

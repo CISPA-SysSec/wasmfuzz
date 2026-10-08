@@ -14,6 +14,7 @@ const ERRNO_INVAL: u32 = 28;
 const ERRNO_ISDIR: u32 = 31;
 const ERRNO_NOENT: u32 = 44;
 const ERRNO_NOSPC: u32 = 51;
+const ERRNO_SPIPE: u32 = 70;
 const ERRNO_NOTDIR: u32 = 54;
 
 const OFLAGS_CREAT: u32 = 1 << 0;
@@ -486,6 +487,52 @@ unsafe extern "C" fn builtin_wasi_fd_write(
     ERRNO_SUCCESS
 }
 
+// pread/pwrite: fd_read/fd_write at `offset`, leaving the fd's cursor (and append mode) alone.
+fn with_cursor_at(vmctx: &mut VMContext, fd: u32, offset: u64, f: impl FnOnce(&mut VMContext) -> u32) -> u32 {
+    let Some(ofd) = vmctx.memfs.fd_mut(fd) else {
+        return ERRNO_BADF;
+    };
+    let (cursor, append) = (ofd.cursor, ofd.append);
+    (ofd.cursor, ofd.append) = (offset, false);
+    let res = f(vmctx);
+    let ofd = vmctx.memfs.fd_mut(fd).unwrap();
+    (ofd.cursor, ofd.append) = (cursor, append);
+    res
+}
+
+unsafe extern "C" fn builtin_wasi_fd_pread(
+    fd: u32,
+    iovs: u32,
+    iovs_len: u32,
+    offset: u64,
+    nread_out: u32,
+    concolic: u32,
+    vmctx: *mut VMContext,
+) -> u32 {
+    let vmctx_ref = unsafe { &mut *vmctx };
+    with_cursor_at(vmctx_ref, fd, offset, |_| unsafe {
+        builtin_wasi_fd_read(fd, iovs, iovs_len, nread_out, concolic, vmctx)
+    })
+}
+
+unsafe extern "C" fn builtin_wasi_fd_pwrite(
+    fd: u32,
+    iovs: u32,
+    iovs_len: u32,
+    offset: u64,
+    nwritten_out: u32,
+    concolic: u32,
+    vmctx: *mut VMContext,
+) -> u32 {
+    if fd == 1 || fd == 2 {
+        return ERRNO_SPIPE;
+    }
+    let vmctx_ref = unsafe { &mut *vmctx };
+    with_cursor_at(vmctx_ref, fd, offset, |_| unsafe {
+        builtin_wasi_fd_write(fd, iovs, iovs_len, nwritten_out, StdoutMode::Ignore as u32, concolic, vmctx)
+    })
+}
+
 unsafe extern "C" fn builtin_wasi_fd_seek(
     fd: u32,
     offset: i64,
@@ -752,6 +799,21 @@ impl FuncTranslator<'_, '_> {
                     builtin_wasi_fd_write as unsafe extern "C" fn(_, _, _, _, _, _, _) -> u32,
                     &[fd, iovs, iovs_len, nwritten, mode, concolic],
                 );
+                self.push_errno(res, bcx);
+            }
+            "fd_pread" | "fd_pwrite" => {
+                let [fd, iovs, iovs_len, offset, nout] =
+                    self.pop_args(&[I32, I32, I32, I64, I32], bcx)[..]
+                else {
+                    unreachable!()
+                };
+                let concolic = self.concolic_flag(bcx);
+                let f = if name == "fd_pread" {
+                    builtin_wasi_fd_pread as unsafe extern "C" fn(_, _, _, _, _, _, _) -> u32
+                } else {
+                    builtin_wasi_fd_pwrite as unsafe extern "C" fn(_, _, _, _, _, _, _) -> u32
+                };
+                let [res] = self.host_call(bcx, f, &[fd, iovs, iovs_len, offset, nout, concolic]);
                 self.push_errno(res, bcx);
             }
             "fd_seek" => {
