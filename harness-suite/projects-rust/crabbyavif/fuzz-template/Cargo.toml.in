@@ -1,0 +1,27 @@
+[package]
+name = "crabbyavif-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# Mirrors chromium/src/third_party/crabbyavif/BUILD.gn: features dav1d, libyuv, capi
+# (disable_cfi only toggles CFI sanitizer attributes and is irrelevant here).
+[dependencies.crabby-avif]
+path = ".."
+default-features = false
+features = ["dav1d", "libyuv", "capi"]
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
