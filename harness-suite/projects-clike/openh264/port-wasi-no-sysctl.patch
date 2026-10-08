@@ -1,0 +1,35 @@
+diff --git a/codec/common/src/WelsThreadLib.cpp b/codec/common/src/WelsThreadLib.cpp
+index 4e44f24..5078239 100644
+--- a/codec/common/src/WelsThreadLib.cpp
++++ b/codec/common/src/WelsThreadLib.cpp
+@@ -50,7 +50,7 @@
+ #include <unistd.h>
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/threading.h>
+-#elif !defined(__Fuchsia__)
++#elif !defined(__Fuchsia__) && !defined(__wasi__)
+ #include <sys/sysctl.h>
+ #endif
+ #ifdef __APPLE__
+@@ -236,7 +236,7 @@ WELS_THREAD_ERROR_CODE    WelsThreadCreate (WELS_THREAD_HANDLE* thread,  LPWELS_
+   err = pthread_attr_init (&at);
+   if (err)
+     return err;
+-#if !defined(__ANDROID__) && !defined(__Fuchsia__)
++#if !defined(__ANDROID__) && !defined(__Fuchsia__) && !defined(__wasi__)
+   err = pthread_attr_setscope (&at, PTHREAD_SCOPE_SYSTEM);
+   if (err)
+     return err;
+@@ -519,6 +519,12 @@ WELS_THREAD_ERROR_CODE    WelsQueryLogicalProcessInfo (WelsLogicalProcessInfo* p
+ 
+   pInfo->ProcessorCount = sysconf(_SC_NPROCESSORS_ONLN);
+   return WELS_THREAD_ERROR_OK;
++
++#elif defined(__wasi__)
++
++  // wasm32-wasip1: single-threaded, no sysctl.
++  pInfo->ProcessorCount = 1;
++  return WELS_THREAD_ERROR_OK;
+ #else
+ 
+   size_t len = sizeof (pInfo->ProcessorCount);
