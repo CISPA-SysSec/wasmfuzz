@@ -1,0 +1,142 @@
+diff --git a/fuzz-chromium/Cargo.toml b/fuzz-chromium/Cargo.toml
+new file mode 100644
+index 0000000..adcc396
+--- /dev/null
++++ b/fuzz-chromium/Cargo.toml
+@@ -0,0 +1,28 @@
++[package]
++name = "moxcms-chromium-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2024"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++
++# Same feature set as Chromium's //third_party/rust/moxcms/v0_8:lib (default
++# features; the x86/arm SIMD paths are cfg'd out on wasm32 anyway).
++[dependencies.moxcms]
++path = ".."
++
++# Standalone: do not join the upstream workspace (whose fuzz crate enables
++# the extra `options` and `in_place` features).
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "icc_to_srgb"
++path = "fuzz_targets/icc_to_srgb.rs"
++test = false
++doc = false
++bench = false
+diff --git a/fuzz-chromium/fuzz_targets/icc_to_srgb.rs b/fuzz-chromium/fuzz_targets/icc_to_srgb.rs
+new file mode 100644
+index 0000000..aeb5c79
+--- /dev/null
++++ b/fuzz-chromium/fuzz_targets/icc_to_srgb.rs
+@@ -0,0 +1,102 @@
++#![no_main]
++//! Parse an untrusted embedded ICC profile and convert pixels from it to sRGB,
++//! as an image decoder in Chromium does (moxcms is the Rust ICC parser that
++//! backs Skia's rust codecs, see blink kForceSkcmsICCParsing).
++
++use libfuzzer_sys::fuzz_target;
++use moxcms::{ColorProfile, DataColorSpace, Layout, TransformOptions};
++
++const PIXELS: usize = 64;
++
++fn src_layouts(cs: DataColorSpace) -> &'static [Layout] {
++    match cs {
++        DataColorSpace::Rgb => &[Layout::Rgb, Layout::Rgba],
++        DataColorSpace::Gray => &[Layout::Gray, Layout::GrayAlpha],
++        DataColorSpace::Lab => &[Layout::Rgb, Layout::Rgba],
++        DataColorSpace::Cmyk | DataColorSpace::Color4 => &[Layout::Rgba, Layout::Cmyka],
++        DataColorSpace::Color2 => &[Layout::GrayAlpha],
++        DataColorSpace::Color5 => &[Layout::Inks5],
++        DataColorSpace::Color6 => &[Layout::Inks6],
++        DataColorSpace::Color7 => &[Layout::Inks7],
++        DataColorSpace::Color8 => &[Layout::Inks8],
++        DataColorSpace::Color9 => &[Layout::Inks9],
++        DataColorSpace::Color10 => &[Layout::Inks10],
++        DataColorSpace::Color11 => &[Layout::Inks11],
++        DataColorSpace::Color12 => &[Layout::Inks12],
++        DataColorSpace::Color13 => &[Layout::Inks13],
++        DataColorSpace::Color14 => &[Layout::Inks14],
++        DataColorSpace::Color15 => &[Layout::Inks15],
++        _ => &[Layout::Rgb],
++    }
++}
++
++fn pixel_bytes(data: &[u8], n: usize) -> Vec<u8> {
++    // Use the profile bytes themselves as pixel data (deterministic, varied).
++    (0..n).map(|i| data[(i * 7919) % data.len()] ^ (i as u8)).collect()
++}
++
++fuzz_target!(|data: &[u8]| {
++    let Ok(profile) = ColorProfile::new_from_slice(data) else {
++        return;
++    };
++    let srgb = ColorProfile::new_srgb();
++    // The last byte picks the extra conversion depth to keep execs cheap.
++    let sel = data.last().copied().unwrap_or(0);
++    let options = TransformOptions {
++        rendering_intent: profile.rendering_intent,
++        ..TransformOptions::default()
++    };
++
++    for &src_layout in src_layouts(profile.color_space) {
++        let n_src = PIXELS * src_layout.channels();
++        for dst_layout in [Layout::Rgba, Layout::Rgb] {
++            let n_dst = PIXELS * dst_layout.channels();
++
++            if let Ok(t) = profile.create_transform_8bit(src_layout, &srgb, dst_layout, options) {
++                let src = pixel_bytes(data, n_src);
++                let mut dst = vec![0u8; n_dst];
++                let _ = t.transform(&src, &mut dst);
++            }
++
++            match sel % 4 {
++                1 => {
++                    if let Ok(t) =
++                        profile.create_transform_16bit(src_layout, &srgb, dst_layout, options)
++                    {
++                        let src: Vec<u16> = pixel_bytes(data, n_src * 2)
++                            .chunks_exact(2)
++                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
++                            .collect();
++                        let mut dst = vec![0u16; n_dst];
++                        let _ = t.transform(&src, &mut dst);
++                    }
++                }
++                2 => {
++                    if let Ok(t) =
++                        profile.create_transform_f32(src_layout, &srgb, dst_layout, options)
++                    {
++                        let src: Vec<f32> = pixel_bytes(data, n_src)
++                            .iter()
++                            .map(|&b| b as f32 / 255.0)
++                            .collect();
++                        let mut dst = vec![0f32; n_dst];
++                        let _ = t.transform(&src, &mut dst);
++                    }
++                }
++                3 => {
++                    // Reverse direction (sRGB -> profile), e.g. for encoders.
++                    if matches!(src_layout, Layout::Rgb | Layout::Rgba | Layout::Gray | Layout::GrayAlpha) {
++                        if let Ok(t) =
++                            srgb.create_transform_8bit(dst_layout, &profile, src_layout, options)
++                        {
++                            let src = pixel_bytes(data, n_dst);
++                            let mut dst = vec![0u8; n_src];
++                            let _ = t.transform(&src, &mut dst);
++                        }
++                    }
++                }
++                _ => {}
++            }
++        }
++    }
++});

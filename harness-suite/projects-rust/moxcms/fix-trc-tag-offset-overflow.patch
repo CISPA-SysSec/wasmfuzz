@@ -1,0 +1,13 @@
+diff --git a/src/reader.rs b/src/reader.rs
+index 339865e..6f5e2d3 100644
+--- a/src/reader.rs
++++ b/src/reader.rs
+@@ -732,7 +732,7 @@ impl ColorProfile {
+             return Ok(None);
+         }
+         let last_tag_offset = if tag_size != 0 {
+-            tag_size + entry
++            tag_size.safe_add(entry)?
+         } else {
+             slice.len()
+         };

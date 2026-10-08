@@ -1,0 +1,18 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 851ed7d..850a1d7 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -34,13 +34,6 @@ test = false
+ doc = false
+ bench = false
+ 
+-[[bin]]
+-name = "lut"
+-path = "lut/lut.rs"
+-test = false
+-doc = false
+-bench = false
+-
+ [[bin]]
+ name = "safe_read_create"
+ path = "safe_read_create/safe_read_create.rs"

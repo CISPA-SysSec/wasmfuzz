@@ -1,0 +1,10 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 40dec07..3b401a7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,4 +1,4 @@
+-workspace = { members = ["app", "fuzz"] }
++workspace = { members = ["fuzz"] }
+ 
+ [package]
+ name = "moxcms"
