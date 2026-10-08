@@ -2,9 +2,9 @@ set -e
 
 apt-get update && apt-get install -y unzip
 
-git clone-rev.sh https://github.com/google/bloaty.git "$PROJECT/repo" 37bf8e708398727b58d9a61e66e9ccb5db6df619 --recursive
+git clone-rev.sh https://github.com/google/bloaty.git "$PROJECT/repo" f1a83e63f36beb628dcf022e1201a2eb391a22a6 --recursive
 
-git -C "$PROJECT/repo/third_party/zlib" checkout 5a82f71ed1dfc0bec044d9702463dbdf84ea3b71
+git -C "$PROJECT/repo/third_party/zlib" checkout 767c4c947852e143f582c85f14cf573411df1b35
 
 git -C "$PROJECT/repo" apply ../port-build-and-wasi.patch
 git -C "$PROJECT/repo/third_party/abseil-cpp" apply ../../../port-absl-examine-stack.patch

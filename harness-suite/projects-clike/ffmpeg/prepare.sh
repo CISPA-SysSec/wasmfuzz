@@ -4,8 +4,8 @@ apt-get update -y
 apt-get install -y autoconf automake libtool pkg-config nasm yasm python3
 
 # FFmpeg and codec dependencies (subset aligned with ffmpeg.wasm / OSS-Fuzz).
-git clone-rev.sh https://github.com/FFmpeg/FFmpeg.git "$PROJECT/repo" e7782ef185fefcc4ec087b98cedc7eee60d36100
-git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/zlib" d81c2d7eb705c62294ba03299255672078e89115
+git clone-rev.sh https://github.com/FFmpeg/FFmpeg.git "$PROJECT/repo" ae348e4aa24634a00ee41285b59817fcb190d7e9
+git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/zlib" 767c4c947852e143f582c85f14cf573411df1b35
 git clone-rev.sh https://gitlab.xiph.org/xiph/ogg.git "$PROJECT/ogg" 06a5e0262cdc28aa4ae6797627a783b5010440f0
 git clone-rev.sh https://gitlab.xiph.org/xiph/opus.git "$PROJECT/opus" 503d81b138d76621aae4b12786e90de48aa8db3a
 git clone-rev.sh https://gitlab.xiph.org/xiph/theora.git "$PROJECT/theora" 28fd5ec77f0ad0e07a371cef1047828116f6bd8a

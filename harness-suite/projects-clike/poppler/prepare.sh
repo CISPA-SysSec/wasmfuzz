@@ -1,8 +1,8 @@
 set -e
 
-git clone-rev.sh https://gitlab.freedesktop.org/poppler/poppler.git "$PROJECT/repo" aafae2f0bd146810c636e7a4399bee4f6e347354
-git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/zlib" d81c2d7eb705c62294ba03299255672078e89115
-git clone-rev.sh https://gitlab.freedesktop.org/freetype/freetype.git "$PROJECT/freetype" a69e39ad9ed44818ca316683f6984d25b2a7492b
+git clone-rev.sh https://gitlab.freedesktop.org/poppler/poppler.git "$PROJECT/repo" 0c9cf7ce6ece57046cf8d77a0153bff661791616
+git clone-rev.sh https://github.com/madler/zlib.git "$PROJECT/zlib" 767c4c947852e143f582c85f14cf573411df1b35
+git clone-rev.sh https://gitlab.freedesktop.org/freetype/freetype.git "$PROJECT/freetype" d333439633039de426f943f28a2926c7f97b5ae5
 git -C "$PROJECT/freetype" apply ../port-freetype-wasi-sjlj.patch
 git -C "$PROJECT/repo" apply ../port-wasi-fuzzer-init.patch
 git -C "$PROJECT/repo" apply ../port-wasi-object-incomplete-type.patch

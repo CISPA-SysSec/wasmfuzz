@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index aa73591..15c3862 100644
+index e60c083..f211e4e 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -20,7 +20,7 @@ set(CPACK_RESOURCE_FILE_README ${zlib_SOURCE_DIR}/README)
@@ -9,5 +9,5 @@ index aa73591..15c3862 100644
 -option(ZLIB_BUILD_SHARED "Enable building zlib shared library" ON)
 +option(ZLIB_BUILD_SHARED "Enable building zlib shared library" OFF)
  option(ZLIB_BUILD_STATIC "Enable building zlib static library" ON)
- option(ZLIB_BUILD_MINIZIP "Enable building libminizip contrib library" OFF)
  option(ZLIB_INSTALL "Enable installation of zlib" ON)
+ set(ZLIB_PREFIX "" CACHE STRING
