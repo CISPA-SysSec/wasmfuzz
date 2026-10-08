@@ -1,0 +1,12 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 97f5714..820aafe 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -33,3 +33,7 @@ path = "fuzz_targets/roundtrip.rs"
+ [[bin]]
+ name = "chromium_skia"
+ path = "fuzz_targets/chromium_skia.rs"
++
++[patch.crates-io]
++# fdeflate 0.3.7 vendored by prepare.sh (with fix- patches).
++fdeflate = { path = "../../fdeflate" }

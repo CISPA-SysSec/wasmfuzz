@@ -1,0 +1,307 @@
+Subject: [PATCH] Report output decoded before an error, return the error next
+
+Decompressor::read returned Err as soon as the state machine hit invalid
+data, dropping the count of the bytes it had written in the same call. The
+state machine keeps going after the output buffer is full as long as no
+output is needed (block headers, code lengths, the checksum), so whether
+corrupt data right after the caller's last needed byte is reported depends
+on how the input is split into chunks: given all input at once, read() fails
+on an invalid block header that follows the data; given it byte by byte,
+read() returns the data first and a caller that stops once its output is
+full (the png crate stops at the end of the frame) never sees the error.
+Found by the png `buf_independent` fuzzer (whole-slice reader fails with
+InvalidBlockType / InvalidUncompressedBlockLength / BadCodeLengthHuffmanTree
+/ InvalidHlit / InvalidHdist, byte-by-byte readers succeed).
+
+Like std::io::Read, return the output written before the error with Ok and
+keep the error for the next call. Errors in a call that wrote nothing are
+returned directly as before. Valid streams decode exactly as before. One
+visible change for corrupt streams: decompress_to_vec_bounded() reports
+OutputTooLarge instead of the error when the corruption follows exactly
+maxlen bytes of output. Present at fdeflate HEAD a713d02 too (read()
+lost its end_of_input argument there; the change is the same).
+Test: test_input_chunking_sensitivity_error_after_full_output.
+
+diff --git a/src/decompress.rs b/src/decompress.rs
+index baba376..9abc3a8 100644
+--- a/src/decompress.rs
++++ b/src/decompress.rs
+@@ -107,6 +107,10 @@ pub struct Decompressor {
+     state: State,
+     checksum: Adler32,
+     ignore_adler32: bool,
++
++    /// An error detected by a `read` call that had already written output. It is returned by the
++    /// next `read` call, so that the caller first receives the output decoded before the error.
++    pending_error: Option<DecompressionError>,
+ }
+ 
+ impl Default for Decompressor {
+@@ -146,6 +150,7 @@ impl Decompressor {
+             last_block: false,
+             ignore_adler32: false,
+             fixed_table: false,
++            pending_error: None,
+         }
+     }
+ 
+@@ -872,6 +877,10 @@ impl Decompressor {
+     /// - The input is fully consumed.
+     /// - The output is full but there are more bytes to output.
+     /// - The deflate stream is complete (and `is_done` will return true).
++    /// - The deflate stream is invalid, but this call wrote output before detecting that. The
++    ///   output is returned first (like `std::io::Read` does) and the next call returns the error.
++    ///   This keeps the output and the error independent of how the input is split into chunks:
++    ///   decoding stops at the same point when the caller stops asking for more output.
+     ///
+     /// # Panics
+     ///
+@@ -883,6 +892,9 @@ impl Decompressor {
+         output_position: usize,
+         end_of_input: bool,
+     ) -> Result<(usize, usize), DecompressionError> {
++        if let Some(err) = self.pending_error.take() {
++            return Err(err);
++        }
+         if let State::Done = self.state {
+             return Ok((0, 0));
+         }
+@@ -915,98 +927,121 @@ impl Decompressor {
+ 
+         // Main decoding state machine.
+         let mut last_state = None;
+-        while last_state != Some(self.state) {
+-            last_state = Some(self.state);
+-            match self.state {
+-                State::ZlibHeader => {
+-                    self.fill_buffer(&mut remaining_input);
+-                    if self.nbits < 16 {
+-                        break;
+-                    }
++        let result: Result<(), DecompressionError> = 'state_machine: {
++            while last_state != Some(self.state) {
++                last_state = Some(self.state);
++                match self.state {
++                    State::ZlibHeader => {
++                        self.fill_buffer(&mut remaining_input);
++                        if self.nbits < 16 {
++                            break;
++                        }
+ 
+-                    let input0 = self.peak_bits(8);
+-                    let input1 = self.peak_bits(16) >> 8 & 0xff;
+-                    if input0 & 0x0f != 0x08
+-                        || (input0 & 0xf0) > 0x70
+-                        || input1 & 0x20 != 0
+-                        || (input0 << 8 | input1) % 31 != 0
+-                    {
+-                        return Err(DecompressionError::BadZlibHeader);
+-                    }
++                        let input0 = self.peak_bits(8);
++                        let input1 = self.peak_bits(16) >> 8 & 0xff;
++                        if input0 & 0x0f != 0x08
++                            || (input0 & 0xf0) > 0x70
++                            || input1 & 0x20 != 0
++                            || (input0 << 8 | input1) % 31 != 0
++                        {
++                            return Err(DecompressionError::BadZlibHeader);
++                        }
+ 
+-                    self.consume_bits(16);
+-                    self.state = State::BlockHeader;
+-                }
+-                State::BlockHeader => {
+-                    self.read_block_header(&mut remaining_input)?;
+-                }
+-                State::CodeLengthCodes => {
+-                    self.read_code_length_codes(&mut remaining_input)?;
+-                }
+-                State::CodeLengths => {
+-                    self.read_code_lengths(&mut remaining_input)?;
+-                }
+-                State::CompressedData => {
+-                    output_index =
+-                        self.read_compressed(&mut remaining_input, output, output_index)?
+-                }
+-                State::UncompressedData => {
+-                    // Drain any bytes from our buffer.
+-                    debug_assert_eq!(self.nbits % 8, 0);
+-                    while self.nbits > 0
+-                        && self.uncompressed_bytes_left > 0
+-                        && output_index < output.len()
+-                    {
+-                        output[output_index] = self.peak_bits(8) as u8;
+-                        self.consume_bits(8);
+-                        output_index += 1;
+-                        self.uncompressed_bytes_left -= 1;
++                        self.consume_bits(16);
++                        self.state = State::BlockHeader;
+                     }
+-                    // Buffer may contain one additional byte. Clear it to avoid confusion.
+-                    if self.nbits == 0 {
+-                        self.buffer = 0;
++                    State::BlockHeader => {
++                        if let Err(err) = self.read_block_header(&mut remaining_input) {
++                            break 'state_machine Err(err);
++                        }
+                     }
+-
+-                    // Copy subsequent bytes directly from the input.
+-                    let copy_bytes = (self.uncompressed_bytes_left as usize)
+-                        .min(remaining_input.len())
+-                        .min(output.len() - output_index);
+-                    output[output_index..][..copy_bytes]
+-                        .copy_from_slice(&remaining_input[..copy_bytes]);
+-                    remaining_input = &remaining_input[copy_bytes..];
+-                    output_index += copy_bytes;
+-                    self.uncompressed_bytes_left -= copy_bytes as u16;
+-
+-                    if self.uncompressed_bytes_left == 0 {
+-                        self.state = if self.last_block {
+-                            State::Checksum
+-                        } else {
+-                            State::BlockHeader
+-                        };
++                    State::CodeLengthCodes => {
++                        if let Err(err) = self.read_code_length_codes(&mut remaining_input) {
++                            break 'state_machine Err(err);
++                        }
+                     }
+-                }
+-                State::Checksum => {
+-                    self.fill_buffer(&mut remaining_input);
+-
+-                    let align_bits = self.nbits % 8;
+-                    if self.nbits >= 32 + align_bits {
+-                        self.checksum.write(&output[output_position..output_index]);
+-                        if align_bits != 0 {
+-                            self.consume_bits(align_bits);
++                    State::CodeLengths => {
++                        if let Err(err) = self.read_code_lengths(&mut remaining_input) {
++                            break 'state_machine Err(err);
++                        }
++                    }
++                    State::CompressedData => {
++                        match self.read_compressed(&mut remaining_input, output, output_index) {
++                            Ok(index) => output_index = index,
++                            Err(err) => break 'state_machine Err(err),
+                         }
+-                        #[cfg(not(fuzzing))]
+-                        if !self.ignore_adler32
+-                            && (self.peak_bits(32) as u32).swap_bytes() != self.checksum.finish()
++                    }
++                    State::UncompressedData => {
++                        // Drain any bytes from our buffer.
++                        debug_assert_eq!(self.nbits % 8, 0);
++                        while self.nbits > 0
++                            && self.uncompressed_bytes_left > 0
++                            && output_index < output.len()
+                         {
+-                            return Err(DecompressionError::WrongChecksum);
++                            output[output_index] = self.peak_bits(8) as u8;
++                            self.consume_bits(8);
++                            output_index += 1;
++                            self.uncompressed_bytes_left -= 1;
++                        }
++                        // Buffer may contain one additional byte. Clear it to avoid confusion.
++                        if self.nbits == 0 {
++                            self.buffer = 0;
++                        }
++
++                        // Copy subsequent bytes directly from the input.
++                        let copy_bytes = (self.uncompressed_bytes_left as usize)
++                            .min(remaining_input.len())
++                            .min(output.len() - output_index);
++                        output[output_index..][..copy_bytes]
++                            .copy_from_slice(&remaining_input[..copy_bytes]);
++                        remaining_input = &remaining_input[copy_bytes..];
++                        output_index += copy_bytes;
++                        self.uncompressed_bytes_left -= copy_bytes as u16;
++
++                        if self.uncompressed_bytes_left == 0 {
++                            self.state = if self.last_block {
++                                State::Checksum
++                            } else {
++                                State::BlockHeader
++                            };
++                        }
++                    }
++                    State::Checksum => {
++                        self.fill_buffer(&mut remaining_input);
++
++                        let align_bits = self.nbits % 8;
++                        if self.nbits >= 32 + align_bits {
++                            self.checksum.write(&output[output_position..output_index]);
++                            if align_bits != 0 {
++                                self.consume_bits(align_bits);
++                            }
++                            #[cfg(not(fuzzing))]
++                            if !self.ignore_adler32
++                                && (self.peak_bits(32) as u32).swap_bytes()
++                                    != self.checksum.finish()
++                            {
++                                break 'state_machine Err(DecompressionError::WrongChecksum);
++                            }
++                            self.state = State::Done;
++                            self.consume_bits(32);
++                            break;
+                         }
+-                        self.state = State::Done;
+-                        self.consume_bits(32);
+-                        break;
+                     }
++                    State::Done => unreachable!(),
+                 }
+-                State::Done => unreachable!(),
+             }
++            Ok(())
++        };
++
++        if let Err(err) = result {
++            if output_index == output_position {
++                return Err(err);
++            }
++            self.pending_error = Some(err);
++            return Ok((
++                input.len() - remaining_input.len(),
++                output_index - output_position,
++            ));
+         }
+ 
+         if !self.ignore_adler32 && self.state != State::Done {
+@@ -1340,4 +1375,35 @@ mod tests {
+             TestDecompressionError::ProdError(DecompressionError::BadLiteralLengthHuffmanTree)
+         );
+     }
++
++    /// This is a regression test found by the `buf_independent` fuzzer from the `png` crate. The
++    /// caller's output buffer holds exactly the data it needs (a PNG frame) and an invalid block
++    /// header follows that data. Decompressing the whole input at once used to fail with
++    /// `InvalidBlockType` (losing the output), while decompressing byte-by-byte filled the
++    /// output first, so a caller that stops once its output is full saw no error.
++    #[test]
++    fn test_input_chunking_sensitivity_error_after_full_output() {
++        // zlib header; fixed block with "ab" and end-of-block; final block with BTYPE=11; padding.
++        let input = [0x78, 0x01, 0x4a, 0x4c, 0x02, 0x1c, 0x00, 0x00];
++        for chunk_size in [1, input.len()] {
++            let mut d = Decompressor::new();
++            let mut output = [0u8; 2];
++            let (mut in_pos, mut out_pos) = (0, 0);
++            while out_pos < output.len() {
++                let end = (in_pos + chunk_size).min(input.len());
++                let (consumed, produced) = d
++                    .read(&input[in_pos..end], &mut output, out_pos, false)
++                    .unwrap();
++                in_pos += consumed;
++                out_pos += produced;
++            }
++            assert_eq!(&output, b"ab");
++
++            // The error is still reported once the caller asks for more output.
++            assert_eq!(
++                d.read(&input[in_pos..], &mut [0; 8], 0, true),
++                Err(DecompressionError::InvalidBlockType)
++            );
++        }
++    }
+ }
