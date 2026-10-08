@@ -1,0 +1,171 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 64bc690..29574e2 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -14,10 +14,11 @@ libfuzzer-sys="0.4.0"
+ 
+ flate2 = "1.1.1"
+ 
+-[dependencies.miniz_oxide_c_api]
+-path = ".."
++# fuzz_high (differential against the original C miniz via miniz_oxide_c_api's
++# cc build) is not built for wasm.
+ [dependencies.miniz_oxide]
+ path = "../miniz_oxide"
++features = ["simd"]
+ 
+ 
+ # This seems to do the right thing but is this the correct way to
+@@ -29,10 +30,6 @@ miniz_oxide = { path = "../miniz_oxide" , features=["simd"]}
+ [workspace]
+ members = ["."]
+ 
+-[[bin]]
+-name = "fuzz_high"
+-path = "fuzz_targets/fuzz_high.rs"
+-
+ [[bin]]
+ name = "inflate_nonwrapping"
+ path = "fuzz_targets/inflate_nonwrapping.rs"
+@@ -49,6 +46,10 @@ path = "fuzz_targets/roundtrip.rs"
+ name = "roundtrip_zlib"
+ path = "fuzz_targets/roundtrip_zlib.rs"
+ 
+-[features]
+-default = ["fuzzing"]
+-fuzzing = ["miniz_oxide_c_api/fuzzing"]
++[[bin]]
++name = "inflate_zlib"
++path = "fuzz_targets/inflate_zlib.rs"
++
++[[bin]]
++name = "inflate_stream"
++path = "fuzz_targets/inflate_stream.rs"
+diff --git a/fuzz/fuzz_targets/inflate_nonwrapping.rs b/fuzz/fuzz_targets/inflate_nonwrapping.rs
+index f4c6d3c..471c71e 100644
+--- a/fuzz/fuzz_targets/inflate_nonwrapping.rs
++++ b/fuzz/fuzz_targets/inflate_nonwrapping.rs
+@@ -1,13 +1,11 @@
+ #![no_main]
+ #[macro_use]
+ extern crate libfuzzer_sys;
+-extern crate flate2;
++extern crate miniz_oxide;
+ 
+-use flate2::read::DeflateDecoder;
+-use std::io::Read;
++// Cap the output so deflate bombs don't exhaust the wasm heap.
++const LIMIT: usize = 4 << 20;
+ 
+ fuzz_target!(|data: &[u8]| {
+-    // fuzzed code goes here
+-    let mut result = Vec::new();
+-    let _ = DeflateDecoder::new(data).read_to_end(&mut result);
++    let _ = miniz_oxide::inflate::decompress_to_vec_with_limit(data, LIMIT);
+ });
+diff --git a/fuzz/fuzz_targets/inflate_stream.rs b/fuzz/fuzz_targets/inflate_stream.rs
+new file mode 100644
+index 0000000..f7004a6
+--- /dev/null
++++ b/fuzz/fuzz_targets/inflate_stream.rs
+@@ -0,0 +1,73 @@
++#![no_main]
++#[macro_use]
++extern crate libfuzzer_sys;
++extern crate miniz_oxide;
++
++use miniz_oxide::inflate::stream::{inflate, InflateState};
++use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
++
++const LIMIT: usize = 4 << 20;
++
++// Streaming (wrapping-buffer) inflate with fuzzer-chosen input/output chunk
++// sizes, cross-checked against the one-shot decoder.
++fuzz_target!(|data: &[u8]| {
++    if data.len() < 3 {
++        return;
++    }
++    let format = match data[0] & 3 {
++        0 | 3 => DataFormat::Raw,
++        1 => DataFormat::Zlib,
++        _ => DataFormat::ZLibIgnoreChecksum,
++    };
++    let in_chunk = (data[1] as usize % 64) + 1;
++    let out_chunk = (data[2] as usize % 128) + 1;
++    let input = &data[3..];
++
++    let mut state = InflateState::new_boxed(format);
++    let mut out = Vec::new();
++    let mut buf = vec![0u8; out_chunk];
++    let mut pos = 0;
++    let mut ok = false;
++    loop {
++        let end = core::cmp::min(pos + in_chunk, input.len());
++        let flush = if end == input.len() {
++            MZFlush::Finish
++        } else {
++            MZFlush::None
++        };
++        let res = inflate(&mut state, &input[pos..end], &mut buf, flush);
++        pos += res.bytes_consumed;
++        out.extend_from_slice(&buf[..res.bytes_written]);
++        if out.len() > LIMIT {
++            return;
++        }
++        match res.status {
++            Ok(MZStatus::StreamEnd) => {
++                ok = true;
++                break;
++            }
++            Ok(_) => {}
++            Err(MZError::Buf) => {
++                if res.bytes_consumed == 0 && res.bytes_written == 0 && pos >= input.len() {
++                    break;
++                }
++            }
++            Err(_) => break,
++        }
++    }
++
++    if ok {
++        let oneshot = match format {
++            DataFormat::Raw => {
++                miniz_oxide::inflate::decompress_to_vec_with_limit(input, LIMIT)
++            }
++            DataFormat::Zlib => {
++                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(input, LIMIT)
++            }
++            _ => return,
++        };
++        if let Ok(v) = oneshot {
++            assert_eq!(v, out, "streaming and one-shot inflate disagree");
++        }
++    }
++});
+diff --git a/fuzz/fuzz_targets/inflate_zlib.rs b/fuzz/fuzz_targets/inflate_zlib.rs
+new file mode 100644
+index 0000000..0a3f4cd
+--- /dev/null
++++ b/fuzz/fuzz_targets/inflate_zlib.rs
+@@ -0,0 +1,10 @@
++#![no_main]
++#[macro_use]
++extern crate libfuzzer_sys;
++extern crate miniz_oxide;
++
++const LIMIT: usize = 4 << 20;
++
++fuzz_target!(|data: &[u8]| {
++    let _ = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(data, LIMIT);
++});
+diff --git a/fuzz/fuzz_targets/via_flate2.rs b/fuzz/fuzz_targets/via_flate2.rs
+index f4c6d3c..41c4fb6 100644
+--- a/fuzz/fuzz_targets/via_flate2.rs
++++ b/fuzz/fuzz_targets/via_flate2.rs
+@@ -9,5 +9,5 @@ use std::io::Read;
+ fuzz_target!(|data: &[u8]| {
+     // fuzzed code goes here
+     let mut result = Vec::new();
+-    let _ = DeflateDecoder::new(data).read_to_end(&mut result);
++    let _ = DeflateDecoder::new(data).take(4 << 20).read_to_end(&mut result);
+ });
