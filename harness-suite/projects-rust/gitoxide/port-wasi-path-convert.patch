@@ -1,25 +1,26 @@
 diff --git a/gix-path/src/convert.rs b/gix-path/src/convert.rs
-index ba2b9a3..dcf372a 100644
+index 23134b454..c93599929 100644
 --- a/gix-path/src/convert.rs
 +++ b/gix-path/src/convert.rs
-@@ -6,10 +6,15 @@ use std::{
+@@ -7,10 +7,15 @@ use std::{
+ use gix_error::ExnMessageResult;
  
  use bstr::{BStr, BString};
+-#[cfg(not(unix))]
++#[cfg(all(not(unix), not(target_os = "wasi")))]
+ use gix_error::ResultExt;
  
+-#[cfg(not(unix))]
 +#[cfg(unix)]
 +use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 +#[cfg(all(not(unix), target_os = "wasi"))]
 +use std::os::wasi::ffi::{OsStrExt as _, OsStringExt as _};
 +
- /// The error type returned by [`into_bstr()`] and others may suffer from failed conversions from or to bytes.
- pub type Utf8Error = gix_error::ValidationError;
- 
--#[cfg(not(unix))]
 +#[cfg(all(not(unix), not(target_os = "wasi")))]
- fn utf8_error() -> Utf8Error {
-     Utf8Error::new("Could not convert to UTF8 or from UTF8 due to ill-formed input")
+ fn utf8_error() -> gix_error::Message {
+     gix_error::validation("Could not convert to UTF8 or from UTF8 due to ill-formed input")
  }
-@@ -48,22 +53,20 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> Result<Cow<'a, BStr>
+@@ -49,24 +54,22 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> ExnMessageResult<Cow
      let path = path.into();
      let path_str = match path {
          Cow::Owned(path) => Cow::Owned({
@@ -31,7 +32,9 @@ index ba2b9a3..dcf372a 100644
              };
 -            #[cfg(not(unix))]
 +            #[cfg(all(not(unix), not(target_os = "wasi")))]
-             let p: BString = path.into_os_string().into_string().map_err(|_| utf8_error())?.into();
+             let p: BString = String::from_utf8(path.into_os_string().into_encoded_bytes())
+                 .or_raise(utf8_error)?
+                 .into();
              p
          }),
          Cow::Borrowed(path) => Cow::Borrowed({
@@ -43,13 +46,13 @@ index ba2b9a3..dcf372a 100644
              };
 -            #[cfg(not(unix))]
 +            #[cfg(all(not(unix), not(target_os = "wasi")))]
-             let p: &BStr = path.to_str().ok_or_else(utf8_error)?.as_bytes().into();
-             p
-         }),
-@@ -92,12 +95,11 @@ pub fn join_bstr_unix_pathsep<'a, 'b>(base: impl Into<Cow<'a, BStr>>, path: impl
+             let p: &BStr = std::str::from_utf8(path.as_os_str().as_encoded_bytes())
+                 .or_raise(utf8_error)?
+                 .as_bytes()
+@@ -98,12 +101,11 @@ pub fn join_bstr_unix_pathsep<'a, 'b>(base: impl Into<Cow<'a, BStr>>, path: impl
  /// There are some potential Git versions and Windows installations which produce malformed UTF-16
  /// if certain emojis are in the path. It's as rare as it sounds, but possible.
- pub fn try_from_byte_slice(input: &[u8]) -> Result<&Path, Utf8Error> {
+ pub fn try_from_byte_slice(input: &[u8]) -> ExnMessageResult<&Path> {
 -    #[cfg(unix)]
 +    #[cfg(any(unix, target_os = "wasi"))]
      let p = {
@@ -58,12 +61,12 @@ index ba2b9a3..dcf372a 100644
      };
 -    #[cfg(not(unix))]
 +    #[cfg(all(not(unix), not(target_os = "wasi")))]
-     let p = Path::new(std::str::from_utf8(input).map_err(|_| utf8_error())?);
+     let p = Path::new(std::str::from_utf8(input).or_raise(utf8_error)?);
      Ok(p)
  }
-@@ -119,12 +121,11 @@ pub fn from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Cow<'a, Path> {
+@@ -125,12 +127,11 @@ pub fn from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Cow<'a, Path> {
  /// Similar to [`try_from_bstr()`], but takes and produces owned data.
- pub fn try_from_bstring(input: impl Into<BString>) -> Result<PathBuf, Utf8Error> {
+ pub fn try_from_bstring(input: impl Into<BString>) -> ExnMessageResult<PathBuf> {
      let input = input.into();
 -    #[cfg(unix)]
 +    #[cfg(any(unix, target_os = "wasi"))]
@@ -73,6 +76,6 @@ index ba2b9a3..dcf372a 100644
      };
 -    #[cfg(not(unix))]
 +    #[cfg(all(not(unix), not(target_os = "wasi")))]
-     let p = {
-         use bstr::ByteVec;
-         PathBuf::from(
+     let p = PathBuf::from(String::from_utf8(input.into()).or_raise(utf8_error)?);
+     Ok(p)
+ }
