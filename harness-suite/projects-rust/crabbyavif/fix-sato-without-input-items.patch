@@ -1,0 +1,58 @@
+Subject: [PATCH] decoder: reject 'sato' items without input image items
+
+validate_source_items() accepted a 'sato' derived image item with no 'dimg'
+input image items ("between 0 and 32"). generate_tiles() creates no tiles for
+the sato item itself, so every tile list stays empty, and create_codecs()
+then indexed self.tiles[0][0] in can_use_single_codec() (decoder/mod.rs:1593,
+index out of bounds) from next_image(). libavif rejects such a file at parse
+time ("Box[sato] item %u has no input image items",
+AVIF_RESULT_BMFF_PARSE_FAILED); do the same, like the empty-'iovl' check.
+Not fixed upstream as of 5a494fc (2026-10-05).
+Test: sato_without_input_items.
+
+diff --git a/src/decoder/mod.rs b/src/decoder/mod.rs
+index 888edc1..167743c 100644
+--- a/src/decoder/mod.rs
++++ b/src/decoder/mod.rs
+@@ -924,6 +924,10 @@ impl Decoder {
+                 return AvifError::invalid_image_grid("invalid tmap items");
+             }
+         } else if item.is_sample_transform_item() {
++            // A 'sato' derived image item must reference at least one input image item.
++            if source_items.is_empty() {
++                return AvifError::bmff_parse_failed("no dimg items found for sato");
++            }
+             if source_items.len() > 32 {
+                 return AvifError::invalid_image_grid(
+                     "expected sato to between 0 and 32 dimg items",
+diff --git a/tests/data/sato_no_input_items.avif b/tests/data/sato_no_input_items.avif
+new file mode 100644
+index 0000000000000000000000000000000000000000..4a0522f1ec664db4c1927342261a34a31d3236f7
+GIT binary patch
+literal 345
+zcmcgnOA5j;6nxPx6hyjE_j-fgK+$_hh%F8@_R)r*%i`Mmx-_pzuHXbRzs2x~sBGMe
+zwMRn<wstzn{r%SVIcFG`b>;)w&WO1jNrfl)CMGI^TQi)Ua%n%nBMyn%22;<Z3~tb_
+z6Zs#={1x1D;1k%$^h*2cJjVTHB%%!lu9NYBr7syzNTwF@(++I)q~sDcFUI!|pQ9j`
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/decoder.rs b/tests/decoder.rs
+index 355c5cb..500d567 100644
+--- a/tests/decoder.rs
++++ b/tests/decoder.rs
+@@ -1816,3 +1816,14 @@ fn mini_alpha_without_alpha_item_data() {
+     let mut decoder = get_decoder("mini_alpha_without_data.avif");
+     let _ = decoder.parse();
+ }
++
++// 'sato' derived image item without any 'dimg' input image item (found by fuzzing).
++#[test]
++fn sato_without_input_items() {
++    let mut decoder = get_decoder("sato_no_input_items.avif");
++    decoder.settings.allow_sample_transform = true;
++    assert!(matches!(
++        decoder.parse(),
++        Err(AvifError::BmffParseFailed(_))
++    ));
++}

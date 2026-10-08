@@ -1,0 +1,67 @@
+Subject: [PATCH] mini: Replace assert() with an error return
+
+Backport of upstream 7dd03db04615a6da3f731e91371d20f6658f641b (2026-09-25,
+"mini: Replace assert() with an error return", PiperOrigin-RevId 988531946):
+a 'mini' box with has_alpha set and alpha_item_data_size 0 hit
+assert_ne!(alpha_item_data_size, 0) in parse_mini (mini.rs:676). Upstream now
+treats it as alpha embedded in the main item and creates no alpha item.
+The regression test and its test file are ours (upstream has none).
+
+diff --git a/src/parser/mini.rs b/src/parser/mini.rs
+index 2d22cf1..a83f3a7 100644
+--- a/src/parser/mini.rs
++++ b/src/parser/mini.rs
+@@ -649,7 +649,10 @@ pub(crate) fn parse_mini(
+ 
+     // Alpha item
+     let alpha_item_id = 2;
+-    if has_alpha {
++    // If alpha_item_data_size is 0, the alpha channel is embedded in the main item (signalled
++    // with the AlphaInformation property above) and there is no auxiliary alpha item.
++    let has_alpha_item = has_alpha && alpha_item_data_size != 0;
++    if has_alpha_item {
+         meta.iinf.try_push(ItemInfo {
+             item_id: alpha_item_id,
+             item_type: format.infe_type().to_string(),
+@@ -673,7 +676,6 @@ pub(crate) fn parse_mini(
+         // Subsampling is not checked. Alpha is only interesting for its luma
+         // plane. The other planes are ignored if any.
+ 
+-        assert_ne!(alpha_item_data_size, 0);
+         meta.iprp.associations.try_push(ItemPropertyAssociation {
+             item_id: alpha_item_id,
+             associations: try_vec_exact![
+@@ -785,7 +787,7 @@ pub(crate) fn parse_mini(
+         })?;
+     }
+ 
+-    if has_alpha {
++    if has_alpha_item {
+         meta.iloc.items.try_push(ItemLocationEntry {
+             item_id: alpha_item_id,
+             construction_method: 0,
+diff --git a/tests/data/mini_alpha_without_data.avif b/tests/data/mini_alpha_without_data.avif
+new file mode 100644
+index 0000000000000000000000000000000000000000..4621d8667bf2aa8dbcdc8d6411d9d78c1480bc0e
+GIT binary patch
+literal 41
+mcmZQzU=T<vsVvCNOfya_%S>Ycg51o!Og0dMK?FoJf++yOAO}SN
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/decoder.rs b/tests/decoder.rs
+index 2b78ec7..355c5cb 100644
+--- a/tests/decoder.rs
++++ b/tests/decoder.rs
+@@ -1809,3 +1809,10 @@ fn strictness(filename: &str, strictness_flag: decoder::StrictnessFlag) {
+     }
+     assert!(decoder.next_image().is_ok());
+ }
++
++// 'mini' box with has_alpha set and an alpha_item_data_size of 0 (found by fuzzing).
++#[test]
++fn mini_alpha_without_alpha_item_data() {
++    let mut decoder = get_decoder("mini_alpha_without_data.avif");
++    let _ = decoder.parse();
++}
