@@ -1,0 +1,136 @@
+diff --git a/dict.c b/dict.c
+index b872214..fdef392 100644
+--- a/dict.c
++++ b/dict.c
+@@ -902,16 +902,8 @@ xmlDictQLookup(xmlDict *dict, const xmlChar *prefix, const xmlChar *name) {
+ #ifdef _WIN32
+   #define WIN32_LEAN_AND_MEAN
+   #include <windows.h>
+-  #include <bcrypt.h>
+-#else
+-  #if HAVE_DECL_GETENTROPY
+-    /* POSIX 2024 */
+-    #include <unistd.h>
+-    /* Older platforms */
+-    #include <sys/random.h>
+-  #endif
+-  #include <time.h>
+ #endif
++#include <time.h>
+ 
+ static xmlMutex xmlRngMutex;
+ 
+@@ -927,49 +919,8 @@ xmlInitRandom(void) {
+     xmlInitMutex(&xmlRngMutex);
+ 
+     {
+-#ifdef _WIN32
+-        NTSTATUS status;
+-
+-        /*
+-         * You can find many (recent as of 2025) discussions how
+-         * to get a pseudo-random seed on Windows in projects like
+-         * Golang, Rust, Chromium and Firefox.
+-         *
+-         * TODO: Support ProcessPrng available since Windows 10.
+-         */
+-        status = BCryptGenRandom(NULL, (unsigned char *) globalRngState,
+-                                 sizeof(globalRngState),
+-                                 BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+-        if (!BCRYPT_SUCCESS(status))
+-            xmlAbort("libxml2: BCryptGenRandom failed with error code %lu\n",
+-                     GetLastError());
+-#else
+         int var;
+ 
+-#if HAVE_DECL_GETENTROPY
+-        while (1) {
+-            if (getentropy(globalRngState, sizeof(globalRngState)) == 0)
+-                return;
+-
+-            /*
+-             * This most likely means that libxml2 was compiled on
+-             * a system supporting certain system calls and is running
+-             * on a system that doesn't support these calls, as can
+-             * be the case on Linux.
+-             */
+-            if (errno == ENOSYS)
+-                break;
+-
+-            /*
+-             * We really don't want to fallback to the unsafe PRNG
+-             * for possibly accidental reasons, so we abort on any
+-             * unknown error.
+-             */
+-            if (errno != EINTR)
+-                xmlAbort("libxml2: getentropy failed with error code %d\n",
+-                         errno);
+-        }
+-#endif
+ 
+         /*
+          * TODO: Fallback to /dev/urandom for older POSIX systems.
+@@ -980,7 +931,6 @@ xmlInitRandom(void) {
+         globalRngState[1] =
+                 HASH_ROL((unsigned) ((size_t) &xmlRngMutex & 0xFFFFFFFF), 16) ^
+                 HASH_ROL((unsigned) ((size_t) &var & 0xFFFFFFFF), 24);
+-#endif
+     }
+ }
+ 
+diff --git a/include/libxml/tree.h b/include/libxml/tree.h
+index 277110a..e4ea2ab 100644
+--- a/include/libxml/tree.h
++++ b/include/libxml/tree.h
+@@ -612,6 +612,8 @@ struct _xmlAttr {
+     void            *psvi;
+     /** ID struct if any */
+     struct _xmlID   *id XML_DEPRECATED_MEMBER;
++    /** extra data for XPath/XSLT */
++    unsigned int    extra;
+ };
+ 
+ /** Extra data for ID attributes */
+@@ -752,7 +754,7 @@ struct _xmlNode {
+     /** Line number */
+     unsigned short   line;
+     /** Extra data for XPath/XSLT */
+-    unsigned short   extra;
++    unsigned int     extra;
+ };
+ 
+ /**
+@@ -844,6 +846,8 @@ struct _xmlDoc {
+     int             parseFlags;
+     /** xmlDocProperties of the document */
+     int             properties;
++    /** extra data for XPath/XSLT */
++    unsigned int    extra;
+ };
+ 
+ 
+diff --git a/parserInternals.c b/parserInternals.c
+index 24e7c5b..f2c5966 100644
+--- a/parserInternals.c
++++ b/parserInternals.c
+@@ -690,8 +690,18 @@ xmlParserCheckEOF(xmlParserCtxt *ctxt, xmlParserErrors code) {
+         }
+ 
+         /* Shouldn't happen */
+-        if (in->cur < in->end)
+-            xmlFatalErr(ctxt, XML_ERR_INTERNAL_ERROR, "expected EOF");
++        if (in->cur < in->end) {
++            /* Trailing whitespace is allowed, but non-whitespace is an error */
++            const xmlChar *cur = in->cur;
++            while (cur < in->end) {
++                if ((*cur != 0x20) && (*cur != 0x9) && (*cur != 0xa) && (*cur != 0xd)) {
++                    xmlFatalErr(ctxt, XML_ERR_INTERNAL_ERROR, "expected EOF");
++                    return;
++                }
++                cur++;
++            }
++            in->cur = in->end;
++        }
+     }
+ }
+ 
