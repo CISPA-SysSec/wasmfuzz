@@ -1,0 +1,35 @@
+# cargo-fuzz harnesses for temporal_rs as configured by Chromium/V8
+# (chromium/src/third_party/rust/chromium_crates_io/Cargo.toml):
+#   temporal_rs: default-features = false, features = ["float64_representable_durations"]
+#   temporal_capi: features = ["zoneinfo64"] -> time zones come from ICU4C's zoneinfo64.res
+# Dependency versions in Cargo.lock are aligned with Chromium's Cargo.lock.
+
+[package]
+name = "temporal_rs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.4", features = ["derive"] }
+temporal_rs = { path = "../repo", default-features = false, features = ["float64_representable_durations"] }
+timezone_provider = { path = "../repo/provider", default-features = false, features = ["zoneinfo64"] }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "arithmetic"
+path = "fuzz_targets/arithmetic.rs"
+test = false
+doc = false
