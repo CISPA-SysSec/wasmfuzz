@@ -1,0 +1,14 @@
+diff --git a/tests/fuzz/sequence_compression_api.c b/tests/fuzz/sequence_compression_api.c
+index 9295d248..5c383220 100644
+--- a/tests/fuzz/sequence_compression_api.c
++++ b/tests/fuzz/sequence_compression_api.c
+@@ -41,7 +41,8 @@ static ZSTD_DDict* ddict = NULL;
+ #define ZSTD_FUZZ_GENERATED_SRC_MAXSIZE (1 << 20) /* Allow up to 1MB generated data */
+ #define ZSTD_FUZZ_GENERATED_LITERALS_SIZE (1 << 20) /* Fixed size 1MB literals buffer */
+ #define ZSTD_FUZZ_MATCHLENGTH_MAXSIZE (1 << 18) /* Allow up to 256KB matches */
+-#define ZSTD_FUZZ_GENERATED_DICT_MAXSIZE (1 << ZSTD_WINDOWLOG_MAX_32) /* Allow up to 1 << ZSTD_WINDOWLOG_MAX_32 dictionary */
++/* wasmfuzz: 1 << ZSTD_WINDOWLOG_MAX_32 (1 GiB) exceeds the wasm memory limit */
++#define ZSTD_FUZZ_GENERATED_DICT_MAXSIZE (1 << 24) /* Allow up to 16MB dictionary */
+ #define ZSTD_FUZZ_MAX_NBSEQ (1 << 17) /* Maximum of 128K sequences */
+ 
+ /* Deterministic random number generator */

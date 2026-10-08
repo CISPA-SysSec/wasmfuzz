@@ -1,0 +1,74 @@
+diff --git a/mp4parse_capi/fuzz/Cargo.toml b/mp4parse_capi/fuzz/Cargo.toml
+index a2936ac..989f6d8 100644
+--- a/mp4parse_capi/fuzz/Cargo.toml
++++ b/mp4parse_capi/fuzz/Cargo.toml
+@@ -13,6 +13,8 @@ libfuzzer-sys = "=0.4.0"
+ 
+ [dependencies.mp4parse_capi]
+ path = ".."
++# Firefox (toolkit/library/rust/shared/Cargo.toml) enables this feature.
++features = ["missing-pixi-permitted"]
+ 
+ # Prevent this from interfering with workspaces
+ [workspace]
+diff --git a/mp4parse_capi/fuzz/fuzz_targets/avif.rs b/mp4parse_capi/fuzz/fuzz_targets/avif.rs
+index d0cd8ca..2739840 100644
+--- a/mp4parse_capi/fuzz/fuzz_targets/avif.rs
++++ b/mp4parse_capi/fuzz/fuzz_targets/avif.rs
+@@ -30,7 +30,7 @@ fuzz_target!(|data: &[u8]| {
+             return;
+         }
+ 
+-        let _info = {
++        let info = {
+             let mut info = MaybeUninit::zeroed();
+             let _ = mp4parse_avif_get_info(&*context, info.as_mut_ptr());
+             info.assume_init()
+@@ -38,6 +38,28 @@ fuzz_target!(|data: &[u8]| {
+ 
+         let _ = mp4parse_avif_get_image_safe(&*context);
+ 
++        // Mirror Firefox's nsAVIFDecoder (AVIFParser::Init): for AVIF
++        // sequences, build sample indices for the color and alpha tracks.
++        let info: Mp4parseAvifInfo = info;
++        if info.has_sequence {
++            let mut indices = Default::default();
++            let mut timescale = 0u64;
++            let _ = mp4parse_avif_get_indice_table(
++                context,
++                info.color_track_id,
++                &mut indices,
++                &mut timescale,
++            );
++            if info.alpha_track_id != 0 {
++                let _ = mp4parse_avif_get_indice_table(
++                    context,
++                    info.alpha_track_id,
++                    &mut indices,
++                    &mut timescale,
++                );
++            }
++        }
++
+         mp4parse_avif_free(context);
+     }
+ });
+diff --git a/mp4parse_capi/fuzz/fuzz_targets/mp4.rs b/mp4parse_capi/fuzz/fuzz_targets/mp4.rs
+index 2e1f01d..53aaa01 100644
+--- a/mp4parse_capi/fuzz/fuzz_targets/mp4.rs
++++ b/mp4parse_capi/fuzz/fuzz_targets/mp4.rs
+@@ -59,8 +59,13 @@ fuzz_target!(|data: &[u8]| {
+                 Mp4parseTrackType::Picture | Mp4parseTrackType::AuxiliaryVideo => {}
+             }
+ 
++            // Firefox's MP4Metadata looks up the index by track_id (as
++            // reported by mp4parse_get_track_info), not by track position.
+             let mut indices = Default::default();
+-            mp4parse_get_indice_table(context, track, &mut indices);
++            mp4parse_get_indice_table(context, info.track_id, &mut indices);
++            if info.track_id != track {
++                mp4parse_get_indice_table(context, track, &mut indices);
++            }
+         }
+         mp4parse_free(context);
+     }

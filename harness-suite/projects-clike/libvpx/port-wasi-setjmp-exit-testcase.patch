@@ -1,0 +1,39 @@
+diff --git a/vpx/internal/vpx_codec_internal.h b/vpx/internal/vpx_codec_internal.h
+index ff51881ee..e00405601 100644
+--- a/vpx/internal/vpx_codec_internal.h
++++ b/vpx/internal/vpx_codec_internal.h
+@@ -422,7 +422,15 @@ const vpx_codec_cx_pkt_t *vpx_codec_pkt_list_get(
+     struct vpx_codec_pkt_list *list, vpx_codec_iter_t *iter);
+ 
+ #include <stdio.h>
++#ifndef __wasi__
+ #include <setjmp.h>
++#else
++/* wasm32-wasip1 has no setjmp/longjmp: setjmp() always returns 0 and
++ * vpx_internal_error() aborts the current testcase instead of unwinding. */
++typedef int vpx_wasi_jmp_buf;
++#define jmp_buf vpx_wasi_jmp_buf
++#define setjmp(env) ((void)(env), 0)
++#endif
+ 
+ struct vpx_internal_error_info {
+   vpx_codec_err_t error_code;
+diff --git a/vpx/src/vpx_codec.c b/vpx/src/vpx_codec.c
+index c54a18ecd..ae0da75c9 100644
+--- a/vpx/src/vpx_codec.c
++++ b/vpx/src/vpx_codec.c
+@@ -130,5 +130,14 @@ void vpx_internal_error(struct vpx_internal_error_info *info,
+     info->detail[sz - 1] = '\0';
+   }
+ 
++#ifndef __wasi__
+   if (info->setjmp) longjmp(info->jmp, info->error_code);
++#else
++  if (info->setjmp) {
++    extern void wasmfuzz_exit_testcase(void) __attribute__((__noreturn__))
++    __attribute__((__import_module__("wasmfuzz"),
++                   __import_name__("exit_testcase")));
++    wasmfuzz_exit_testcase();
++  }
++#endif
+ }

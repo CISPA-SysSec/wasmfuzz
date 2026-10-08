@@ -1,0 +1,113 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 0e54104..f354d83 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -56,3 +56,24 @@ path = "fuzz_targets/roundtrip_dictionary.rs"
+ test = false
+ doc = false
+ bench = false
++
++[[bin]]
++name = "reparse_item"
++path = "fuzz_targets/reparse_item.rs"
++test = false
++doc = false
++bench = false
++
++[[bin]]
++name = "reparse_list"
++path = "fuzz_targets/reparse_list.rs"
++test = false
++doc = false
++bench = false
++
++[[bin]]
++name = "reparse_dictionary"
++path = "fuzz_targets/reparse_dictionary.rs"
++test = false
++doc = false
++bench = false
+diff --git a/fuzz/fuzz_targets/reparse_dictionary.rs b/fuzz/fuzz_targets/reparse_dictionary.rs
+new file mode 100644
+index 0000000..e723f0b
+--- /dev/null
++++ b/fuzz/fuzz_targets/reparse_dictionary.rs
+@@ -0,0 +1,22 @@
++#![no_main]
++
++// parse -> serialize -> parse roundtrip starting from arbitrary bytes.
++mod input;
++
++use libfuzzer_sys::fuzz_target;
++use sfv::FieldType as _;
++
++fuzz_target!(|input: input::Input| {
++    let Ok(parsed) = sfv::Parser::new(input.data)
++        .with_version(input.version)
++        .parse::<sfv::Dictionary>()
++    else {
++        return;
++    };
++    let Some(serialized) = parsed.serialize() else { assert!(parsed.is_empty()); return; };
++    let reparsed = sfv::Parser::new(serialized.as_bytes())
++        .with_version(input.version)
++        .parse::<sfv::Dictionary>()
++        .expect("serialized output must parse");
++    assert_eq!(reparsed, parsed);
++});
+diff --git a/fuzz/fuzz_targets/reparse_item.rs b/fuzz/fuzz_targets/reparse_item.rs
+new file mode 100644
+index 0000000..72a0b06
+--- /dev/null
++++ b/fuzz/fuzz_targets/reparse_item.rs
+@@ -0,0 +1,22 @@
++#![no_main]
++
++// parse -> serialize -> parse roundtrip starting from arbitrary bytes.
++mod input;
++
++use libfuzzer_sys::fuzz_target;
++use sfv::FieldType as _;
++
++fuzz_target!(|input: input::Input| {
++    let Ok(parsed) = sfv::Parser::new(input.data)
++        .with_version(input.version)
++        .parse::<sfv::Item>()
++    else {
++        return;
++    };
++    let serialized = parsed.serialize();
++    let reparsed = sfv::Parser::new(serialized.as_bytes())
++        .with_version(input.version)
++        .parse::<sfv::Item>()
++        .expect("serialized output must parse");
++    assert_eq!(reparsed, parsed);
++});
+diff --git a/fuzz/fuzz_targets/reparse_list.rs b/fuzz/fuzz_targets/reparse_list.rs
+new file mode 100644
+index 0000000..a94d1a3
+--- /dev/null
++++ b/fuzz/fuzz_targets/reparse_list.rs
+@@ -0,0 +1,22 @@
++#![no_main]
++
++// parse -> serialize -> parse roundtrip starting from arbitrary bytes.
++mod input;
++
++use libfuzzer_sys::fuzz_target;
++use sfv::FieldType as _;
++
++fuzz_target!(|input: input::Input| {
++    let Ok(parsed) = sfv::Parser::new(input.data)
++        .with_version(input.version)
++        .parse::<sfv::List>()
++    else {
++        return;
++    };
++    let Some(serialized) = parsed.serialize() else { assert!(parsed.is_empty()); return; };
++    let reparsed = sfv::Parser::new(serialized.as_bytes())
++        .with_version(input.version)
++        .parse::<sfv::List>()
++        .expect("serialized output must parse");
++    assert_eq!(reparsed, parsed);
++});

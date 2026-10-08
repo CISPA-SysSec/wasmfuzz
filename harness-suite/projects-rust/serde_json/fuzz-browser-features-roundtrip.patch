@@ -1,0 +1,53 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 5fe38b6..9b5451c 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -10,10 +10,18 @@ cargo-fuzz = true
+ 
+ [dependencies]
+ libfuzzer-sys = "0.4"
+-serde_json = { path = ".." }
++# Mirror browser configuration: Chromium enables preserve_order,
++# Firefox (workspace-hack) enables preserve_order + float_roundtrip.
++serde_json = { path = "..", features = ["preserve_order", "float_roundtrip"] }
+ 
+ [[bin]]
+ name = "from_slice"
+ path = "fuzz_targets/from_slice.rs"
+ test = false
+ doc = false
++
++[[bin]]
++name = "roundtrip"
++path = "fuzz_targets/roundtrip.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/roundtrip.rs b/fuzz/fuzz_targets/roundtrip.rs
+new file mode 100644
+index 0000000..712a4ae
+--- /dev/null
++++ b/fuzz/fuzz_targets/roundtrip.rs
+@@ -0,0 +1,23 @@
++#![no_main]
++
++use libfuzzer_sys::fuzz_target;
++use serde_json::{Deserializer, Value};
++
++// Parse, re-serialize (compact and pretty) and re-parse; with float_roundtrip
++// the re-parsed value must be identical. Also drive the StreamDeserializer
++// over the raw input.
++fuzz_target!(|data: &[u8]| {
++    if let Ok(v) = serde_json::from_slice::<Value>(data) {
++        let compact = serde_json::to_vec(&v).unwrap();
++        let v2: Value = serde_json::from_slice(&compact).unwrap();
++        assert_eq!(v, v2, "compact roundtrip mismatch");
++        let pretty = serde_json::to_string_pretty(&v).unwrap();
++        let v3: Value = serde_json::from_str(&pretty).unwrap();
++        assert_eq!(v, v3, "pretty roundtrip mismatch");
++    }
++    for item in Deserializer::from_slice(data).into_iter::<Value>().take(64) {
++        if item.is_err() {
++            break;
++        }
++    }
++});

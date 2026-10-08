@@ -1,0 +1,137 @@
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 8defdd2..1ca609c 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -12,6 +12,8 @@ cargo-fuzz = true
+ [dependencies]
+ libfuzzer-sys = "0.4"
+ flate2 = { path = ".." }
++# Chromium builds flate2 1.1.10 with the default rust_backend on miniz_oxide 0.9.1.
++miniz_oxide = "=0.9.1"
+ 
+ # Prevent this from interfering with workspaces
+ [workspace]
+@@ -22,3 +24,21 @@ name = "fuzz_gz_roundtrip"
+ path = "fuzz_targets/fuzz_gz_roundtrip.rs"
+ test = false
+ doc = false
++
++[[bin]]
++name = "fuzz_gz_decode"
++path = "fuzz_targets/fuzz_gz_decode.rs"
++test = false
++doc = false
++
++[[bin]]
++name = "fuzz_zlib_decode"
++path = "fuzz_targets/fuzz_zlib_decode.rs"
++test = false
++doc = false
++
++[[bin]]
++name = "fuzz_deflate_decode"
++path = "fuzz_targets/fuzz_deflate_decode.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/fuzz_deflate_decode.rs b/fuzz/fuzz_targets/fuzz_deflate_decode.rs
+new file mode 100644
+index 0000000..a441fe2
+--- /dev/null
++++ b/fuzz/fuzz_targets/fuzz_deflate_decode.rs
+@@ -0,0 +1,28 @@
++#![no_main]
++use flate2::bufread;
++use flate2::read::DeflateDecoder;
++use libfuzzer_sys::fuzz_target;
++use std::io::prelude::*;
++
++// Cap output so decompression bombs don't exhaust the wasm heap.
++const LIMIT: u64 = 4 << 20;
++
++fuzz_target!(|data: &[u8]| {
++    // Read-based decoder (internally wrapped in a BufReader).
++    let mut out = Vec::new();
++    let r1 = DeflateDecoder::new(data).take(LIMIT).read_to_end(&mut out);
++
++    // BufRead-based decoder fed in small pieces through a tiny BufReader to
++    // exercise stream resumption at arbitrary input boundaries.
++    let split = if data.is_empty() { 1 } else { (data[0] as usize % 16) + 1 };
++    let reader = std::io::BufReader::with_capacity(split, data);
++    let mut out2 = Vec::new();
++    let r2 = bufread::DeflateDecoder::new(reader).take(LIMIT).read_to_end(&mut out2);
++
++    // Both decoders must agree on fully successful decodes.
++    if let (Ok(n1), Ok(n2)) = (r1, r2) {
++        if (n1 as u64) < LIMIT && (n2 as u64) < LIMIT {
++            assert_eq!(out, out2, "read and bufread decoders disagree");
++        }
++    }
++});
+diff --git a/fuzz/fuzz_targets/fuzz_gz_decode.rs b/fuzz/fuzz_targets/fuzz_gz_decode.rs
+new file mode 100644
+index 0000000..7cd9bec
+--- /dev/null
++++ b/fuzz/fuzz_targets/fuzz_gz_decode.rs
+@@ -0,0 +1,28 @@
++#![no_main]
++use flate2::bufread;
++use flate2::read::MultiGzDecoder;
++use libfuzzer_sys::fuzz_target;
++use std::io::prelude::*;
++
++// Cap output so decompression bombs don't exhaust the wasm heap.
++const LIMIT: u64 = 4 << 20;
++
++fuzz_target!(|data: &[u8]| {
++    // Read-based decoder (internally wrapped in a BufReader).
++    let mut out = Vec::new();
++    let r1 = MultiGzDecoder::new(data).take(LIMIT).read_to_end(&mut out);
++
++    // BufRead-based decoder fed in small pieces through a tiny BufReader to
++    // exercise stream resumption at arbitrary input boundaries.
++    let split = if data.is_empty() { 1 } else { (data[0] as usize % 16) + 1 };
++    let reader = std::io::BufReader::with_capacity(split, data);
++    let mut out2 = Vec::new();
++    let r2 = bufread::MultiGzDecoder::new(reader).take(LIMIT).read_to_end(&mut out2);
++
++    // Both decoders must agree on fully successful decodes.
++    if let (Ok(n1), Ok(n2)) = (r1, r2) {
++        if (n1 as u64) < LIMIT && (n2 as u64) < LIMIT {
++            assert_eq!(out, out2, "read and bufread decoders disagree");
++        }
++    }
++});
+diff --git a/fuzz/fuzz_targets/fuzz_zlib_decode.rs b/fuzz/fuzz_targets/fuzz_zlib_decode.rs
+new file mode 100644
+index 0000000..e8ed4dc
+--- /dev/null
++++ b/fuzz/fuzz_targets/fuzz_zlib_decode.rs
+@@ -0,0 +1,28 @@
++#![no_main]
++use flate2::bufread;
++use flate2::read::ZlibDecoder;
++use libfuzzer_sys::fuzz_target;
++use std::io::prelude::*;
++
++// Cap output so decompression bombs don't exhaust the wasm heap.
++const LIMIT: u64 = 4 << 20;
++
++fuzz_target!(|data: &[u8]| {
++    // Read-based decoder (internally wrapped in a BufReader).
++    let mut out = Vec::new();
++    let r1 = ZlibDecoder::new(data).take(LIMIT).read_to_end(&mut out);
++
++    // BufRead-based decoder fed in small pieces through a tiny BufReader to
++    // exercise stream resumption at arbitrary input boundaries.
++    let split = if data.is_empty() { 1 } else { (data[0] as usize % 16) + 1 };
++    let reader = std::io::BufReader::with_capacity(split, data);
++    let mut out2 = Vec::new();
++    let r2 = bufread::ZlibDecoder::new(reader).take(LIMIT).read_to_end(&mut out2);
++
++    // Both decoders must agree on fully successful decodes.
++    if let (Ok(n1), Ok(n2)) = (r1, r2) {
++        if (n1 as u64) < LIMIT && (n2 as u64) < LIMIT {
++            assert_eq!(out, out2, "read and bufread decoders disagree");
++        }
++    }
++});

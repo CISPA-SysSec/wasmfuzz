@@ -1,0 +1,41 @@
+diff --git a/aom/internal/aom_codec_internal.h b/aom/internal/aom_codec_internal.h
+index 0e75d2903d..69b5b2e405 100644
+--- a/aom/internal/aom_codec_internal.h
++++ b/aom/internal/aom_codec_internal.h
+@@ -364,7 +364,15 @@ const aom_codec_cx_pkt_t *aom_codec_pkt_list_get(
+     struct aom_codec_pkt_list *list, aom_codec_iter_t *iter);
+ 
+ #include <stdio.h>
++#ifndef __wasi__
+ #include <setjmp.h>
++#else
++// wasm32-wasip1 has no setjmp/longjmp without the exception-handling
++// proposal. aom_internal_error() is the only longjmp() caller in the decoder;
++// it aborts the current fuzz testcase instead (see aom_codec.c).
++typedef int jmp_buf;
++#define setjmp(buf) ((void)(buf), 0)
++#endif
+ 
+ struct aom_internal_error_info {
+   aom_codec_err_t error_code;
+diff --git a/aom/src/aom_codec.c b/aom/src/aom_codec.c
+index ac43842a5c..56143927db 100644
+--- a/aom/src/aom_codec.c
++++ b/aom/src/aom_codec.c
+@@ -164,7 +164,16 @@ void aom_internal_error(struct aom_internal_error_info *info,
+   set_error(info, error, fmt, ap);
+   va_end(ap);
+ 
++#ifndef __wasi__
+   if (info->setjmp) longjmp(info->jmp, info->error_code);
++#else
++  if (info->setjmp) {
++    void wasmfuzz_exit_testcase(void) __attribute__((__noreturn__))
++    __attribute__((__import_module__("wasmfuzz"),
++                   __import_name__("exit_testcase")));
++    wasmfuzz_exit_testcase();
++  }
++#endif
+ }
+ 
+ void aom_internal_error_copy(struct aom_internal_error_info *info,

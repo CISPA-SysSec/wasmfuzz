@@ -1,0 +1,17 @@
+diff --git a/tests/fuzzer/decoder_fuzzer.cc b/tests/fuzzer/decoder_fuzzer.cc
+index 07b86c8..42910c0 100644
+--- a/tests/fuzzer/decoder_fuzzer.cc
++++ b/tests/fuzzer/decoder_fuzzer.cc
+@@ -60,6 +60,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+   // We use both nibbles of the lower byte as this results in values != 1 much
+   // more quickly than using the lower nibble alone.
+   settings.threads = (size >= 13) ? ((data[12] >> 4 | data[12]) & 0xF) + 1 : 1;
++#ifdef __wasi__
++  // wasm32-wasip1 has no threads: pthread_create() always fails, so the thread
++  // pools would never be created anyway. Pin to the single-threaded decoder to
++  // keep execution deterministic.
++  settings.threads = 1;
++#endif
+   settings.parse_only = size % kFrequencyParseOnly == 0;
+   if (decoder.Init(&settings) != libgav1::kStatusOk) return 0;
+ 

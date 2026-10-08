@@ -1,0 +1,19 @@
+diff --git a/examples/av1_dec_fuzzer.cc b/examples/av1_dec_fuzzer.cc
+index dc9694e871..0f99ab7b5b 100644
+--- a/examples/av1_dec_fuzzer.cc
++++ b/examples/av1_dec_fuzzer.cc
+@@ -44,8 +44,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+ 
+   aom_codec_iface_t *codec_interface = aom_codec_av1_dx();
+   aom_codec_ctx_t codec;
++#if CONFIG_MULTITHREAD
+   // Set thread count in the range [1, 64].
+   const unsigned int threads = (data[IVF_FILE_HDR_SZ] & 0x3f) + 1;
++#else
++  // Without CONFIG_MULTITHREAD the row-mt tile decoder busy-waits forever for
++  // jobs that no other worker will ever finish, so only decode with 1 thread.
++  const unsigned int threads = 1;
++#endif
+   aom_codec_dec_cfg_t cfg = { threads, 0, 0, !FORCE_HIGHBITDEPTH_DECODING };
+   if (aom_codec_dec_init(&codec, codec_interface, &cfg, 0)) {
+     return 0;

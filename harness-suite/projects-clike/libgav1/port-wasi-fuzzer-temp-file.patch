@@ -1,0 +1,31 @@
+diff --git a/tests/fuzzer/fuzzer_temp_file.h b/tests/fuzzer/fuzzer_temp_file.h
+index ed8f51c..f9bc188 100644
+--- a/tests/fuzzer/fuzzer_temp_file.h
++++ b/tests/fuzzer/fuzzer_temp_file.h
+@@ -33,6 +33,9 @@
+ #define unlink _unlink
+ #else
+ #include <unistd.h>
++#ifdef __wasi__
++#include <fcntl.h>
++#endif
+ #endif  // _WIN32
+ 
+ // Pure-C interface for creating and cleaning up temporary files.
+@@ -100,7 +103,16 @@ static char* fuzzer_get_tmpfile_with_suffix(const uint8_t* data, size_t size,
+     abort();
+   }
+ 
++#ifdef __wasi__
++  // wasi-libc does not provide mkstemps(); the harness is single-threaded and
++  // the file is unlinked after each input, so a fixed name is sufficient.
++  (void)leading_temp_path;
++  snprintf(filename_buffer, buffer_sz, "/tmp/libgav1-fuzz.XXXXXX%s", suffix);
++  const int file_descriptor =
++      open(filename_buffer, O_RDWR | O_CREAT | O_TRUNC, 0600);
++#else
+   const int file_descriptor = mkstemps(filename_buffer, suffix_len);
++#endif
+   if (file_descriptor < 0) {
+     perror("Failed to make temporary file.");
+     abort();
