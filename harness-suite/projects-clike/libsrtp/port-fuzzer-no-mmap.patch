@@ -1,0 +1,15 @@
+diff --git a/fuzzer/fuzzer.h b/fuzzer/fuzzer.h
+index ce1f8d6..98d2b0e 100644
+--- a/fuzzer/fuzzer.h
++++ b/fuzzer/fuzzer.h
+@@ -17,7 +17,10 @@
+     }
+ #include <stdint.h>
+ #if UINTPTR_MAX == 0xffffffff
++/* wasm32-wasi: no fixed-address mmap(); keep the plain malloc() allocator */
++#ifndef __wasi__
+ #define FUZZ_32BIT
++#endif
+ #elif UINTPTR_MAX == 0xffffffffffffffff
+ #else
+ #error "Cannot detect word size"
