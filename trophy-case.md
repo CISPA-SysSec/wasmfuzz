@@ -8,6 +8,7 @@ Bugs that reproduce in native builds:
 - libtiff assertion in `_TIFFSwab24BitData`: https://gitlab.com/libtiff/libtiff/-/work_items/669#note_3432756113
 - fontations read-fonts oob panic in fvar.rs: https://github.com/googlefonts/fontations/pull/1903
 - jxl-rs: multiple findings (https://github.com/libjxl/jxl-rs/pull/811, ..)
+- UAF in freetype2 https://gitlab.freedesktop.org/freetype/freetype/-/merge_requests/451
 
 WebAssembly-only bugs:
 - Memory corruption in wasi-libc: https://github.com/WebAssembly/wasi-libc/pull/511
