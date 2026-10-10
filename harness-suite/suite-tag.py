@@ -311,7 +311,6 @@ lod = [
     "image-script_jpeg", "image-script_tiff",
     "image-script_ico", # "image-script_webp", # "image-script_guess",
     "jxl-oxide-libfuzzer-decode", "jxl-rs-decode", "libjxl-djxl", "lcms-cms_transform_all",
-    "lewton-parse_ogg",
     # "libarchive-ossfuzz", "libarchive-upstream", # TODO: OOMs with non-snapshot fuzzing
     "libpng-read",
     "libheif-box", "libheif-file",
@@ -328,7 +327,7 @@ lod = [
     "x509-parser-x509_parse",
     "zune-image-zune-jpeg-decode_incremental",
     # Note: these seem saturated in both lod and no-lod?
-    # "claxon-decode_full", "zip2-zip2-read"
+    # "zip2-zip2-read"
 ]
 for x in lod:
     if x + ".wasm" not in tags:
