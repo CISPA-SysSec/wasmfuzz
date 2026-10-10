@@ -1,2 +1,5 @@
 target
 eval/.venv/
+__pycache__/
+.ipynb_checkpoints/
+*.bak
