@@ -316,10 +316,19 @@ impl VMContext {
     }
 
     pub(crate) fn builtin_consume_fuel(&mut self, delta: u64) {
+        if let Err(reason) = self.try_consume_fuel(delta) {
+            unsafe { raise_trap(reason) };
+        }
+    }
+
+    // For builtins that hold owned locals: they must drop them before raising
+    // the trap (see `wasi::raise_on_err`).
+    pub(crate) fn try_consume_fuel(&mut self, delta: u64) -> Result<(), TrapReason> {
         if self.fuel >= delta {
             self.fuel -= delta;
+            Ok(())
         } else {
-            unsafe { raise_trap(TrapReason::OutOfFuel) };
+            Err(TrapReason::OutOfFuel)
         }
     }
 }

@@ -163,6 +163,28 @@ impl TestModule {
         )
     }
 
+    // Re-reads a 1 MiB file until the instruction limit hits, which almost
+    // always happens while `fd_read` copies the file into guest memory.
+    fn file_reread_until_out_of_fuel() -> Self {
+        Self::compile_simple_rust_expr(
+            "file-reread-until-out-of-fuel",
+            "{
+                use std::io::{Read, Seek, SeekFrom};
+                std::fs::write(\"/tmp/big.bin\", vec![7u8; 1 << 20]).unwrap();
+                let mut f = std::fs::File::open(\"/tmp/big.bin\").unwrap();
+                let mut buf = vec![0u8; 1 << 20];
+                let _ = data;
+                loop {
+                    f.seek(SeekFrom::Start(0)).unwrap();
+                    f.read_exact(&mut buf).unwrap();
+                    if std::hint::black_box(&buf)[0] != 7 {
+                        break false;
+                    }
+                }
+            }",
+        )
+    }
+
     fn input_len_eq_2048() -> Self {
         Self::compile_simple_rust_expr("input-len-eq-2048", "data.len() == 2048")
     }
@@ -867,6 +889,79 @@ fn test_wasi_memfs_pread_pwrite() {
     sess.initialize(&mut stats);
     sess.run_tracing_fresh(&[0; 8], &mut stats)
         .expect("pread/pwrite round trip should not trap");
+}
+
+// Net bytes allocated by the current thread, to catch host-side leaks.
+#[cfg(not(any(feature = "with_mimalloc", feature = "tracy")))]
+mod thread_alloc_counter {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static NET_BYTES: Cell<isize> = const { Cell::new(0) };
+    }
+
+    fn add(delta: isize) {
+        let _ = NET_BYTES.try_with(|n| n.set(n.get() + delta));
+    }
+
+    pub(super) fn net_bytes() -> isize {
+        NET_BYTES.with(|n| n.get())
+    }
+
+    struct Counting;
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            add(layout.size() as isize);
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            add(layout.size() as isize);
+            unsafe { System.alloc_zeroed(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            add(-(layout.size() as isize));
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            add(new_size as isize - layout.size() as isize);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: Counting = Counting;
+}
+
+// Traps `longjmp` past the builtin that raised them. A builtin that still held
+// a buffer at that point leaked it: here 1 MiB per execution.
+#[test]
+#[cfg(not(any(feature = "with_mimalloc", feature = "tracy")))]
+fn test_wasi_memfs_out_of_fuel_in_fd_read_does_not_leak() {
+    let test_module = TestModule::file_reread_until_out_of_fuel();
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
+    let mut stats = Stats::default();
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(crate::jit::FeedbackOptions::nothing())
+        .instruction_limit(Some(20_000_000))
+        .build();
+    sess.initialize(&mut stats);
+    let mut run = |stats: &mut Stats| {
+        assert!(matches!(
+            sess.run(&[0], stats).trap_kind,
+            Some(TrapKind::OutOfFuel(_))
+        ));
+    };
+    for _ in 0..4 {
+        run(&mut stats);
+    }
+    let before = thread_alloc_counter::net_bytes();
+    for _ in 0..32 {
+        run(&mut stats);
+    }
+    let leaked = thread_alloc_counter::net_bytes() - before;
+    assert!(leaked < 4 << 20, "leaked {leaked} bytes over 32 executions");
 }
 
 // Bytes that went through the emulated filesystem must keep their concolic
