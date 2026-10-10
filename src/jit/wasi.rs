@@ -274,52 +274,78 @@ impl MemFs {
     }
 }
 
-fn heap_read(vmctx: &mut VMContext, ptr: u32, len: u32) -> Vec<u8> {
+// Builtins trap by `longjmp`ing out of the JIT frame, so the destructors of
+// everything alive at the trap never run: a `Vec` held across a trap leaks.
+// Under fuzzing, every timeout that ran out of fuel inside `fd_read` used to
+// leak its read buffer (lcms-cms_profile grew to its memory cap within hours).
+// The builtin bodies therefore report traps as `Err`, and only the extern
+// wrappers raise them, once the body's locals have been dropped.
+type TrapResult<T> = Result<T, TrapReason>;
+
+fn raise_on_err(res: TrapResult<u32>) -> u32 {
+    match res {
+        Ok(errno) => errno,
+        Err(reason) => unsafe { raise_trap(reason) },
+    }
+}
+
+fn heap_read(vmctx: &mut VMContext, ptr: u32, len: u32) -> TrapResult<Vec<u8>> {
     match vmctx.heap_ref(ptr as usize, len as usize) {
-        Some(buf) => buf.to_vec(),
-        None => unsafe { raise_trap(TrapReason::MemoryOutOfBounds) },
+        Some(buf) => Ok(buf.to_vec()),
+        None => Err(TrapReason::MemoryOutOfBounds),
     }
 }
 
-fn heap_write(vmctx: &mut VMContext, ptr: u32, data: &[u8]) {
+fn heap_write(vmctx: &mut VMContext, ptr: u32, data: &[u8]) -> TrapResult<()> {
     match vmctx.heap_mut(ptr as usize, data.len()) {
-        Some(buf) => buf.copy_from_slice(data),
-        None => unsafe { raise_trap(TrapReason::MemoryOutOfBounds) },
+        Some(buf) => {
+            buf.copy_from_slice(data);
+            Ok(())
+        }
+        None => Err(TrapReason::MemoryOutOfBounds),
     }
 }
 
-fn write_u32(vmctx: &mut VMContext, ptr: u32, val: u32) {
-    heap_write(vmctx, ptr, &val.to_le_bytes());
+fn write_u32(vmctx: &mut VMContext, ptr: u32, val: u32) -> TrapResult<()> {
+    heap_write(vmctx, ptr, &val.to_le_bytes())
 }
 
-fn write_u64(vmctx: &mut VMContext, ptr: u32, val: u64) {
-    heap_write(vmctx, ptr, &val.to_le_bytes());
+fn write_u64(vmctx: &mut VMContext, ptr: u32, val: u64) -> TrapResult<()> {
+    heap_write(vmctx, ptr, &val.to_le_bytes())
 }
 
-fn read_u32(vmctx: &mut VMContext, ptr: u32) -> u32 {
-    u32::from_le_bytes(heap_read(vmctx, ptr, 4).try_into().unwrap())
+fn read_u32(vmctx: &mut VMContext, ptr: u32) -> TrapResult<u32> {
+    Ok(u32::from_le_bytes(
+        heap_read(vmctx, ptr, 4)?.try_into().unwrap(),
+    ))
 }
 
 // Iterates `(buf, len)` pairs of a `__wasi_iovec_t` array.
-fn read_iovs(vmctx: &mut VMContext, iovs: u32, iovs_len: u32) -> Vec<(u32, u32)> {
+fn read_iovs(vmctx: &mut VMContext, iovs: u32, iovs_len: u32) -> TrapResult<Vec<(u32, u32)>> {
     (0..iovs_len)
         .map(|i| {
             let base = iovs.wrapping_add(i.wrapping_mul(8));
-            (read_u32(vmctx, base), read_u32(vmctx, base.wrapping_add(4)))
+            Ok((
+                read_u32(vmctx, base)?,
+                read_u32(vmctx, base.wrapping_add(4))?,
+            ))
         })
         .collect()
 }
 
 unsafe extern "C" fn builtin_wasi_fd_prestat_get(fd: u32, buf: u32, vmctx: *mut VMContext) -> u32 {
-    let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(1);
+    raise_on_err(wasi_fd_prestat_get(unsafe { &mut *vmctx }, fd, buf))
+}
+
+fn wasi_fd_prestat_get(vmctx: &mut VMContext, fd: u32, buf: u32) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(1)?;
     if fd != PREOPEN_DIR_FD {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     }
     // __wasi_prestat_t { u8 tag = PREOPENTYPE_DIR; u32 pr_name_len; }
-    write_u32(vmctx, buf, 0);
-    write_u32(vmctx, buf.wrapping_add(4), 1);
-    ERRNO_SUCCESS
+    write_u32(vmctx, buf, 0)?;
+    write_u32(vmctx, buf.wrapping_add(4), 1)?;
+    Ok(ERRNO_SUCCESS)
 }
 
 unsafe extern "C" fn builtin_wasi_fd_prestat_dir_name(
@@ -328,16 +354,29 @@ unsafe extern "C" fn builtin_wasi_fd_prestat_dir_name(
     path_len: u32,
     vmctx: *mut VMContext,
 ) -> u32 {
-    let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(1);
+    raise_on_err(wasi_fd_prestat_dir_name(
+        unsafe { &mut *vmctx },
+        fd,
+        path,
+        path_len,
+    ))
+}
+
+fn wasi_fd_prestat_dir_name(
+    vmctx: &mut VMContext,
+    fd: u32,
+    path: u32,
+    path_len: u32,
+) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(1)?;
     if fd != PREOPEN_DIR_FD {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     }
     if path_len < 1 {
-        return ERRNO_INVAL;
+        return Ok(ERRNO_INVAL);
     }
-    heap_write(vmctx, path, b"/");
-    ERRNO_SUCCESS
+    heap_write(vmctx, path, b"/")?;
+    Ok(ERRNO_SUCCESS)
 }
 
 unsafe extern "C" fn builtin_wasi_path_open(
@@ -351,17 +390,40 @@ unsafe extern "C" fn builtin_wasi_path_open(
     vmctx: *mut VMContext,
 ) -> u32 {
     let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(16 + path_len as u64);
+    raise_on_err(wasi_path_open(
+        vmctx,
+        dirfd,
+        path,
+        path_len,
+        oflags,
+        rights_base,
+        fdflags,
+        fd_out,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wasi_path_open(
+    vmctx: &mut VMContext,
+    dirfd: u32,
+    path: u32,
+    path_len: u32,
+    oflags: u32,
+    rights_base: u64,
+    fdflags: u32,
+    fd_out: u32,
+) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(16 + path_len as u64)?;
     if dirfd != PREOPEN_DIR_FD {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     }
-    let path = heap_read(vmctx, path, path_len);
+    let path = heap_read(vmctx, path, path_len)?;
     match vmctx.memfs.open(&path, oflags, rights_base, fdflags) {
         Ok(fd) => {
-            write_u32(vmctx, fd_out, fd);
-            ERRNO_SUCCESS
+            write_u32(vmctx, fd_out, fd)?;
+            Ok(ERRNO_SUCCESS)
         }
-        Err(errno) => errno,
+        Err(errno) => Ok(errno),
     }
 }
 
@@ -382,16 +444,33 @@ unsafe extern "C" fn builtin_wasi_fd_read(
     concolic: u32,
     vmctx: *mut VMContext,
 ) -> u32 {
-    let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(4 + iovs_len as u64);
+    raise_on_err(wasi_fd_read(
+        unsafe { &mut *vmctx },
+        fd,
+        iovs,
+        iovs_len,
+        nread_out,
+        concolic,
+    ))
+}
+
+fn wasi_fd_read(
+    vmctx: &mut VMContext,
+    fd: u32,
+    iovs: u32,
+    iovs_len: u32,
+    nread_out: u32,
+    concolic: u32,
+) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(4 + iovs_len as u64)?;
     let (file, cursor, readable) = match vmctx.memfs.fd(fd) {
         Some(ofd) => (ofd.file, ofd.cursor as usize, ofd.readable),
-        None => return ERRNO_BADF,
+        None => return Ok(ERRNO_BADF),
     };
     if !readable {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     }
-    let iovs = read_iovs(vmctx, iovs, iovs_len);
+    let iovs = read_iovs(vmctx, iovs, iovs_len)?;
     let mut total = 0usize;
     for (buf, len) in iovs {
         let pos = cursor + total;
@@ -401,8 +480,8 @@ unsafe extern "C" fn builtin_wasi_fd_read(
             break;
         }
         let chunk = file_data[pos..pos + avail].to_vec();
-        vmctx.builtin_consume_fuel(avail as u64);
-        heap_write(vmctx, buf, &chunk);
+        vmctx.try_consume_fuel(avail as u64)?;
+        heap_write(vmctx, buf, &chunk)?;
         if concolic != 0 {
             let shadow = &vmctx.memfs.files[file].shadow;
             if shadow.is_empty() {
@@ -420,8 +499,8 @@ unsafe extern "C" fn builtin_wasi_fd_read(
         }
     }
     vmctx.memfs.fd_mut(fd).unwrap().cursor = (cursor + total) as u64;
-    write_u32(vmctx, nread_out, total as u32);
-    ERRNO_SUCCESS
+    write_u32(vmctx, nread_out, total as u32)?;
+    Ok(ERRNO_SUCCESS)
 }
 
 unsafe extern "C" fn builtin_wasi_fd_write(
@@ -434,14 +513,34 @@ unsafe extern "C" fn builtin_wasi_fd_write(
     vmctx: *mut VMContext,
 ) -> u32 {
     let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(4 + iovs_len as u64);
-    let iovs = read_iovs(vmctx, iovs, iovs_len);
+    raise_on_err(wasi_fd_write(
+        vmctx,
+        fd,
+        iovs,
+        iovs_len,
+        nwritten_out,
+        stdout_mode,
+        concolic,
+    ))
+}
+
+fn wasi_fd_write(
+    vmctx: &mut VMContext,
+    fd: u32,
+    iovs: u32,
+    iovs_len: u32,
+    nwritten_out: u32,
+    stdout_mode: u32,
+    concolic: u32,
+) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(4 + iovs_len as u64)?;
+    let iovs = read_iovs(vmctx, iovs, iovs_len)?;
     let mut total = 0u32;
     if fd == 1 || fd == 2 {
         for (buf, len) in iovs {
-            vmctx.builtin_consume_fuel(len as u64);
+            vmctx.try_consume_fuel(len as u64)?;
             if stdout_mode != StdoutMode::Ignore as u32 {
-                let chunk = heap_read(vmctx, buf, len);
+                let chunk = heap_read(vmctx, buf, len)?;
                 if !chunk.is_empty() {
                     if stdout_mode == StdoutMode::Debug as u32 {
                         eprintln!("[STDOUT] {:?}", String::from_utf8_lossy(&chunk));
@@ -452,20 +551,20 @@ unsafe extern "C" fn builtin_wasi_fd_write(
             }
             total = total.wrapping_add(len);
         }
-        write_u32(vmctx, nwritten_out, total);
-        return ERRNO_SUCCESS;
+        write_u32(vmctx, nwritten_out, total)?;
+        return Ok(ERRNO_SUCCESS);
     }
     if vmctx.memfs.fd(fd).is_none() {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     }
     for (buf, len) in iovs {
-        vmctx.builtin_consume_fuel(len as u64);
-        let chunk = heap_read(vmctx, buf, len);
+        vmctx.try_consume_fuel(len as u64)?;
+        let chunk = heap_read(vmctx, buf, len)?;
         let (file, pos) = match vmctx.memfs.write_pos(fd, chunk.len()) {
             Ok(x) => x,
             Err(e) => {
                 if total == 0 {
-                    return e;
+                    return Ok(e);
                 }
                 break;
             }
@@ -483,14 +582,19 @@ unsafe extern "C" fn builtin_wasi_fd_write(
         }
         total = total.wrapping_add(len);
     }
-    write_u32(vmctx, nwritten_out, total);
-    ERRNO_SUCCESS
+    write_u32(vmctx, nwritten_out, total)?;
+    Ok(ERRNO_SUCCESS)
 }
 
 // pread/pwrite: fd_read/fd_write at `offset`, leaving the fd's cursor (and append mode) alone.
-fn with_cursor_at(vmctx: &mut VMContext, fd: u32, offset: u64, f: impl FnOnce(&mut VMContext) -> u32) -> u32 {
+fn with_cursor_at(
+    vmctx: &mut VMContext,
+    fd: u32,
+    offset: u64,
+    f: impl FnOnce(&mut VMContext) -> TrapResult<u32>,
+) -> TrapResult<u32> {
     let Some(ofd) = vmctx.memfs.fd_mut(fd) else {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     };
     let (cursor, append) = (ofd.cursor, ofd.append);
     (ofd.cursor, ofd.append) = (offset, false);
@@ -509,10 +613,10 @@ unsafe extern "C" fn builtin_wasi_fd_pread(
     concolic: u32,
     vmctx: *mut VMContext,
 ) -> u32 {
-    let vmctx_ref = unsafe { &mut *vmctx };
-    with_cursor_at(vmctx_ref, fd, offset, |_| unsafe {
-        builtin_wasi_fd_read(fd, iovs, iovs_len, nread_out, concolic, vmctx)
-    })
+    let vmctx = unsafe { &mut *vmctx };
+    raise_on_err(with_cursor_at(vmctx, fd, offset, |vmctx| {
+        wasi_fd_read(vmctx, fd, iovs, iovs_len, nread_out, concolic)
+    }))
 }
 
 unsafe extern "C" fn builtin_wasi_fd_pwrite(
@@ -527,10 +631,11 @@ unsafe extern "C" fn builtin_wasi_fd_pwrite(
     if fd == 1 || fd == 2 {
         return ERRNO_SPIPE;
     }
-    let vmctx_ref = unsafe { &mut *vmctx };
-    with_cursor_at(vmctx_ref, fd, offset, |_| unsafe {
-        builtin_wasi_fd_write(fd, iovs, iovs_len, nwritten_out, StdoutMode::Ignore as u32, concolic, vmctx)
-    })
+    let vmctx = unsafe { &mut *vmctx };
+    raise_on_err(with_cursor_at(vmctx, fd, offset, |vmctx| {
+        let mode = StdoutMode::Ignore as u32;
+        wasi_fd_write(vmctx, fd, iovs, iovs_len, nwritten_out, mode, concolic)
+    }))
 }
 
 unsafe extern "C" fn builtin_wasi_fd_seek(
@@ -543,17 +648,17 @@ unsafe extern "C" fn builtin_wasi_fd_seek(
     let vmctx = unsafe { &mut *vmctx };
     vmctx.builtin_consume_fuel(1);
     match vmctx.memfs.seek(fd, offset, whence as u8) {
-        Ok(pos) => {
-            write_u64(vmctx, newoffset_out, pos);
-            ERRNO_SUCCESS
-        }
+        Ok(pos) => raise_on_err(write_u64(vmctx, newoffset_out, pos).map(|()| ERRNO_SUCCESS)),
         Err(e) => e,
     }
 }
 
 unsafe extern "C" fn builtin_wasi_fd_fdstat_get(fd: u32, buf: u32, vmctx: *mut VMContext) -> u32 {
-    let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(1);
+    raise_on_err(wasi_fd_fdstat_get(unsafe { &mut *vmctx }, fd, buf))
+}
+
+fn wasi_fd_fdstat_get(vmctx: &mut VMContext, fd: u32, buf: u32) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(1)?;
     // __wasi_fdstat_t { u8 fs_filetype; u16 fs_flags; u64 fs_rights_base; u64 fs_rights_inheriting; }
     let (filetype, flags, rights) = if fd == PREOPEN_DIR_FD {
         (FILETYPE_DIRECTORY, 0u32, u64::MAX)
@@ -569,16 +674,16 @@ unsafe extern "C" fn builtin_wasi_fd_fdstat_get(fd: u32, buf: u32, vmctx: *mut V
         (FILETYPE_REGULAR_FILE, flags, rights)
     } else {
         // stdin/stdout/stderr: keep failing so isatty() stays false
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     };
     heap_write(
         vmctx,
         buf,
         &[filetype, 0, flags as u8, (flags >> 8) as u8, 0, 0, 0, 0],
-    );
-    write_u64(vmctx, buf.wrapping_add(8), rights);
-    write_u64(vmctx, buf.wrapping_add(16), rights);
-    ERRNO_SUCCESS
+    )?;
+    write_u64(vmctx, buf.wrapping_add(8), rights)?;
+    write_u64(vmctx, buf.wrapping_add(16), rights)?;
+    Ok(ERRNO_SUCCESS)
 }
 
 unsafe extern "C" fn builtin_wasi_fd_fdstat_set_flags(
@@ -598,29 +703,32 @@ unsafe extern "C" fn builtin_wasi_fd_fdstat_set_flags(
     }
 }
 
-fn write_filestat(vmctx: &mut VMContext, buf: u32, filetype: u8, size: u64) {
+fn write_filestat(vmctx: &mut VMContext, buf: u32, filetype: u8, size: u64) -> TrapResult<()> {
     // __wasi_filestat_t { u64 dev; u64 ino; u8 filetype; u64 nlink; u64 size; u64 atim; u64 mtim; u64 ctim; }
     let mut st = [0u8; 64];
     st[8..16].copy_from_slice(&1u64.to_le_bytes());
     st[16] = filetype;
     st[24..32].copy_from_slice(&1u64.to_le_bytes());
     st[32..40].copy_from_slice(&size.to_le_bytes());
-    heap_write(vmctx, buf, &st);
+    heap_write(vmctx, buf, &st)
 }
 
 unsafe extern "C" fn builtin_wasi_fd_filestat_get(fd: u32, buf: u32, vmctx: *mut VMContext) -> u32 {
-    let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(1);
+    raise_on_err(wasi_fd_filestat_get(unsafe { &mut *vmctx }, fd, buf))
+}
+
+fn wasi_fd_filestat_get(vmctx: &mut VMContext, fd: u32, buf: u32) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(1)?;
     if fd == PREOPEN_DIR_FD {
-        write_filestat(vmctx, buf, FILETYPE_DIRECTORY, 0);
-        return ERRNO_SUCCESS;
+        write_filestat(vmctx, buf, FILETYPE_DIRECTORY, 0)?;
+        return Ok(ERRNO_SUCCESS);
     }
     let Some(ofd) = vmctx.memfs.fd(fd) else {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     };
     let size = vmctx.memfs.files[ofd.file].data.len() as u64;
-    write_filestat(vmctx, buf, FILETYPE_REGULAR_FILE, size);
-    ERRNO_SUCCESS
+    write_filestat(vmctx, buf, FILETYPE_REGULAR_FILE, size)?;
+    Ok(ERRNO_SUCCESS)
 }
 
 unsafe extern "C" fn builtin_wasi_fd_filestat_set_size(
@@ -643,26 +751,41 @@ unsafe extern "C" fn builtin_wasi_path_filestat_get(
     buf: u32,
     vmctx: *mut VMContext,
 ) -> u32 {
-    let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(4 + path_len as u64);
+    raise_on_err(wasi_path_filestat_get(
+        unsafe { &mut *vmctx },
+        dirfd,
+        path,
+        path_len,
+        buf,
+    ))
+}
+
+fn wasi_path_filestat_get(
+    vmctx: &mut VMContext,
+    dirfd: u32,
+    path: u32,
+    path_len: u32,
+    buf: u32,
+) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(4 + path_len as u64)?;
     if dirfd != PREOPEN_DIR_FD {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     }
-    let path = heap_read(vmctx, path, path_len);
+    let path = heap_read(vmctx, path, path_len)?;
     let Some(path) = MemFs::normalize(&path) else {
-        return ERRNO_INVAL;
+        return Ok(ERRNO_INVAL);
     };
     if path.is_empty() {
-        write_filestat(vmctx, buf, FILETYPE_DIRECTORY, 0);
-        return ERRNO_SUCCESS;
+        write_filestat(vmctx, buf, FILETYPE_DIRECTORY, 0)?;
+        return Ok(ERRNO_SUCCESS);
     }
     match vmctx.memfs.lookup(&path) {
         Some(idx) => {
             let size = vmctx.memfs.files[idx].data.len() as u64;
-            write_filestat(vmctx, buf, FILETYPE_REGULAR_FILE, size);
-            ERRNO_SUCCESS
+            write_filestat(vmctx, buf, FILETYPE_REGULAR_FILE, size)?;
+            Ok(ERRNO_SUCCESS)
         }
-        None => ERRNO_NOENT,
+        None => Ok(ERRNO_NOENT),
     }
 }
 
@@ -672,15 +795,28 @@ unsafe extern "C" fn builtin_wasi_path_unlink_file(
     path_len: u32,
     vmctx: *mut VMContext,
 ) -> u32 {
-    let vmctx = unsafe { &mut *vmctx };
-    vmctx.builtin_consume_fuel(4 + path_len as u64);
+    raise_on_err(wasi_path_unlink_file(
+        unsafe { &mut *vmctx },
+        dirfd,
+        path,
+        path_len,
+    ))
+}
+
+fn wasi_path_unlink_file(
+    vmctx: &mut VMContext,
+    dirfd: u32,
+    path: u32,
+    path_len: u32,
+) -> TrapResult<u32> {
+    vmctx.try_consume_fuel(4 + path_len as u64)?;
     if dirfd != PREOPEN_DIR_FD {
-        return ERRNO_BADF;
+        return Ok(ERRNO_BADF);
     }
-    let path = heap_read(vmctx, path, path_len);
+    let path = heap_read(vmctx, path, path_len)?;
     match vmctx.memfs.unlink(&path) {
-        Ok(()) => ERRNO_SUCCESS,
-        Err(e) => e,
+        Ok(()) => Ok(ERRNO_SUCCESS),
+        Err(e) => Ok(e),
     }
 }
 
