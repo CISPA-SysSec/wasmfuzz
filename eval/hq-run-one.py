@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import errno
+import hashlib
 import json
 import random
 import re
@@ -365,6 +366,7 @@ def main() -> int:
     crash_corpora_dir = str(task.get("crash_corpora_dir") or "")
     exp_arg = str(task.get("experiment_arg") or "")
     env_assigns = str(task.get("env_assignments") or "")
+    seeds_dir = str(task.get("seeds_dir") or "")
 
     runs_dir = Path(runs_dir_raw)
     apply_env_assignments(env_assigns)
@@ -391,6 +393,19 @@ def main() -> int:
         task_dir = Path(tempfile.mkdtemp(prefix="wasmfuzz-hq-"))
     corpus_dir = task_dir / "corpus"
     corpus_dir.mkdir()
+    if seeds_dir:
+        # `fuzz` loads its corpus from --dir (--seed-dir conflicts with it), so the seeds go there,
+        # md5-named like the fuzzer's own entries. Inputs over the 64 KiB input limit are skipped
+        # by the fuzzer anyway; leave them out so the monitor doesn't count them either.
+        n = skipped = 0
+        for f in sorted(Path(seeds_dir).iterdir()):
+            data = f.read_bytes() if f.is_file() else None
+            if data is None or len(data) > 65535:
+                skipped += 1
+                continue
+            (corpus_dir / hashlib.md5(data).hexdigest()).write_bytes(data)
+            n += 1
+        print(f"[hq-run] seeds: {n} from {seeds_dir} ({skipped} skipped: > 64 KiB or not a file)")
 
     monitor: Child | None = None
     fuzzer: Child | None = None

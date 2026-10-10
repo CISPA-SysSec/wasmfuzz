@@ -56,6 +56,12 @@ def main():
                     help="KEY=VALUE set for every task (e.g. WASMFUZZ_LOD=html); repeatable")
     ap.add_argument("--arm-tag", default="",
                     help="suffix for every bucket (arm name), e.g. to tell an --env arm from the plain one")
+    ap.add_argument("--seeds-root", default="",
+                    help="Directory with one seed dir per harness (<root>/<harness>/); the runner copies "
+                         "the seeds into the corpus before the start. Harnesses without seeds are skipped; "
+                         "seeded buckets get the suffix '-seeded'")
+    ap.add_argument("--seeds-both", action="store_true",
+                    help="with --seeds-root: also submit every task unseeded, in the same job")
     ap.add_argument("--submit-cwd", default="/tmp", help="Working directory for 'hq submit'")
     ap.add_argument("--priority", type=int, default=0,
                     help="hq task priority; negative lets other queued jobs take freed cores first")
@@ -96,6 +102,14 @@ def main():
             continue
         targets.append(t)
 
+    seeds_root = Path(args.seeds_root).expanduser() if args.seeds_root else None
+    if seeds_root:
+        unseeded = [t.stem for t in targets if not any((seeds_root / t.stem).glob("*"))]
+        if unseeded:
+            print(f"[seeds] no seeds under {seeds_root}, skipping: {' '.join(unseeded)}", file=sys.stderr)
+        targets = [t for t in targets if t.stem not in unseeded]
+    seed_modes = ([False] if not seeds_root or args.seeds_both else []) + ([True] if seeds_root else [])
+
     hq_dir = Path(args.hq_dir).expanduser()
     runs_dir = hq_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -110,11 +124,13 @@ def main():
     tasks = []
     for _ in range(args.repeat):
         for target in targets:
-            for cas_fuzzer, variant in itertools.product(cas_fuzzers, variants):
+            for cas_fuzzer, variant, seeded in itertools.product(cas_fuzzers, variants, seed_modes):
                 fuzzer_id = cas_fuzzer.stem.split("-")[-1]
                 bucket_suffix, exp_arg, env_assigns = variant_to_args(variant)
                 if args.arm_tag:
                     bucket_suffix += f"-{args.arm_tag}"
+                if seeded:
+                    bucket_suffix += "-seeded"
                 tasks.append({
                     "fuzzer": str(cas_fuzzer),
                     "monitor": str(cas_monitor),
@@ -127,6 +143,7 @@ def main():
                     "crash_corpora_dir": args.crash_corpora_dir,
                     "experiment_arg": exp_arg,
                     "env_assignments": " ".join(filter(None, [env_assigns, *args.env])),
+                    "seeds_dir": str(seeds_root / target.stem) if seeded else "",
                 })
     random.shuffle(tasks)
 
