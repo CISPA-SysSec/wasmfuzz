@@ -62,6 +62,9 @@ def main():
                          "seeded buckets get the suffix '-seeded'")
     ap.add_argument("--seeds-both", action="store_true",
                     help="with --seeds-root: also submit every task unseeded, in the same job")
+    ap.add_argument("--seeds-ref", default="",
+                    help="with --seeds-root: also submit every task seeded from this root instead (arm suffix "
+                         "-seededref), in the same job -- A/B of two seed sets on shared nodes")
     ap.add_argument("--submit-cwd", default="/tmp", help="Working directory for 'hq submit'")
     ap.add_argument("--priority", type=int, default=0,
                     help="hq task priority; negative lets other queued jobs take freed cores first")
@@ -108,7 +111,16 @@ def main():
         if unseeded:
             print(f"[seeds] no seeds under {seeds_root}, skipping: {' '.join(unseeded)}", file=sys.stderr)
         targets = [t for t in targets if t.stem not in unseeded]
-    seed_modes = ([False] if not seeds_root or args.seeds_both else []) + ([True] if seeds_root else [])
+    seeds_ref = Path(args.seeds_ref).expanduser() if args.seeds_ref else None
+    if seeds_ref:
+        assert seeds_root, "--seeds-ref needs --seeds-root"
+        unseeded = [t.stem for t in targets if not any((seeds_ref / t.stem).glob("*"))]
+        if unseeded:
+            print(f"[seeds] no seeds under {seeds_ref}, skipping: {' '.join(unseeded)}", file=sys.stderr)
+        targets = [t for t in targets if t.stem not in unseeded]
+    # False = unseeded, True = --seeds-root, "ref" = --seeds-ref
+    seed_modes = ([False] if not seeds_root or args.seeds_both else []) + ([True] if seeds_root else []) \
+        + (["ref"] if seeds_ref else [])
 
     hq_dir = Path(args.hq_dir).expanduser()
     runs_dir = hq_dir / "runs"
@@ -130,7 +142,7 @@ def main():
                 if args.arm_tag:
                     bucket_suffix += f"-{args.arm_tag}"
                 if seeded:
-                    bucket_suffix += "-seeded"
+                    bucket_suffix += "-seededref" if seeded == "ref" else "-seeded"
                 tasks.append({
                     "fuzzer": str(cas_fuzzer),
                     "monitor": str(cas_monitor),
@@ -143,7 +155,7 @@ def main():
                     "crash_corpora_dir": args.crash_corpora_dir,
                     "experiment_arg": exp_arg,
                     "env_assignments": " ".join(filter(None, [env_assigns, *args.env])),
-                    "seeds_dir": str(seeds_root / target.stem) if seeded else "",
+                    "seeds_dir": str((seeds_ref if seeded == "ref" else seeds_root) / target.stem) if seeded else "",
                 })
     random.shuffle(tasks)
 
