@@ -395,17 +395,19 @@ def main() -> int:
     corpus_dir.mkdir()
     if seeds_dir:
         # `fuzz` loads its corpus from --dir (--seed-dir conflicts with it), so the seeds go there,
-        # md5-named like the fuzzer's own entries. Inputs over the 64 KiB input limit are skipped
-        # by the fuzzer anyway; leave them out so the monitor doesn't count them either.
+        # md5-named like the fuzzer's own entries. Inputs over the fuzzer's input limit (64 KiB, or
+        # WASMFUZZ_INPUT_MAX bytes from the task env) are skipped by the fuzzer anyway; leave them
+        # out so the monitor doesn't count them either.
+        limit = max(65535, int(os.environ.get("WASMFUZZ_INPUT_MAX") or 0))
         n = skipped = 0
         for f in sorted(Path(seeds_dir).iterdir()):
             data = f.read_bytes() if f.is_file() else None
-            if data is None or len(data) > 65535:
+            if data is None or len(data) > limit:
                 skipped += 1
                 continue
             (corpus_dir / hashlib.md5(data).hexdigest()).write_bytes(data)
             n += 1
-        print(f"[hq-run] seeds: {n} from {seeds_dir} ({skipped} skipped: > 64 KiB or not a file)")
+        print(f"[hq-run] seeds: {n} from {seeds_dir} ({skipped} skipped: > {limit} B or not a file)")
 
     monitor: Child | None = None
     fuzzer: Child | None = None
