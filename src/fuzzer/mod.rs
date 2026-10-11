@@ -128,6 +128,11 @@ pub(crate) fn fuzz(mod_spec: Arc<ModuleSpec>, opts: orc::CliOpts) {
                         }
                         orc_handle.report_finds(inputs);
                     }
+                    drop(worker);
+                    // glibc keeps what a dead worker freed in its arenas and never hands it
+                    // back, so without a trim RSS grows with every respawn round while the
+                    // live heap stays flat.
+                    unsafe { libc::malloc_trim(0) };
                 }
             })
             .unwrap();
