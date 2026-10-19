@@ -1,0 +1,25 @@
+diff --git a/fuzz/cms_verify.c b/fuzz/cms_verify.c
+--- a/fuzz/cms_verify.c
++++ b/fuzz/cms_verify.c
+@@ -50,8 +50,19 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+     if (out == NULL)
+         goto err;
+ 
+-    CMS_verify(cms, NULL, NULL, indata, out,
+-        CMS_NO_SIGNER_CERT_VERIFY);
++    /*
++     * A fuzzer cannot produce a valid signature over the signed attributes,
++     * and a bad one skips that signer's content digest check. If
++     * verification fails, run it again without the attribute signature check.
++     */
++    if (CMS_verify(cms, NULL, NULL, indata, out,
++            CMS_NO_SIGNER_CERT_VERIFY)
++        <= 0) {
++        if (indata != NULL)
++            (void)BIO_reset(indata);
++        CMS_verify(cms, NULL, NULL, indata, out,
++            CMS_NO_SIGNER_CERT_VERIFY | CMS_NO_ATTR_VERIFY);
++    }
+ 
+ err:
+     BIO_free(out);
