@@ -1,3 +1,9 @@
+Subject: [PATCH] ico: reject a BMP height that halves to zero
+
+Open upstream as image-rs/image#3041, the same approach, which maintainers
+declined in favour of Windows behaviour (fall back to the ICONDIR entry size).
+That is image-rs/image#3042, also open. Drop this patch once #3042 lands.
+
 diff --git a/src/codecs/bmp/decoder.rs b/src/codecs/bmp/decoder.rs
 index 691be7b..c8f4a21 100644
 --- a/src/codecs/bmp/decoder.rs

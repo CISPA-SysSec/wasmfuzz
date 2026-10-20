@@ -1,3 +1,8 @@
+Subject: [PATCH] moxcms: check the TRC tag size addition
+
+Open upstream as awxkee/moxcms#197. Only reachable on 32-bit targets, where
+`tag_size + entry` overflows usize.
+
 --- a/src/reader.rs
 +++ b/src/reader.rs
 @@ -731,9 +731,7 @@

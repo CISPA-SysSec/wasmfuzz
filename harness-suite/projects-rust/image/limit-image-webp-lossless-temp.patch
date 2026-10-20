@@ -1,3 +1,17 @@
+Subject: [PATCH] image-webp: bound the lossless RGB temp buffer, guard huffman
+ node index, check ALPH frame size
+
+Three independent changes:
+- huffman.rs `node_index` guard: the root cause (code lengths checked in u16
+  arithmetic, which wraps for 15-bit codes) is fixed upstream by
+  image-rs/image-webp#165 (4a794cd8), not released yet (0.2.4 is the latest).
+  Same root cause as image-rs/image-webp#118.
+- decoder.rs `read_frame` ANMF frame size check on the ALPH + VP8 path: open
+  upstream PR image-rs/image-webp#186.
+- decoder.rs lossless RGB temp buffer (`memory_limit`, `try_reserve_exact`):
+  suite-only, for the wasm32 guest. Upstream memory-limit work is
+  image-rs/image-webp#21.
+
 --- a/src/decoder.rs
 +++ b/src/decoder.rs
 @@ -684,7 +684,17 @@

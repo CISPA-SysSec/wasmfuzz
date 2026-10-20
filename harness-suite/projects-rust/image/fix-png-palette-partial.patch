@@ -1,3 +1,10 @@
+Subject: [PATCH] png: skip a partial trailing palette entry
+
+Fixed upstream by image-rs/image-png#682 (8330c2c6, "reject malformed PLTE
+chunks"), which rejects PLTE lengths that are not a multiple of 3 instead.
+Not released yet: png 0.18.1 predates it, and 0.18.2 is pending in
+image-rs/image-png#683. Drop this patch once the vendored png contains 8330c2c6.
+
 --- a/src/decoder/transform/palette.rs
 +++ b/src/decoder/transform/palette.rs
 @@ -70,8 +70,8 @@ fn create_rgba_palette(info: &Info) -> [[u8; 4]; 256] {

@@ -1,3 +1,11 @@
+Subject: [PATCH] zune-jpeg: size the upsampler scratch from the widest component
+
+Fixed upstream by etemesi254/zune-image#374 (36007420, "jpeg: fix scratch
+space for baseline and progressive upsampling"). It is in zune-jpeg
+0.5.16-rc1, but no stable release has it yet (0.5.15 is the latest). The
+`rchunks`/`worker.rs` guards here overlap the zune-image project's
+fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
+
 --- a/src/mcu.rs
 +++ b/src/mcu.rs
 @@ -331,7 +331,18 @@

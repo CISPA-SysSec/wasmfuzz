@@ -1,6 +1,5 @@
 set -e
 git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" 075e65d618a323e5cb48c1d8710a2eca25d690c6
-git -C "$PROJECT/repo" apply "$PROJECT/limit-bmp-icc-profile.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fix-ico-bmp-zero-height.patch"
 
 # Pinned to versions resolved by `image` 0.25.9 for the fuzz workspace (`cargo tree -p image -i …`).
