@@ -319,8 +319,11 @@ pub(crate) struct MetricsSnapshot {
 /// Atomically write `snap` as JSON to `$WASMFUZZ_METRICS_JSON`: write to a
 /// sibling `.tmp` file, then `rename` over the final path. Best-effort: I/O
 /// errors are logged once and otherwise ignored so the fuzzer hot path keeps
-/// running.
+/// running. Writers are serialized: several workers can dump at once, and two
+/// writes into the shared `.tmp` file interleave into invalid JSON.
 fn write_atomic(path: &PathBuf, snap: &MetricsSnapshot) {
+    static WRITE: Mutex<()> = Mutex::new(());
+    let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let json = match serde_json::to_vec(snap) {
         Ok(v) => v,
         Err(e) => {

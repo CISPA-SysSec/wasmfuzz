@@ -153,7 +153,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
         let stats = stats_in
             .as_ref()
             .and_then(|path| std::fs::read_to_string(path).ok())
-            .map(|s| serde_json::from_str(&s).unwrap());
+            .and_then(|s| serde_json::from_str(&s).ok());
 
         let event = LogEvent {
             i,
