@@ -12,6 +12,13 @@ use crate::{
 use super::feedback::FeedbackContext;
 use super::signals::{TrapReason, raise_trap};
 
+// A run that grew the heap by at least this many wasm pages (32 MiB) has the
+// growth released on restore instead of copied back to zero. That bounds what
+// an instance keeps resident above its snapshot; below it, harnesses that grow
+// on every run keep their pages and don't pay for the faults and TLB
+// shootdowns of MADV_DONTNEED.
+const RELEASE_GROWTH_PAGES: u32 = 512;
+
 #[repr(C)]
 pub(crate) struct VMContext {
     pub heap: *mut u8,
@@ -264,6 +271,12 @@ impl VMContext {
     pub(crate) fn restore(&mut self) {
         tracy_full::zone!("VMContext::restore");
         self.globals.copy_from_slice(&self.globals_snapshot);
+        // Give back what this run grew the heap by if that's a lot, rather
+        // than keeping it resident as restored zeros.
+        if self.heap_pages >= self.heap_pages_snapshot + RELEASE_GROWTH_PAGES {
+            self.heap_alloc
+                .release_above((self.heap_pages_snapshot as usize) << 16);
+        }
         self.heap_pages = self.heap_pages_snapshot;
         self.heap_alloc.restore();
         self.concolic.reset();
@@ -297,8 +310,7 @@ impl VMContext {
 
         // Initialize memory and snapshot
         self.heap_alloc.resize(from.initial_mem_pages << 16);
-        self.heap_alloc.as_mut_slice().fill(0);
-        self.heap_alloc.snapshot_as_mut_slice().fill(0);
+        self.heap_alloc.zero_all();
         for (data, offset) in &from.memory_initializers {
             self.heap_alloc.as_mut_slice()[*offset..][..data.len()].copy_from_slice(data);
             self.heap_alloc.snapshot_as_mut_slice()[*offset..][..data.len()].copy_from_slice(data);

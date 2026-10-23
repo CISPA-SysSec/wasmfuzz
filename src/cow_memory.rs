@@ -71,6 +71,21 @@ pub trait ResettableMapping {
     // memory-initializer paths do this).
     fn mark_clean(&mut self) {}
 
+    // Every byte at or above `offset` is zero in the reference: make the
+    // working copy zero there too and drop its marks, so the next restore
+    // doesn't copy those pages. Providers that can give the memory back to
+    // the kernel do so; the default leaves it to `restore`, which copies the
+    // zero pages over.
+    fn release_above(&mut self, offset: usize) {
+        let _ = offset;
+    }
+
+    // Zero both sides over the whole accessible range.
+    fn zero_all(&mut self) {
+        self.as_mut_slice().fill(0);
+        self.snapshot_as_mut_slice().fill(0);
+    }
+
     // Base of the byte-per-page dirty map that JIT-emitted store
     // instrumentation writes into, or null if this provider tracks writes
     // itself and needs no help. The address is stable for the mapping's
@@ -1396,6 +1411,59 @@ impl ResettableMapping for SoftwareDirtyMapping {
         }
     }
 
+    // A grown heap is zero above the snapshot's size in the reference, but
+    // restoring it page by page leaves the working copy resident: one guest
+    // that once grew to the 1 GiB cap pins a GiB per instance for the rest of
+    // the campaign. Drop those pages instead; they fault back in as zero.
+    fn release_above(&mut self, offset: usize) {
+        let page_size = 1usize << self.page_shift;
+        let offset = offset.next_multiple_of(page_size);
+        if offset >= self.accessible_size {
+            return;
+        }
+        unsafe {
+            rustix::mm::madvise(
+                self.ptr.byte_add(offset),
+                self.accessible_size - offset,
+                rustix::mm::Advice::LinuxDontNeed,
+            )
+            .expect("madvise(MADV_DONTNEED) failed");
+        }
+        let first = offset >> self.page_shift;
+        match self.mode {
+            DirtyTrackMode::Bitmap => {
+                self.seen[first..self.accessible_size >> self.page_shift].fill(0)
+            }
+            DirtyTrackMode::Log => {
+                let seen = &mut self.seen;
+                self.log.retain(|&page| {
+                    let keep = (page as usize) < first;
+                    if !keep {
+                        seen[page as usize] = 0;
+                    }
+                    keep
+                });
+            }
+        }
+    }
+
+    fn zero_all(&mut self) {
+        if self.accessible_size <= 8 << 20 {
+            self.as_mut_slice().fill(0);
+            self.snapshot_as_mut_slice().fill(0);
+            self.mark_clean();
+            return;
+        }
+        // Zeroing by hand would fault in both sides in full.
+        for ptr in [self.ptr, self.ref_ptr] {
+            unsafe {
+                rustix::mm::madvise(ptr, self.accessible_size, rustix::mm::Advice::LinuxDontNeed)
+                    .expect("madvise(MADV_DONTNEED) failed");
+            }
+        }
+        self.mark_clean();
+    }
+
     fn dirty_map_ptr(&self) -> *mut u8 {
         self.seen.as_ptr() as *mut u8
     }
@@ -1601,6 +1669,53 @@ mod tests {
                 1 << 32,
                 mode,
             ));
+        }
+    }
+
+    // Pages of `buf`'s working side in `range` that are resident.
+    fn resident_pages(buf: &dyn ResettableMapping, range: std::ops::Range<usize>) -> usize {
+        let page_size = rustix::param::page_size();
+        let mut vec = vec![0u8; range.len().div_ceil(page_size)];
+        let base = buf.as_slice()[range.clone()].as_ptr();
+        let rc = unsafe { libc::mincore(base as *mut c_void, range.len(), vec.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        vec.iter().filter(|&&v| v & 1 != 0).count()
+    }
+
+    #[test]
+    fn test_software_release_above() {
+        const GROWN: usize = 64 << 20;
+        for mode in [DirtyTrackMode::Log, DirtyTrackMode::Bitmap] {
+            let mut buf = SoftwareDirtyMapping::new_with_mode(1 << 16, 1 << 32, mode);
+            buf.as_mut_slice()[..16].copy_from_slice(b"YELLOW SUBMARINE");
+            buf.mark_dirty(0, 16);
+            buf.snapshot();
+
+            // a run grows the heap and fills it
+            buf.resize(GROWN);
+            buf.as_mut_slice()[7..].fill(0xaa);
+            buf.mark_dirty(7, GROWN - 7);
+            buf.release_above(1 << 16);
+            buf.restore();
+            assert_eq!(buf.as_slice()[..16], b"YELLOW SUBMARINE"[..]);
+            // (before reading it: a read maps the zero page, which counts)
+            assert_eq!(resident_pages(&buf, 1 << 16..GROWN), 0, "{mode:?}");
+            assert!(buf.as_slice()[16..].iter().all(|&b| b == 0), "{mode:?}");
+            buf.check_no_unmarked_writes();
+
+            // the released range still tracks writes
+            buf.as_mut_slice()[GROWN - 4..].copy_from_slice(b"tail");
+            buf.mark_dirty(GROWN - 4, 4);
+            buf.restore();
+            assert_eq!(buf.as_slice()[GROWN - 4..], [0; 4][..]);
+
+            // zero_all leaves neither side resident
+            buf.as_mut_slice().fill(1);
+            buf.snapshot_as_mut_slice().fill(1);
+            buf.zero_all();
+            assert_eq!(resident_pages(&buf, 0..GROWN), 0, "{mode:?}");
+            assert!(buf.as_slice().iter().all(|&b| b == 0));
+            assert!(buf.snapshot_as_mut_slice().iter().all(|&b| b == 0));
         }
     }
 
