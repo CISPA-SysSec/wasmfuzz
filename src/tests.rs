@@ -165,6 +165,7 @@ impl TestModule {
 
     // Re-reads a 1 MiB file until the instruction limit hits, which almost
     // always happens while `fd_read` copies the file into guest memory.
+    #[cfg(not(any(feature = "with_mimalloc", feature = "tracy")))]
     fn file_reread_until_out_of_fuel() -> Self {
         Self::compile_simple_rust_expr(
             "file-reread-until-out-of-fuel",
