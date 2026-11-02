@@ -661,7 +661,7 @@ impl SolverInstance {
         let res = self.btor.sat();
         assert_eq!(res, SolverResult::Sat);
 
-        let model = self.btor.check_sat_assuming(&assumptions);
+        let _model = self.btor.check_sat_assuming(&assumptions);
 
         if bv.is_bv() {
             let solution = bv.bv().get_a_solution();

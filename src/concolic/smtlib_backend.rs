@@ -299,11 +299,11 @@ impl<'ctx> SolverInstance<'ctx> {
                     MemoryAccessKind::I64AsU32 => combine_32(&bytes).uext::<32, 64>().into(),
                     MemoryAccessKind::F32 => {
                         let val = combine_32(&bytes);
-                        Float32::to_fp_from_bits(&self.storage, val).into()
+                        Float32::to_fp_from_bits(self.storage, val).into()
                     }
                     MemoryAccessKind::F64 => {
                         let val = combine_64(&bytes);
-                        Float64::to_fp_from_bits(&self.storage, val).into()
+                        Float64::to_fp_from_bits(self.storage, val).into()
                     }
                 }
                 // zero-width bvs are not allowed :(
@@ -491,22 +491,22 @@ impl<'ctx> SolverInstance<'ctx> {
             (U::I32ReinterpretF32, V::F32(val)) => {
                 let tmp = *self.new_tmp_bv::<32>();
                 self.solver
-                    .assert(val._eq(Float32::to_fp_from_bits(&self.storage, tmp)))
+                    .assert(val._eq(Float32::to_fp_from_bits(self.storage, tmp)))
                     .unwrap();
                 tmp.into()
             }
             (U::I64ReinterpretF64, V::F64(val)) => {
                 let tmp = *self.new_tmp_bv::<64>();
                 self.solver
-                    .assert(val._eq(Float64::to_fp_from_bits(&self.storage, tmp)))
+                    .assert(val._eq(Float64::to_fp_from_bits(self.storage, tmp)))
                     .unwrap();
                 tmp.into()
             }
             (U::F32ReinterpretI32, V::BV32(val)) => {
-                Float32::to_fp_from_bits(&self.storage, val).into()
+                Float32::to_fp_from_bits(self.storage, val).into()
             }
             (U::F64ReinterpretI64, V::BV64(val)) => {
-                Float64::to_fp_from_bits(&self.storage, val).into()
+                Float64::to_fp_from_bits(self.storage, val).into()
             }
             (U::FAbs, V::F32(val)) => val.fp_abs().into(),
             (U::FAbs, V::F64(val)) => val.fp_abs().into(),
@@ -577,8 +577,8 @@ impl<'ctx> SolverInstance<'ctx> {
             | BinaryOp::FGt
             | BinaryOp::FLe
             | BinaryOp::FGe => match (a, b) {
-                (Value::F32(a), Value::F32(b)) => self.build_binary_fp_eq(op, a, b).map(Into::into),
-                (Value::F64(a), Value::F64(b)) => self.build_binary_fp_eq(op, a, b).map(Into::into),
+                (Value::F32(a), Value::F32(b)) => self.build_binary_fp_eq(op, a, b),
+                (Value::F64(a), Value::F64(b)) => self.build_binary_fp_eq(op, a, b),
                 _ => unreachable!(),
             },
 
