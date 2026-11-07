@@ -20,13 +20,19 @@ mod tests;
 #[cfg(test)]
 mod spec_testsuite;
 
-#[cfg(feature = "with_mimalloc")]
+#[cfg(all(feature = "with_mimalloc", not(feature = "tracy")))]
 mod with_mimalloc {
     #[global_allocator]
     static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 }
 
-#[cfg(feature = "tracy")]
+// With both features, tracy tracks allocations on top of mimalloc.
+#[cfg(all(feature = "tracy", feature = "with_mimalloc"))]
+#[global_allocator]
+static ALLOC: tracy_full::alloc::GlobalAllocator<mimalloc::MiMalloc> =
+    tracy_full::alloc::GlobalAllocator::new_with(mimalloc::MiMalloc);
+
+#[cfg(all(feature = "tracy", not(feature = "with_mimalloc")))]
 #[global_allocator]
 static ALLOC: tracy_full::alloc::GlobalAllocator = tracy_full::alloc::GlobalAllocator::new();
 
