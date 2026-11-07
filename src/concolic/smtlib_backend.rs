@@ -886,6 +886,7 @@ impl<'ctx> SolverInstance<'ctx> {
         Ok(())
     }
 
+    #[cfg_attr(feature = "concolic_bitwuzla", expect(unused))]
     pub(crate) fn eval_as_u64_with_input(
         &mut self,
         val: SymValRef,

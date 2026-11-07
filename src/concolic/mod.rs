@@ -326,7 +326,7 @@ impl MemoryAccessKind {
         }
     }
 
-    #[expect(unused)]
+    #[cfg_attr(not(any(feature = "concolic_z3", feature = "concolic_bitwuzla")), expect(unused))]
     fn sign_extend(&self) -> bool {
         matches!(
             self,
@@ -1258,6 +1258,6 @@ pub(crate) struct ConcolicTrace {
     pub symvals: Symvals,
     pub events: Vec<ConcolicEvent>,
     pub event_inputs: Vec<BitVec>,
-    #[expect(unused)]
+    #[cfg_attr(not(feature = "concolic_bitwuzla"), expect(unused))]
     pub events_by_location: HashMap<Location, Vec<usize>>,
 }
