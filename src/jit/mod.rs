@@ -9,6 +9,7 @@ pub mod memory;
 pub mod misc;
 pub mod module;
 pub mod numeric;
+pub mod perfmap;
 pub mod signals;
 pub mod tracing;
 pub mod util;

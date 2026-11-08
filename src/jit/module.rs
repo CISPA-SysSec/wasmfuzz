@@ -236,6 +236,7 @@ impl<'s> ModuleTranslator<'s> {
         let mut ctx = self.module.make_context();
         let mut trap_sinks = Vec::new();
         let mut code_size = 0;
+        let mut perf_regions: Vec<(FuncId, usize, String)> = Vec::new();
 
         for func in &spec.functions {
             let FunctionArtifacts {
@@ -259,12 +260,16 @@ impl<'s> ModuleTranslator<'s> {
 
             trap_sinks.push((self.func_ids[&fidx], trap_sinks_, trap_kinds));
             code_size += func_code_size;
+            if super::perfmap::enabled() {
+                perf_regions.push((self.func_ids[&fidx], func_code_size, func.symbol.clone()));
+            }
         }
 
         let mut export_func_ids = HashMap::default();
         let mut exported_funcs: Vec<_> = spec.exported_funcs.iter().collect();
         exported_funcs.sort_by_key(|(_, fidx)| **fidx);
         for (symbol, &fidx) in exported_funcs {
+            let code_size_before = code_size;
             let res = self.emit_export_trampoline(
                 spec,
                 fidx,
@@ -277,6 +282,9 @@ impl<'s> ModuleTranslator<'s> {
                 passes,
                 &mut pass_meta,
             );
+            if super::perfmap::enabled() {
+                perf_regions.push((res.0, code_size - code_size_before, format!("export/{symbol}")));
+            }
             trap_sinks.push(res);
         }
 
@@ -284,6 +292,22 @@ impl<'s> ModuleTranslator<'s> {
         self.module
             .finalize_definitions()
             .expect("failed to finalize definition");
+
+        if super::perfmap::enabled() {
+            let kind = match options.kind {
+                super::CompilationKind::Reusable => "",
+                super::CompilationKind::Tracing => "[tracing]",
+            };
+            let regions: Vec<_> = perf_regions
+                .into_iter()
+                .map(|(id, size, name)| super::perfmap::CodeRegion {
+                    ptr: self.module.get_finalized_function(id),
+                    size,
+                    name: format!("wasm{kind}::{}", super::perfmap::short_name(&name)),
+                })
+                .collect();
+            super::perfmap::record(&regions);
+        }
 
         for (table_index, offset, funcs) in spec.func_table_inits.iter() {
             for (i, f) in funcs.iter().enumerate() {
@@ -501,7 +525,14 @@ impl<'s> ModuleTranslator<'s> {
 
         let super::FuncTranslator { trapcodes, .. } = functrans;
 
-        ctx.set_disasm(options.verbose && !dead);
+        let dump = (!dead)
+            .then(|| super::perfmap::dump_target(&func.symbol, options.kind))
+            .flatten();
+        if let Some(prefix) = &dump {
+            let _ = std::fs::write(format!("{prefix}.pre.clif"), ctx.func.display().to_string());
+        }
+
+        ctx.set_disasm((options.verbose || dump.is_some()) && !dead);
 
         module
             .define_function(func_id, ctx)
@@ -509,7 +540,12 @@ impl<'s> ModuleTranslator<'s> {
 
         let compiled_code = ctx.compiled_code().unwrap();
         let disasm = compiled_code.vcode.as_ref();
-        if let Some(disasm) = &disasm {
+        if let Some(prefix) = &dump {
+            let _ = std::fs::write(format!("{prefix}.opt.clif"), ctx.func.display().to_string());
+            if let Some(disasm) = &disasm {
+                let _ = std::fs::write(format!("{prefix}.vcode"), disasm);
+            }
+        } else if let Some(disasm) = &disasm {
             println!("{disasm}");
         }
 
