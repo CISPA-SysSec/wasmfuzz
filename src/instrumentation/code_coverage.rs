@@ -1,5 +1,5 @@
 use bitvec::prelude::*;
-use cranelift::codegen::ir::{InstBuilder, MemFlagsData, types::I8};
+use cranelift::codegen::ir::{InstBuilder, MemFlagsData, types::I32};
 
 use crate::{
     ir::{Location, ModuleSpec},
@@ -51,24 +51,24 @@ impl<K: Ord + Clone> CoverageBitset<K> {
         };
 
         let elem_bitptr = self.entries.get(index).unwrap().into_bitptr();
-        let mut entry_mask: usize = elem_bitptr.bit().mask::<Lsb0>().into_inner();
-        let entry_offset =
+        let elem_offset =
             elem_bitptr.pointer() as usize - self.entries.as_bitptr().pointer() as usize;
-        let mut entry_offset: i32 = entry_offset.try_into().unwrap();
-        while entry_mask & 0xff == 0 {
-            entry_mask >>= 8;
-            entry_offset += 1;
-        }
+        // Bit number within the little-endian storage (bit `b` lives in byte
+        // `b / 8`, bit `b % 8`, whatever the storage element size).
+        let bit = elem_offset * 8 + elem_bitptr.bit().into_inner() as usize;
+        // Set it with a 32-bit `or` on the aligned u32 that holds it: x64 only
+        // fuses load+op+store into one `or mem, imm` for 32/64-bit types, an
+        // i8 update stays load/or/store. The storage is usize words, so the
+        // aligned u32 is in bounds; the other 31 bits are or-ed with zero.
+        let entry_offset: i32 = ((bit / 32) * 4).try_into().unwrap();
+        let entry_mask: u32 = 1 << (bit % 32);
         let entries_ptr = ctx
             .state
             .host_ptr(ctx.bcx, self.entries.as_bitptr().pointer());
 
         if ctx.state.options.kind == CompilationKind::Reusable {
             let val = ctx.bcx.ins().load(
-                // Note: We're handling offsetting into the usize-sized
-                // elements explicitly above in order to keep the mask
-                // immediate size down.
-                I8,
+                I32,
                 MemFlagsData::trusted(),
                 entries_ptr,
                 entry_offset,
