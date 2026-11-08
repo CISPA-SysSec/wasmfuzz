@@ -177,6 +177,7 @@ pub(crate) enum Subcommand {
         rounds: usize,
         #[clap(long)]
         max_inputs: Option<usize>,
+        /// 0 disables fuel instrumentation.
         #[clap(long, default_value = "100000000")]
         instruction_limit: u64,
         #[clap(long, default_value = "true")]

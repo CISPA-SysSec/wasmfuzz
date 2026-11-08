@@ -26,6 +26,7 @@ pub(crate) fn feedback_from_str(passes: &str) -> FeedbackOptions {
             edge_shortest_trace: true,
             ..FeedbackOptions::minimal_code_coverage()
         },
+        "none" => FeedbackOptions::nothing(),
         list => {
             let mut opts = FeedbackOptions::nothing();
             for p in list.split(',').filter(|p| !p.is_empty()) {
@@ -69,7 +70,7 @@ pub(crate) fn run(
     let mut stats = Stats::default();
     let mut sess = JitFuzzingSession::builder(mod_spec)
         .feedback(feedback)
-        .instruction_limit(Some(instruction_limit))
+        .instruction_limit((instruction_limit > 0).then_some(instruction_limit))
         .tracing(TracingOptions {
             cmplog,
             ..TracingOptions::default()
@@ -143,6 +144,7 @@ pub(crate) fn run(
         "program": program,
         "corpus": corpus,
         "passes": passes,
+        "pass_list": sess.passes.iter().map(|p| p.shortcode()).collect::<Vec<_>>(),
         "inputs": inputs.len(),
         "input_bytes": input_bytes,
         "instruction_limit": instruction_limit,
