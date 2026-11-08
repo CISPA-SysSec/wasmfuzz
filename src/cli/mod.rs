@@ -22,6 +22,7 @@ mod concolic_explore;
 #[cfg(feature = "reports")]
 pub(crate) mod cov_html;
 mod doctor;
+mod jit_replay;
 #[cfg(feature = "reports")]
 pub(crate) mod lcov;
 mod misc_eval;
@@ -163,6 +164,25 @@ pub(crate) enum Subcommand {
         corpus: PathBuf,
         #[clap(long)]
         jsonl_out_path: PathBuf,
+    },
+    /// Replay a corpus with fixed passes: feedback fingerprint + execs/s.
+    #[clap(hide = true)]
+    JitReplay {
+        program: PathBuf,
+        corpus: PathBuf,
+        /// `warmup`, `all`, or a comma list of FeedbackOptions fields.
+        #[clap(long, default_value = "warmup")]
+        passes: String,
+        #[clap(long, default_value = "3")]
+        rounds: usize,
+        #[clap(long)]
+        max_inputs: Option<usize>,
+        #[clap(long, default_value = "100000000")]
+        instruction_limit: u64,
+        #[clap(long, default_value = "true")]
+        cmplog: FlagBool,
+        #[clap(long)]
+        json_out: Option<PathBuf>,
     },
     #[clap(hide = true)]
     EvalPagesTouched {
@@ -665,6 +685,25 @@ pub(crate) fn main() {
         } => {
             misc_eval::eval_pass_speed(&program, &corpus, &jsonl_out_path);
         }
+        Subcommand::JitReplay {
+            program,
+            corpus,
+            passes,
+            rounds,
+            max_inputs,
+            instruction_limit,
+            cmplog,
+            json_out,
+        } => jit_replay::run(
+            &program,
+            &corpus,
+            &passes,
+            rounds,
+            max_inputs,
+            instruction_limit,
+            *cmplog,
+            json_out.as_ref(),
+        ),
         Subcommand::EvalPagesTouched {
             program,
             corpus,

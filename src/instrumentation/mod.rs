@@ -297,6 +297,24 @@ pub(crate) struct AssociatedCoverageArray<K: Ord + Clone, V: FeedbackLattice> {
 #[cfg(test)]
 mod tests;
 
+pub(crate) fn fingerprint_bytes(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = rustc_hash::FxHasher::default();
+    h.write(bytes);
+    h.write_usize(bytes.len());
+    h.finish()
+}
+
+pub(crate) fn fingerprint_words(words: &[usize]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = rustc_hash::FxHasher::default();
+    for &w in words {
+        h.write_usize(w);
+    }
+    h.write_usize(words.len());
+    h.finish()
+}
+
 /// Entries per dirty byte in [`AssociatedCoverageArray`].
 const DIRTY_CHUNK: usize = 64;
 
@@ -331,6 +349,19 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice> AssociatedCoverageArray<K, V> {
             &self.entries[index] as *const _,
             &self.dirty[index / DIRTY_CHUNK] as *const _,
         ))
+    }
+
+    /// `(hash, non-bottom count)` of `saved`. Hashes the raw value bytes, so
+    /// only compare fingerprints between builds of the same layout.
+    pub(crate) fn saved_fingerprint(&self) -> (u64, usize) {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                self.saved.as_ptr() as *const u8,
+                std::mem::size_of_val(&*self.saved),
+            )
+        };
+        let count = self.saved.iter().filter(|v| !v.is_bottom()).count();
+        (fingerprint_bytes(bytes), count)
     }
 
     pub fn update_and_scan(&mut self) -> bool {

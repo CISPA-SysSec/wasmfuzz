@@ -103,6 +103,10 @@ pub(crate) trait KVInstrumentationPass {
     fn snapshot_coverage(&self) -> CovSnapshot {
         self.coverage().snapshot()
     }
+    /// Hash of the accumulated (`saved`) state, for replay equivalence checks.
+    fn saved_fingerprint(&self) -> (u64, usize) {
+        self.coverage().saved_fingerprint()
+    }
 
     instrumentation_hook_fn_defs!(empty);
 }
@@ -122,6 +126,10 @@ pub(crate) trait CodeCovInstrumentationPass {
     fn coverage_mut(&mut self) -> &mut CoverageBitset<Self::Key>;
     fn count_saved(&self) -> usize {
         self.coverage().iter_covered_keys().count()
+    }
+    fn saved_fingerprint(&self) -> (u64, usize) {
+        let saved = &self.coverage().saved;
+        (super::fingerprint_words(saved.as_raw_slice()), saved.count_ones())
     }
 
     fn update_and_scan_coverage(&mut self) -> bool {
@@ -154,6 +162,10 @@ pub(crate) trait HashBitsetInstrumentationPass {
     fn shortcode(&self) -> &'static str;
     fn coverage(&self) -> &HashBitset;
     fn coverage_mut(&mut self) -> &mut HashBitset;
+    fn saved_fingerprint(&self) -> (u64, usize) {
+        let saved = &self.coverage().saved;
+        (super::fingerprint_words(saved.as_raw_slice()), saved.count_ones())
+    }
 
     fn update_and_scan_coverage(&mut self) -> bool {
         self.coverage_mut().update_and_scan()
@@ -185,6 +197,11 @@ pub trait ErasedInstrumentationPass {
     fn snapshot_coverage(&self) -> CovSnapshot;
     fn shortcode(&self) -> &'static str;
     fn as_any(&self) -> &dyn Any;
+    /// `(hash, non-bottom count)` of the accumulated coverage state; only for
+    /// replay equivalence checks (`jit-replay`).
+    fn saved_fingerprint(&self) -> (u64, usize) {
+        (0, 0)
+    }
 }
 
 macro_rules! dispatch {
@@ -220,4 +237,5 @@ impl<K: Ord + Into<Location> + Clone + 'static, V: FeedbackLattice + 'static>
     dispatch!(snapshot_coverage(&self) -> CovSnapshot);
     dispatch!(shortcode(&self) -> &'static str);
     dispatch!(as_any(&self) -> &dyn Any);
+    dispatch!(saved_fingerprint(&self) -> (u64, usize));
 }
