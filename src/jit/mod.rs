@@ -697,6 +697,34 @@ pub(crate) struct JitStage {
     pub(crate) inp_ptr: Option<i32>,
     fuzz_func: Option<*const u8>,
     run_from_snapshot: bool,
+    // Persistent mode: the instance holds a post-init snapshot, and this is
+    // the WASI random seed right after init. Taints and periodic resets
+    // restore to it instead of re-running `_initialize` and friends.
+    pub(crate) init_snapshot: Option<u64>,
+    // State hash taken right after init (WASMFUZZ_VERIFY_INIT_SNAPSHOT=1).
+    init_state_hash: Option<u64>,
+}
+
+fn persist_snapshot_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("WASMFUZZ_PERSIST_SNAPSHOT").map_or(true, |v| v != "0"))
+}
+
+fn verify_init_snapshot() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("WASMFUZZ_VERIFY_INIT_SNAPSHOT").is_ok_and(|v| v == "1"))
+}
+
+fn vmctx_state_hash(vmctx: &VMContext) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    h.write(&vmctx.heap_alloc.as_slice()[..(vmctx.heap_pages as usize) << 16]);
+    for g in vmctx.globals.iter() {
+        h.write_u64(*g);
+    }
+    h.write_u32(vmctx.heap_pages);
+    h.write_u64(vmctx.random_get_seed);
+    h.finish()
 }
 
 impl JitStage {
@@ -707,6 +735,19 @@ impl JitStage {
             inp_ptr: None,
             fuzz_func: None,
             run_from_snapshot,
+            init_snapshot: None,
+            init_state_hash: None,
+        }
+    }
+
+    // Persistent mode: go back to the post-init snapshot, keeping `inp_ptr`.
+    fn restore_init_snapshot(&mut self, seed: u64) {
+        let instance = self.instance.as_mut().unwrap();
+        instance.vmctx.restore();
+        instance.vmctx.random_get_seed = seed;
+        if let Some(expected) = self.init_state_hash {
+            let got = vmctx_state_hash(&instance.vmctx);
+            assert_eq!(got, expected, "post-init snapshot restore diverged");
         }
     }
 
@@ -737,6 +778,7 @@ impl JitStage {
             assert!(self.instance.is_none());
             self.instance = Some(instance);
             self.inp_ptr = None;
+            self.init_snapshot = None;
         }
 
         // Forget our input allocation if the instance is tainted.
@@ -749,12 +791,42 @@ impl JitStage {
                 // cannot run. Any trap (including OutOfFuel) marks tainted; restore to the
                 // post-init snapshot and keep `inp_ptr` — `run()` also restores before each exec.
                 instance.vmctx.restore();
+            } else if let Some(seed) = self.init_snapshot {
+                self.restore_init_snapshot(seed);
             } else {
                 self.inp_ptr = None;
             }
         }
 
         if self.inp_ptr.is_none() {
+            self.init_snapshot = None;
+            self.init_state_hash = None;
+            self.run_init(spec, opts);
+            if !self.run_from_snapshot && persist_snapshot_enabled() {
+                let instance = self.instance.as_mut().unwrap();
+                // Only when init left no WASI files behind: restore() wipes memfs.
+                if instance.vmctx.memfs.is_empty() {
+                    if verify_init_snapshot() {
+                        // Check that init is deterministic, i.e. that restoring the
+                        // post-init state matches what a fresh re-init would build.
+                        let first = (vmctx_state_hash(&instance.vmctx), self.inp_ptr);
+                        instance.vmctx.reset_to_initial_and_snapshot(spec);
+                        self.run_init(spec, opts);
+                        let instance = self.instance.as_mut().unwrap();
+                        let second = (vmctx_state_hash(&instance.vmctx), self.inp_ptr);
+                        assert_eq!(first, second, "module init is not deterministic");
+                        self.init_state_hash = Some(first.0);
+                    }
+                    let instance = self.instance.as_mut().unwrap();
+                    instance.vmctx.snapshot();
+                    self.init_snapshot = Some(instance.vmctx.random_get_seed);
+                }
+            }
+        }
+    }
+
+    fn run_init(&mut self, spec: &ModuleSpec, opts: &CompilationOptions) {
+        {
             let instance = self.instance.as_mut().unwrap();
             // println!("reset vmctx because inp_ptr is_none {:?}", self.kind);
             instance.vmctx.reset();
@@ -834,6 +906,11 @@ impl JitStage {
         }
         // NOTE: this'll be incorrect for wasms with initializers.
         // make sure we're always preinitialized?
+        if let Some(seed) = self.init_snapshot {
+            self.instance.as_mut().unwrap().vmctx.feedback.reset();
+            self.restore_init_snapshot(seed);
+            return;
+        }
         if let Some(instance) = self.instance.as_mut() {
             instance.vmctx.feedback.reset();
             instance.vmctx.reset();
@@ -1028,6 +1105,7 @@ impl JitFuzzingSession {
     pub(crate) fn initialize(&mut self, stats: &mut Stats) {
         // assert!(self.reusable_stage.inp_ptr.is_none());
         self.reusable_stage.inp_ptr.take();
+        self.reusable_stage.init_snapshot = None;
         if let Some(inst) = self.reusable_stage.instance.as_mut() {
             inst.vmctx.reset_to_initial_and_snapshot(&self.spec);
         }

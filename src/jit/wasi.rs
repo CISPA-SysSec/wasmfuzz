@@ -76,6 +76,10 @@ pub(crate) struct MemFs {
 }
 
 impl MemFs {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.files.is_empty() && self.fds.iter().all(|fd| fd.is_none())
+    }
+
     pub(crate) fn reset(&mut self) {
         self.files.clear();
         self.fds.clear();
