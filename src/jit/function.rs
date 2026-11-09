@@ -74,6 +74,8 @@ pub(crate) struct FuncTranslator<'a, 's> {
     /// `vmctx.fuel` kept in an SSA variable while this function runs; it is
     /// written back before calls and returns and reloaded after calls.
     pub fuel_var: Option<Variable>,
+    /// Global values of module data already declared in this function.
+    pub data_gvs: HashMap<cranelift::module::DataId, ir::GlobalValue>,
     pub(crate) pass_meta: &'a mut HashMap<u64, Box<dyn Any>>,
     ptr_ty: Type,
     pub module: &'a mut JITModule,
@@ -114,6 +116,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             sigrefs: HashMap::default(),
             builtin_level: 0,
             fuel_var: None,
+            data_gvs: HashMap::default(),
             pass_meta,
             ptr_ty,
             module,
@@ -799,6 +802,19 @@ impl<'a, 's> FuncTranslator<'a, 's> {
 
     pub(crate) fn get_slot_concolic(&mut self, idx: u32, bcx: &mut FunctionBuilder) -> Variable {
         self.get_slot(u32::MAX - idx, bcx, ir::types::I32)
+    }
+
+    /// `declare_data_in_func`, once per data object, so loads through the
+    /// symbol can be deduplicated.
+    pub(crate) fn data_gv(
+        &mut self,
+        bcx: &mut FunctionBuilder,
+        data: cranelift::module::DataId,
+    ) -> ir::GlobalValue {
+        *self
+            .data_gvs
+            .entry(data)
+            .or_insert_with(|| self.module.declare_data_in_func(data, bcx.func))
     }
 
     // #[deprecated]

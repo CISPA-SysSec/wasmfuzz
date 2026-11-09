@@ -37,12 +37,15 @@ fn instrument_site<
     mut ctx: InstrCtx,
 ) {
     let data = get_var(&mut ctx);
-    let gv = ctx.state.module.declare_data_in_func(data, ctx.bcx.func);
+    let gv = ctx.state.data_gv(ctx.bcx, data);
     let initial_fuel_ptr = ctx.bcx.ins().symbol_value(ctx.state.ptr_ty(), gv);
-    let initial_fuel =
-        ctx.bcx
-            .ins()
-            .load(ir::types::I64, MemFlagsData::trusted(), initial_fuel_ptr, 0);
+    // Only the trampoline writes it, so it is constant inside wasm code.
+    let initial_fuel = ctx.bcx.ins().load(
+        ir::types::I64,
+        <MemFlagsData as crate::jit::util::MemFlagsExt>::trusted_ro(),
+        initial_fuel_ptr,
+        0,
+    );
 
     let fuel = ctx.state.fuel_get(ctx.bcx);
 
