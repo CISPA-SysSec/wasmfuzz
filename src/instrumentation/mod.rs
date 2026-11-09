@@ -557,12 +557,11 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice + FeedbackLatticeCodegen>
                 slot_ptr,
                 0,
             );
-            let val = <V as FeedbackLatticeCodegen>::unify(val, prev, ctx.bcx);
+            let (changed, val) = <V as FeedbackLatticeCodegen>::unify_changed(val, prev, ctx.bcx);
             // Entries persist across executions, so a late-campaign site
             // rarely changes its slot: only write (and mark the chunk dirty)
             // on change. A clean chunk is already joined into `saved`, so
             // `update_and_scan` sees the same result.
-            let changed = ctx.bcx.ins().icmp(ir::condcodes::IntCC::NotEqual, val, prev);
             let write_block = ctx.bcx.create_block();
             let cont_block = ctx.bcx.create_block();
             ctx.bcx.set_cold_block(write_block);

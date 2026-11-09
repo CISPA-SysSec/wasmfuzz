@@ -1,5 +1,5 @@
 use cranelift::codegen::ir::{self, InstBuilder, MemFlagsData, Value};
-use cranelift::prelude::FunctionBuilder;
+use cranelift::prelude::{FunctionBuilder, IntCC};
 
 use crate::jit::CompilationKind;
 use crate::jit::vmcontext::VMContext;
@@ -34,6 +34,15 @@ pub(crate) trait FeedbackLattice: PartialEq + Eq + Clone {
 pub(crate) trait FeedbackLatticeCodegen {
     fn unify(v1: ir::Value, v2: ir::Value, bcx: &mut FunctionBuilder) -> ir::Value;
     fn cranelift_ty() -> ir::Type;
+    /// `(changed, unify(new, prev))`, `changed` set iff the result differs from `prev`.
+    fn unify_changed(
+        new: ir::Value,
+        prev: ir::Value,
+        bcx: &mut FunctionBuilder,
+    ) -> (ir::Value, ir::Value) {
+        let val = Self::unify(new, prev, bcx);
+        (bcx.ins().icmp(IntCC::NotEqual, val, prev), val)
+    }
 }
 
 impl FeedbackLattice for bool {
@@ -373,6 +382,14 @@ impl<T: FLInteger> FeedbackLatticeCodegen for Maximize<T> {
         bcx.ins().umax(v1, v2)
     }
 
+    fn unify_changed(
+        new: ir::Value,
+        prev: ir::Value,
+        bcx: &mut FunctionBuilder,
+    ) -> (ir::Value, ir::Value) {
+        (bcx.ins().icmp(IntCC::UnsignedGreaterThan, new, prev), new)
+    }
+
     fn cranelift_ty() -> ir::Type {
         <T as FLInteger>::cranelift_ty()
     }
@@ -408,6 +425,14 @@ impl<T: FLInteger> FeedbackLattice for Minimize<T> {
 impl<T: FLInteger> FeedbackLatticeCodegen for Minimize<T> {
     fn unify(v1: ir::Value, v2: ir::Value, bcx: &mut FunctionBuilder) -> ir::Value {
         bcx.ins().umin(v1, v2)
+    }
+
+    fn unify_changed(
+        new: ir::Value,
+        prev: ir::Value,
+        bcx: &mut FunctionBuilder,
+    ) -> (ir::Value, ir::Value) {
+        (bcx.ins().icmp(IntCC::UnsignedLessThan, new, prev), new)
     }
 
     fn cranelift_ty() -> ir::Type {
