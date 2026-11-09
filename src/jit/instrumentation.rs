@@ -77,10 +77,11 @@ fn instrument_bb_fuel(state: &mut FuncTranslator, bcx: &mut FunctionBuilder, loc
 
     let f = state.fspec();
     let bb_start = f.operator_basic_block[location.index as usize];
+    // basic_block_starts is sorted
+    let next = f.basic_block_starts.partition_point(|&x| x <= bb_start);
     let bb_end = f
         .basic_block_starts
-        .iter()
-        .find(|&&x| x > bb_start)
+        .get(next)
         .map(|x| x.0)
         .unwrap_or(f.operators.len() as u32);
     let bb_size = (bb_end - bb_start.0) as i64;

@@ -368,7 +368,7 @@ impl ModuleSpec {
                     .try_into()
                     .unwrap(),
             );
-            func.is_bb_start.push(func.basic_block_starts.contains(&ip));
+            func.is_bb_start.push(func.basic_block_starts.binary_search(&ip).is_ok());
             if func.is_bb_start[ip.i()] {
                 current_bb = ip;
             }
