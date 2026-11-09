@@ -44,13 +44,7 @@ fn instrument_site<
             .ins()
             .load(ir::types::I64, MemFlagsData::trusted(), initial_fuel_ptr, 0);
 
-    let vmctx = ctx.state.get_vmctx(ctx.bcx);
-    let fuel = ctx.bcx.ins().load(
-        ir::types::I64,
-        MemFlagsData::trusted(),
-        vmctx,
-        std::mem::offset_of!(VMContext, fuel) as i32,
-    );
+    let fuel = ctx.state.fuel_get(ctx.bcx);
 
     let trace_length = ctx.bcx.ins().isub(initial_fuel, fuel);
     pass.coverage()

@@ -357,6 +357,7 @@ pub(crate) fn translate_control<'a, 'b, 's>(
                 let s = format!("returning from {} by explicit return", state.fspec().symbol);
                 super::builtins::translate_debug_log(s, state, bcx);
             }
+            state.fuel_flush(bcx);
             bcx.ins().return_(&rvals);
             state.mark_dead(bcx);
         }
@@ -522,12 +523,14 @@ fn translate_call(
 
     params.push(vmctx);
 
+    state.fuel_flush(bcx);
     let call = match callee {
         Callee::Direct { function_index } => {
             bcx.ins().call(state.func_ref(function_index), &params)
         }
         Callee::Indirect { sigref, callee } => bcx.ins().call_indirect(sigref, callee, &params),
     };
+    state.fuel_reload(bcx);
 
     let mut inst_results = bcx.inst_results(call).to_vec();
 

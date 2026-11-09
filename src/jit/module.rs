@@ -441,6 +441,8 @@ impl<'s> ModuleTranslator<'s> {
         // limit in functions that could make recursive calls. Notably,
         // `makes_calls` could be improved to detect actual candiates for
         // recursion, but the overhead is just a load-and-compare.
+        functrans.fuel_enter(&mut bcx);
+
         if makes_calls {
             let vmctx = functrans.get_vmctx(&mut bcx);
             let limit = bcx.ins().load(
@@ -507,6 +509,7 @@ impl<'s> ModuleTranslator<'s> {
                     &mut bcx,
                 );
             }
+            functrans.fuel_flush(&mut bcx);
             bcx.ins().return_(&rvals);
             functrans.mark_dead(&mut bcx);
         }

@@ -71,6 +71,9 @@ pub(crate) struct FuncTranslator<'a, 's> {
     pub slot: HashMap<u32, Variable>,
     pub sigrefs: HashMap<Signature, ir::SigRef>,
     pub builtin_level: u32,
+    /// `vmctx.fuel` kept in an SSA variable while this function runs; it is
+    /// written back before calls and returns and reloaded after calls.
+    pub fuel_var: Option<Variable>,
     pub(crate) pass_meta: &'a mut HashMap<u64, Box<dyn Any>>,
     ptr_ty: Type,
     pub module: &'a mut JITModule,
@@ -110,6 +113,7 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             slot: HashMap::default(),
             sigrefs: HashMap::default(),
             builtin_level: 0,
+            fuel_var: None,
             pass_meta,
             ptr_ty,
             module,
@@ -708,6 +712,76 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         self.get_trap_code(TrapKind::Abort(abort))
     }
 
+    /// Start tracking fuel in a variable (function entry). Off with
+    /// `WASMFUZZ_FUEL_IN_MEMORY=1`, which loads/stores `vmctx.fuel` per block.
+    pub(crate) fn fuel_enter(&mut self, bcx: &mut FunctionBuilder) {
+        static IN_MEMORY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let in_memory = *IN_MEMORY.get_or_init(|| {
+            std::env::var("WASMFUZZ_FUEL_IN_MEMORY").is_ok_and(|v| v == "1")
+        });
+        if !self.options.tracking.fuel || in_memory {
+            return;
+        }
+        let var = bcx.declare_var(ir::types::I64);
+        self.fuel_var = Some(var);
+        self.fuel_reload(bcx);
+    }
+
+    fn fuel_load(&mut self, bcx: &mut FunctionBuilder) -> Value {
+        let vmctx = self.get_vmctx(bcx);
+        bcx.ins().load(
+            ir::types::I64,
+            MemFlagsData::trusted(),
+            vmctx,
+            std::mem::offset_of!(VMContext, fuel) as i32,
+        )
+    }
+
+    /// Current fuel (same value `vmctx.fuel` would hold).
+    pub(crate) fn fuel_get(&mut self, bcx: &mut FunctionBuilder) -> Value {
+        match self.fuel_var {
+            Some(var) => bcx.use_var(var),
+            None => self.fuel_load(bcx),
+        }
+    }
+
+    pub(crate) fn fuel_set(&mut self, bcx: &mut FunctionBuilder, val: Value) {
+        match self.fuel_var {
+            Some(var) => bcx.def_var(var, val),
+            None => {
+                let vmctx = self.get_vmctx(bcx);
+                bcx.ins().store(
+                    MemFlagsData::trusted(),
+                    val,
+                    vmctx,
+                    std::mem::offset_of!(VMContext, fuel) as i32,
+                );
+            }
+        }
+    }
+
+    /// Write the fuel variable back to `vmctx.fuel` (before calls/returns).
+    pub(crate) fn fuel_flush(&mut self, bcx: &mut FunctionBuilder) {
+        if let Some(var) = self.fuel_var {
+            let val = bcx.use_var(var);
+            let vmctx = self.get_vmctx(bcx);
+            bcx.ins().store(
+                MemFlagsData::trusted(),
+                val,
+                vmctx,
+                std::mem::offset_of!(VMContext, fuel) as i32,
+            );
+        }
+    }
+
+    /// Re-read `vmctx.fuel` into the variable (after calls).
+    pub(crate) fn fuel_reload(&mut self, bcx: &mut FunctionBuilder) {
+        if let Some(var) = self.fuel_var {
+            let val = self.fuel_load(bcx);
+            bcx.def_var(var, val);
+        }
+    }
+
     pub(crate) fn get_slot(
         &mut self,
         idx: u32,
@@ -793,7 +867,9 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         let callee = self.host_ptr(bcx, func.as_const_fn());
         let mut args_with_vmctx = args.to_value_vec();
         args_with_vmctx.push(fetch_vmctx(bcx));
+        self.fuel_flush(bcx);
         let call = bcx.ins().call_indirect(sig, callee, &args_with_vmctx);
+        self.fuel_reload(bcx);
         bcx.inst_results(call)
             .to_vec()
             .try_into()
@@ -816,7 +892,10 @@ impl<'a, 's> FuncTranslator<'a, 's> {
         let callee = self.host_ptr(bcx, func);
         let mut args_with_vmctx = args.to_vec();
         args_with_vmctx.push(fetch_vmctx(bcx));
-        bcx.ins().call_indirect(sig, callee, &args_with_vmctx)
+        self.fuel_flush(bcx);
+        let call = bcx.ins().call_indirect(sig, callee, &args_with_vmctx);
+        self.fuel_reload(bcx);
+        call
     }
 
     pub(crate) fn import_signature(
