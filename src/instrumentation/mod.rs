@@ -549,7 +549,6 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice + FeedbackLatticeCodegen>
             return;
         };
         if ctx.state.options.kind == CompilationKind::Reusable {
-            mark_dirty(dirty, &mut ctx);
             // TODO: don't require loading the slot for single-write passes?
             let slot_ptr = ctx.state.host_ptr(ctx.bcx, slot as *const _);
             let prev = ctx.bcx.ins().load(
@@ -559,9 +558,24 @@ impl<K: Ord + Clone, V: Clone + FeedbackLattice + FeedbackLatticeCodegen>
                 0,
             );
             let val = <V as FeedbackLatticeCodegen>::unify(val, prev, ctx.bcx);
+            // Entries persist across executions, so a late-campaign site
+            // rarely changes its slot: only write (and mark the chunk dirty)
+            // on change. A clean chunk is already joined into `saved`, so
+            // `update_and_scan` sees the same result.
+            let changed = ctx.bcx.ins().icmp(ir::condcodes::IntCC::NotEqual, val, prev);
+            let write_block = ctx.bcx.create_block();
+            let cont_block = ctx.bcx.create_block();
+            ctx.bcx.set_cold_block(write_block);
+            ctx.bcx.ins().brif(changed, write_block, &[], cont_block, &[]);
+            ctx.bcx.seal_block(write_block);
+            ctx.bcx.switch_to_block(write_block);
+            mark_dirty(dirty, &mut ctx);
             ctx.bcx
                 .ins()
                 .store(MemFlagsData::trusted(), val, slot_ptr, 0);
+            ctx.bcx.ins().jump(cont_block, &[]);
+            ctx.bcx.seal_block(cont_block);
+            ctx.bcx.switch_to_block(cont_block);
         }
     }
 }
