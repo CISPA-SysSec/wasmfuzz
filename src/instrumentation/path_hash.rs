@@ -19,6 +19,93 @@ fn hash_to_u64<T: std::hash::Hash>(val: T) -> u64 {
     hasher.finish()
 }
 
+// SipHash-1-3 with zero keys of one u64 (what `hash_to_u64::<u64>` computes
+// with std's `DefaultHasher`), as straight-line code. `sip13_u64_ref` is the
+// host mirror the tests compare against.
+const SIP_INIT: [u64; 4] = [
+    0x736f6d6570736575,
+    0x646f72616e646f6d,
+    0x6c7967656e657261,
+    0x7465646279746573,
+];
+
+fn sip13_u64(bcx: &mut cranelift::frontend::FunctionBuilder, m: ir::Value) -> ir::Value {
+    let c = |bcx: &mut cranelift::frontend::FunctionBuilder, x: u64| {
+        bcx.ins().iconst(ir::types::I64, x as i64)
+    };
+    let mut v = SIP_INIT.map(|x| c(bcx, x));
+    fn round(bcx: &mut cranelift::frontend::FunctionBuilder, v: &mut [ir::Value; 4]) {
+        v[0] = bcx.ins().iadd(v[0], v[1]);
+        v[1] = bcx.ins().rotl_imm_u(v[1], 13);
+        v[1] = bcx.ins().bxor(v[1], v[0]);
+        v[0] = bcx.ins().rotl_imm_u(v[0], 32);
+        v[2] = bcx.ins().iadd(v[2], v[3]);
+        v[3] = bcx.ins().rotl_imm_u(v[3], 16);
+        v[3] = bcx.ins().bxor(v[3], v[2]);
+        v[0] = bcx.ins().iadd(v[0], v[3]);
+        v[3] = bcx.ins().rotl_imm_u(v[3], 21);
+        v[3] = bcx.ins().bxor(v[3], v[0]);
+        v[2] = bcx.ins().iadd(v[2], v[1]);
+        v[1] = bcx.ins().rotl_imm_u(v[1], 17);
+        v[1] = bcx.ins().bxor(v[1], v[2]);
+        v[2] = bcx.ins().rotl_imm_u(v[2], 32);
+    }
+    v[3] = bcx.ins().bxor(v[3], m);
+    round(bcx, &mut v);
+    v[0] = bcx.ins().bxor(v[0], m);
+    let b = 8u64 << 56;
+    v[3] = bcx.ins().bxor_imm_u(v[3], b as i64);
+    round(bcx, &mut v);
+    v[0] = bcx.ins().bxor_imm_u(v[0], b as i64);
+    v[2] = bcx.ins().bxor_imm_u(v[2], 0xff);
+    for _ in 0..3 {
+        round(bcx, &mut v);
+    }
+    let a = bcx.ins().bxor(v[0], v[1]);
+    let b = bcx.ins().bxor(v[2], v[3]);
+    bcx.ins().bxor(a, b)
+}
+
+#[cfg(test)]
+fn sip13_u64_ref(m: u64) -> u64 {
+    let mut v = SIP_INIT;
+    let round = |v: &mut [u64; 4]| {
+        v[0] = v[0].wrapping_add(v[1]);
+        v[1] = v[1].rotate_left(13) ^ v[0];
+        v[0] = v[0].rotate_left(32);
+        v[2] = v[2].wrapping_add(v[3]);
+        v[3] = v[3].rotate_left(16) ^ v[2];
+        v[0] = v[0].wrapping_add(v[3]);
+        v[3] = v[3].rotate_left(21) ^ v[0];
+        v[2] = v[2].wrapping_add(v[1]);
+        v[1] = v[1].rotate_left(17) ^ v[2];
+        v[2] = v[2].rotate_left(32);
+    };
+    v[3] ^= m;
+    round(&mut v);
+    v[0] ^= m;
+    let b = 8u64 << 56;
+    v[3] ^= b;
+    round(&mut v);
+    v[0] ^= b;
+    v[2] ^= 0xff;
+    for _ in 0..3 {
+        round(&mut v);
+    }
+    v[0] ^ v[1] ^ v[2] ^ v[3]
+}
+
+#[test]
+fn sip13_matches_default_hasher() {
+    let mut x = 0x0123_4567_89ab_cdefu64;
+    for i in 0..10_000u64 {
+        for m in [i, x, i << 56, u64::MAX - i] {
+            assert_eq!(sip13_u64_ref(m), hash_to_u64(m));
+        }
+        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    }
+}
+
 /*
 SAFETY: The underlying storage areas of `entries` and `new_coverage` are baked into the JIT
 compilation artifact. This means that they can't be moved until the JIT artifacts are discarded.
@@ -95,11 +182,14 @@ impl HashBitset {
         }
     }
 
+    /// `inline`: emit the update as straight-line code (~90 instructions)
+    /// instead of a host call; meant for sites that are few per function.
     fn mix_and_instrument<P: HashBitsetInstrumentationPass, V: Hash>(
         &self,
         contrib: V,
         mut ctx: InstrCtx,
         pass: &P,
+        inline: bool,
     ) {
         assert!(std::ptr::eq(self as *const _, pass.coverage() as *const _));
         let data = get_hash_var(pass, &mut ctx);
@@ -151,6 +241,48 @@ impl HashBitset {
         }
 
         let contrib = hash_to_u64(contrib) as u32 as i64;
+
+        static HOSTCALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let hostcall =
+            *HOSTCALL.get_or_init(|| std::env::var_os("WASMFUZZ_PATH_HASH_HOSTCALL").is_some());
+        if inline && !hostcall {
+            // Same update as `mix_and_update_bitset`, emitted inline: the
+            // same SipHash-1-3, so the same bits get set, without a host call.
+            let flags = MemFlagsData::trusted();
+            let old = ctx.bcx.ins().load(ir::types::I64, flags, hash_ptr, 0);
+            let shifted = ctx.bcx.ins().ishl_imm_u(old, 8);
+            let new = ctx.bcx.ins().bor_imm_u(shifted, contrib & 0xff);
+            ctx.bcx.ins().store(flags, new, hash_ptr, 0);
+            let h = sip13_u64(ctx.bcx, new);
+            let idx = ctx.bcx.ins().band_imm_u(h, (self.entries.len() - 1) as i64);
+            let word = ctx.bcx.ins().ushr_imm_u(idx, 6);
+            let word_off = ctx.bcx.ins().ishl_imm_u(word, 3);
+            let bitslice_ptr = ctx
+                .state
+                .host_ptr(ctx.bcx, self.entries.as_bitptr().pointer());
+            let word_ptr = ctx.bcx.ins().iadd(bitslice_ptr, word_off);
+            let bits = ctx.bcx.ins().load(ir::types::I64, flags, word_ptr, 0);
+            let one = ctx.bcx.ins().iconst(ir::types::I64, 1);
+            let mask = ctx.bcx.ins().ishl(one, idx);
+            let is_set = ctx.bcx.ins().band(bits, mask);
+            let set_block = ctx.bcx.create_block();
+            let cont_block = ctx.bcx.create_block();
+            ctx.bcx.set_cold_block(set_block);
+            ctx.bcx.ins().brif(is_set, cont_block, &[], set_block, &[]);
+            ctx.bcx.seal_block(set_block);
+            ctx.bcx.switch_to_block(set_block);
+            let bits = ctx.bcx.ins().bor(bits, mask);
+            ctx.bcx.ins().store(flags, bits, word_ptr, 0);
+            let new_cov_ptr = self.new_coverage.as_ref() as *const _;
+            let new_cov_ptr = ctx.state.host_ptr(ctx.bcx, new_cov_ptr as *const _);
+            let one = ctx.bcx.ins().iconst(I8, 1);
+            ctx.bcx.ins().store(flags, one, new_cov_ptr, 0);
+            ctx.bcx.ins().jump(cont_block, &[]);
+            ctx.bcx.seal_block(cont_block);
+            ctx.bcx.switch_to_block(cont_block);
+            return;
+        }
+
         let contrib = ctx.bcx.ins().iconst(ir::types::I32, contrib);
 
         let new_cov_ptr = self.new_coverage.as_ref() as *const _;
@@ -256,7 +388,7 @@ impl HashBitsetInstrumentationPass for FuncPathHashPass {
         if !self.keys.contains(&key) {
             return;
         }
-        self.coverage.mix_and_instrument(key, ctx, self);
+        self.coverage.mix_and_instrument(key, ctx, self, true);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -304,7 +436,9 @@ impl HashBitsetInstrumentationPass for EdgePathHashPass {
         if !self.keys.contains(&key) {
             return;
         }
-        self.coverage.mix_and_instrument(key, ctx, self);
+        // One site per edge: inlining every one multiplies code size and
+        // compile time, so this keeps the host call.
+        self.coverage.mix_and_instrument(key, ctx, self, false);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
