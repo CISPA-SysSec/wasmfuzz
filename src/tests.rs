@@ -386,17 +386,31 @@ impl Fuzzer {
         Self { opts }
     }
 
+    // Fixed seeds: execs-to-solve is heavy-tailed, so unseeded runs missed the
+    // step budget now and then. Two seeds so a budget can't fit just one run.
     fn assert_solves(&self, test_module: TestModule, timeout_steps: u64) -> &Self {
+        for rng_seed in [1, 2] {
+            self.assert_solves_with_seed(&test_module, timeout_steps, rng_seed);
+        }
+        self
+    }
+
+    fn assert_solves_with_seed(
+        &self,
+        test_module: &TestModule,
+        timeout_steps: u64,
+        rng_seed: u64,
+    ) {
         let mut opts = self.opts.clone();
         opts.t.timeout_steps = Some(timeout_steps);
-        // opts.rng_seed = Some(42);
+        opts.rng_seed = Some(rng_seed);
         let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &test_module.module).unwrap());
         let mut worker = Worker::new(mod_spec, opts, MessageBus::new(), 0, None);
         let res = worker.run().unwrap();
         println!();
         println!();
         println!();
-        dbg!(&test_module.name);
+        dbg!(&test_module.name, rng_seed);
         dbg!(&worker.stats);
         println!();
         println!();
@@ -409,8 +423,7 @@ impl Fuzzer {
             );
             assert!(worker.schedule.steps > 100, "did we do anything?");
         }
-        assert_eq!(res, WorkerExit::CrashFound);
-        self
+        assert_eq!(res, WorkerExit::CrashFound, "rng seed {rng_seed}");
     }
 
     fn assert_feedback_run(
