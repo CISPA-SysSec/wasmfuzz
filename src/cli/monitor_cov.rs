@@ -104,8 +104,14 @@ pub(crate) fn run(opts: MonitorCovOpts) {
             // TODO: handle SIGINT and do one more log entry?
             std::thread::sleep(sleep_dur);
         }
-        for entry in std::fs::read_dir(&dir).expect("failed to list corpus dir") {
-            let entry = entry.unwrap();
+        // List once up front: read_dir keeps yielding files the fuzzer writes
+        // while we replay, so a slow pass would credit later finds to this
+        // interval's timestamp.
+        let entries: Vec<_> = std::fs::read_dir(&dir)
+            .expect("failed to list corpus dir")
+            .map(|entry| entry.unwrap())
+            .collect();
+        for entry in entries {
             // skip libafl's hidden metadata and lock files
             if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
