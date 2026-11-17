@@ -49,11 +49,12 @@ pub(crate) unsafe extern "C" fn builtin_memory_fill(
         let vmctx = &mut *vmctx;
         vmctx.builtin_consume_fuel(len as u64);
 
-        let Some(buf) = vmctx.heap_mut(dest as usize, len as usize) else {
+        if vmctx
+            .heap_fill(dest as usize, len as usize, val as u8)
+            .is_none()
+        {
             raise_trap(TrapReason::MemoryOutOfBounds)
-        };
-
-        buf.fill(val as u8);
+        }
     }
 }
 

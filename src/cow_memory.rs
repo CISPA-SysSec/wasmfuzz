@@ -80,6 +80,14 @@ pub trait ResettableMapping {
         let _ = offset;
     }
 
+    // Fill `[offset, offset + len)` with `val` on behalf of the guest
+    // (`memory.fill`). The range is already bounds-checked. Providers that
+    // know a page is zero and clean may skip zero fills of it entirely.
+    fn fill(&mut self, offset: usize, len: usize, val: u8) {
+        self.mark_dirty(offset, len);
+        self.as_mut_slice()[offset..offset + len].fill(val);
+    }
+
     // Zero both sides over the whole accessible range.
     fn zero_all(&mut self) {
         self.as_mut_slice().fill(0);
@@ -1169,6 +1177,12 @@ pub struct SoftwareDirtyMapping {
     // verify on every restore that no page differs from the reference without
     // having been marked, i.e. that the instrumentation isn't missing a write
     paranoid: bool,
+    // Pages at or above this index have never been written in the reference
+    // since it was last zeroed, so they are zero there. A page that is also
+    // clean is then zero in the working copy too, which lets `fill` skip zero
+    // fills of it (Vec::resize(n, 0) into freshly grown heap, calloc, ...)
+    // and spares restore copying it back.
+    ref_zero_from: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1234,6 +1248,7 @@ impl SoftwareDirtyMapping {
             mapping_size,
             mode,
             paranoid: false,
+            ref_zero_from: 0,
         };
         if accessible_size != 0 {
             res.resize(accessible_size);
@@ -1378,7 +1393,43 @@ impl ResettableMapping for SoftwareDirtyMapping {
     }
 
     fn snapshot_as_mut_slice(&mut self) -> &mut [u8] {
+        // the caller may write anywhere in the reference
+        self.ref_zero_from = self
+            .ref_zero_from
+            .max(self.accessible_size >> self.page_shift);
         unsafe { std::slice::from_raw_parts_mut(self.ref_ptr.cast(), self.accessible_size) }
+    }
+
+    fn fill(&mut self, offset: usize, len: usize, val: u8) {
+        let page_size = 1usize << self.page_shift;
+        if val != 0 || len < page_size {
+            self.mark_dirty(offset, len);
+            self.as_mut_slice()[offset..offset + len].fill(val);
+            return;
+        }
+        // Walk the range page by page and only write the runs that aren't
+        // already known to be zero: a fully covered page that is clean and
+        // above `ref_zero_from` is zero and stays clean.
+        let end = offset + len;
+        let mut run_start = offset;
+        let mut pos = offset;
+        while pos < end {
+            let page = pos >> self.page_shift;
+            let page_end = ((page + 1) << self.page_shift).min(end);
+            let full = pos & (page_size - 1) == 0 && page_end - pos == page_size;
+            if full && page >= self.ref_zero_from && self.seen[page] == 0 {
+                if run_start < pos {
+                    self.mark_dirty(run_start, pos - run_start);
+                    self.as_mut_slice()[run_start..pos].fill(0);
+                }
+                run_start = page_end;
+            }
+            pos = page_end;
+        }
+        if run_start < end {
+            self.mark_dirty(run_start, end - run_start);
+            self.as_mut_slice()[run_start..end].fill(0);
+        }
     }
 
     fn mark_dirty(&mut self, offset: usize, len: usize) {
@@ -1452,6 +1503,7 @@ impl ResettableMapping for SoftwareDirtyMapping {
             self.as_mut_slice().fill(0);
             self.snapshot_as_mut_slice().fill(0);
             self.mark_clean();
+            self.ref_zero_from = 0;
             return;
         }
         // Zeroing by hand would fault in both sides in full.
@@ -1462,6 +1514,7 @@ impl ResettableMapping for SoftwareDirtyMapping {
             }
         }
         self.mark_clean();
+        self.ref_zero_from = 0;
     }
 
     fn dirty_map_ptr(&self) -> *mut u8 {
@@ -1472,6 +1525,15 @@ impl ResettableMapping for SoftwareDirtyMapping {
         tracy_full::zone!("SoftwareDirtyMapping::snapshot");
         if self.paranoid {
             self.check_no_unmarked_writes();
+        }
+        let top_dirty = match self.mode {
+            DirtyTrackMode::Log => self.log.iter().max().map(|&p| p as usize),
+            DirtyTrackMode::Bitmap => self.seen[..self.accessible_size >> self.page_shift]
+                .iter()
+                .rposition(|&b| b != 0),
+        };
+        if let Some(page) = top_dirty {
+            self.ref_zero_from = self.ref_zero_from.max(page + 1);
         }
         self.sync_dirty_pages(true);
     }
@@ -1670,6 +1732,61 @@ mod tests {
                 mode,
             ));
         }
+    }
+
+    // `fill` must agree with a plain write + mark on every provider, and the
+    // software provider must skip zero fills of clean pages that are zero in
+    // the reference while still writing (and restoring) everything else.
+    #[test]
+    fn test_fill_zero_elision() {
+        let page = rustix::param::page_size();
+        let mut providers: Vec<Box<dyn ResettableMapping>> = vec![
+            Box::new(DummyMapping::new(1 << 16, 1 << 32)),
+            Box::new(CowResetMapping::new(1 << 16, 1 << 32)),
+        ];
+        for mode in [DirtyTrackMode::Log, DirtyTrackMode::Bitmap] {
+            let mut buf = SoftwareDirtyMapping::new_with_mode(1 << 16, 1 << 32, mode);
+            buf.set_paranoid(true);
+            providers.push(Box::new(buf));
+        }
+        for buf in providers.iter_mut() {
+            let buf = buf.as_mut();
+            buf.as_mut_slice()[..16].copy_from_slice(b"YELLOW SUBMARINE");
+            buf.mark_dirty(0, 16);
+            buf.snapshot();
+            buf.resize(1 << 20);
+            for _ in 0..3 {
+                // dirty a page in the grown area, then zero-fill across it
+                buf.as_mut_slice()[(1 << 17) + 5] = 0x55;
+                buf.mark_dirty((1 << 17) + 5, 1);
+                buf.fill(3, (1 << 19) - 3, 0);
+                assert!(buf.as_slice()[3..1 << 19].iter().all(|&b| b == 0));
+                assert_eq!(buf.as_slice()[..3], b"YEL"[..]);
+                buf.fill(page + 1, 10, 0x77);
+                assert_eq!(buf.as_slice()[page + 1..page + 11], [0x77; 10][..]);
+                buf.restore();
+                assert_eq!(buf.as_slice()[..16], b"YELLOW SUBMARINE"[..]);
+                assert!(buf.as_slice()[16..].iter().all(|&b| b == 0));
+            }
+        }
+
+        // only the software provider elides: clean grown pages stay clean
+        let mut buf = SoftwareDirtyMapping::new_with_mode(1 << 16, 1 << 32, DirtyTrackMode::Log);
+        buf.as_mut_slice()[..16].copy_from_slice(b"YELLOW SUBMARINE");
+        buf.mark_dirty(0, 16);
+        buf.snapshot();
+        buf.resize(1 << 20);
+        buf.as_mut_slice()[1 << 17] = 1;
+        buf.mark_dirty(1 << 17, 1);
+        buf.fill(0, 1 << 20, 0);
+        // page 0 is below the reference's zero floor, page (1<<17)/page was
+        // dirty, and nothing else got marked
+        let mut logged = buf.log.clone();
+        logged.sort();
+        assert_eq!(logged, vec![0, ((1 << 17) / page) as u32]);
+        assert!(buf.as_slice().iter().all(|&b| b == 0));
+        buf.restore();
+        assert_eq!(buf.as_slice()[..16], b"YELLOW SUBMARINE"[..]);
     }
 
     // Pages of `buf`'s working side in `range` that are resident.

@@ -251,6 +251,16 @@ impl VMContext {
         Some(&mut self.heap_alloc.as_mut_slice()[offset..end])
     }
 
+    // Bounds-checked `memory.fill`. Returns None if the range is out of bounds.
+    pub(crate) fn heap_fill(&mut self, offset: usize, len: usize, val: u8) -> Option<()> {
+        let end = offset.checked_add(len)?;
+        if end > self.heap_alloc.accessible_size() {
+            return None;
+        }
+        self.heap_alloc.fill(offset, len, val);
+        Some(())
+    }
+
     pub(crate) fn snapshot(&mut self) {
         tracy_full::zone!("VMContext::snapshot");
         assert!(!self.tainted);
