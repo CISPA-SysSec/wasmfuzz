@@ -35,6 +35,8 @@ struct LogEvent {
     seconds_rt: f32,
     crashing: bool,
     timeout: bool,
+    /// Number of corpus entries that ran out of fuel at the replay limit (hangs).
+    timeouts: u32,
     cov_funcs: u32,
     cov_bbs: u32,
     cov_edges: u32,
@@ -62,6 +64,10 @@ pub(crate) struct MonitorCovOpts {
     /// Path to a JSON file that the fuzzer-under-test writes to periodically
     #[clap(long)]
     stats_in: Option<String>,
+    /// Copy corpus entries that run out of fuel during the replay here (hang triage: the
+    /// fuzzer may drop them from its corpus later).
+    #[clap(long)]
+    timeouts_dir: Option<PathBuf>,
 }
 
 pub(crate) fn run(opts: MonitorCovOpts) {
@@ -74,7 +80,11 @@ pub(crate) fn run(opts: MonitorCovOpts) {
         bucket,
         input_size_limit,
         stats_in,
+        timeouts_dir,
     } = opts;
+    if let Some(d) = &timeouts_dir {
+        std::fs::create_dir_all(d).unwrap();
+    }
     let mod_spec = super::parse_program(&PathBuf::from(&program));
     let mut stats = Stats::default();
     let mut sess = JitFuzzingSession::builder(mod_spec.clone())
@@ -86,6 +96,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
     let mut paths_seen = HashSet::default();
     let mut crashes = false;
     let mut timeout = false;
+    let mut timeouts = 0u32;
     let mut finds = 0;
 
     let start_timestamp = SystemTime::now()
@@ -135,10 +146,17 @@ pub(crate) fn run(opts: MonitorCovOpts) {
                     }
                     let res = sess.run_reusable_fresh(&data, false, &mut Stats::default());
                     crashes |= res.is_crash();
-                    timeout |= matches!(
+                    let is_timeout = matches!(
                         res.trap_kind,
                         Some(crate::jit::module::TrapKind::OutOfFuel(_))
                     );
+                    timeout |= is_timeout;
+                    if is_timeout {
+                        timeouts += 1;
+                        if let Some(d) = &timeouts_dir {
+                            let _ = std::fs::write(d.join(format!("{data_hash:016x}")), &data);
+                        }
+                    }
                     if res.novel_coverage {
                         has_find = true;
                         finds += 1;
@@ -170,6 +188,7 @@ pub(crate) fn run(opts: MonitorCovOpts) {
             cov_edges: sess.get_pass::<EdgeCoveragePass>().count_saved() as u32,
             crashing: crashes,
             timeout,
+            timeouts,
             entries: corpus.len() as u32,
             finds,
             stats,
