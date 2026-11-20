@@ -14,6 +14,14 @@ pub(crate) const fn bulk_memory_fuel(len: u32) -> u64 {
     len as u64 / 4 + 1
 }
 
+thread_local! {
+    /// Fuel charged by the bulk-memory builtins (memory.fill / memory.copy, see `bulk_memory_fuel`)
+    /// on this thread. Diagnostic only: `fuel-census` reads it to show how much of an input's fuel
+    /// is bulk memory rather than executed code. Thread-local so fuzzing threads never share a
+    /// cache line.
+    pub(crate) static BULK_FUEL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) unsafe extern "C" fn builtin_memory_size(vmctx: *mut VMContext) -> u32 {
     unsafe { (*vmctx).heap_pages }
 }
@@ -55,7 +63,9 @@ pub(crate) unsafe extern "C" fn builtin_memory_fill(
 ) {
     unsafe {
         let vmctx = &mut *vmctx;
-        vmctx.builtin_consume_fuel(bulk_memory_fuel(len));
+        let fuel = bulk_memory_fuel(len);
+        BULK_FUEL.with(|c| c.set(c.get() + fuel));
+        vmctx.builtin_consume_fuel(fuel);
 
         if vmctx
             .heap_fill(dest as usize, len as usize, val as u8)
@@ -74,7 +84,9 @@ pub(crate) unsafe extern "C" fn builtin_memory_copy(
 ) {
     unsafe {
         let vmctx = &mut *vmctx;
-        vmctx.builtin_consume_fuel(bulk_memory_fuel(len));
+        let fuel = bulk_memory_fuel(len);
+        BULK_FUEL.with(|c| c.set(c.get() + fuel));
+        vmctx.builtin_consume_fuel(fuel);
         let heap = vmctx.heap();
 
         let (dst_pos, src_pos, len) = (dst_pos as usize, src_pos as usize, len as usize);

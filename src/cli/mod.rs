@@ -24,6 +24,8 @@ pub(crate) mod cov_html;
 mod doctor;
 mod jit_replay;
 #[cfg(feature = "reports")]
+mod hangs;
+#[cfg(feature = "reports")]
 pub(crate) mod lcov;
 mod misc_eval;
 mod monitor_cov;
@@ -131,6 +133,15 @@ pub(crate) enum Subcommand {
     },
     /// Watch directory for new entries and report total coverage over time.
     MonitorCov(monitor_cov::MonitorCovOpts),
+    /// Record the instructions (fuel) each input uses, for hang triage.
+    #[cfg(feature = "reports")]
+    FuelCensus(hangs::FuelCensusOpts),
+    /// Print the hottest functions and basic blocks of one (slow) input.
+    #[cfg(feature = "reports")]
+    HotProfile(hangs::HotProfileOpts),
+    /// Minimise a hanging input while keeping its hottest basic block.
+    #[cfg(feature = "reports")]
+    HangTmin(hangs::HangTminOpts),
     #[cfg(feature = "concolic_bitwuzla")]
     CheckConcolic {
         program: PathBuf,
@@ -539,6 +550,21 @@ pub(crate) fn main() {
         Subcommand::Fuzz(opts) => {
             let mod_spec = parse_program(&opts.g.program);
             crate::fuzzer::fuzz(mod_spec, opts);
+        }
+        #[cfg(feature = "reports")]
+        Subcommand::FuelCensus(opts) => {
+            let mod_spec = parse_program(&opts.program);
+            hangs::fuel_census(mod_spec, opts);
+        }
+        #[cfg(feature = "reports")]
+        Subcommand::HotProfile(opts) => {
+            let mod_spec = parse_program(&opts.program);
+            hangs::hot_profile(mod_spec, opts);
+        }
+        #[cfg(feature = "reports")]
+        Subcommand::HangTmin(opts) => {
+            let mod_spec = parse_program(&opts.program);
+            hangs::hang_tmin(mod_spec, opts);
         }
         Subcommand::Cmin(opts) => {
             let mod_spec = parse_program(&opts.program);
