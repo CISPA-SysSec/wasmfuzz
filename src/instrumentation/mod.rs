@@ -17,6 +17,8 @@ pub(crate) use feedback_lattice::{FeedbackLattice, FeedbackLatticeCodegen};
 mod call_params;
 mod cmpcov;
 mod code_coverage;
+#[cfg(feature = "reports")]
+mod fuel_profile;
 mod input_size;
 mod instruction_limit;
 mod mem;
@@ -29,6 +31,8 @@ pub(crate) use traits::*;
 pub(crate) use call_params::*;
 pub(crate) use cmpcov::*;
 pub(crate) use code_coverage::*;
+#[cfg(feature = "reports")]
+pub(crate) use fuel_profile::*;
 pub(crate) use input_size::*;
 pub(crate) use instruction_limit::*;
 pub(crate) use mem::*;

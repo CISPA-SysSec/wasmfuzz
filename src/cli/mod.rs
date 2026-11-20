@@ -142,6 +142,9 @@ pub(crate) enum Subcommand {
     /// Minimise a hanging input while keeping its hottest basic block.
     #[cfg(feature = "reports")]
     HangTmin(hangs::HangTminOpts),
+    /// Attribute the fuel of a set of inputs to functions and call sites.
+    #[cfg(feature = "reports")]
+    FuelProfile(hangs::FuelProfileOpts),
     #[cfg(feature = "concolic_bitwuzla")]
     CheckConcolic {
         program: PathBuf,
@@ -555,6 +558,11 @@ pub(crate) fn main() {
         Subcommand::FuelCensus(opts) => {
             let mod_spec = parse_program(&opts.program);
             hangs::fuel_census(mod_spec, opts);
+        }
+        #[cfg(feature = "reports")]
+        Subcommand::FuelProfile(opts) => {
+            let mod_spec = parse_program(&opts.program);
+            hangs::fuel_profile(mod_spec, opts);
         }
         #[cfg(feature = "reports")]
         Subcommand::HotProfile(opts) => {
