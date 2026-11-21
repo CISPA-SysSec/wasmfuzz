@@ -6,6 +6,14 @@ use super::signals::{TrapReason, raise_trap};
 
 use super::{FuncTranslator, vmcontext::VMContext};
 
+/// Fuel charged for a `memory.fill` / `memory.copy` of `len` bytes: one unit per 4 bytes, plus one
+/// for the operation itself. A fill or copy of resident memory costs about 0.08-0.25 cycles per
+/// byte and executed code about 0.6 cycles per fuel unit, so this keeps the cost of bulk memory in
+/// line with that of executed code.
+pub(crate) const fn bulk_memory_fuel(len: u32) -> u64 {
+    len as u64 / 4 + 1
+}
+
 pub(crate) unsafe extern "C" fn builtin_memory_size(vmctx: *mut VMContext) -> u32 {
     unsafe { (*vmctx).heap_pages }
 }
@@ -47,7 +55,7 @@ pub(crate) unsafe extern "C" fn builtin_memory_fill(
 ) {
     unsafe {
         let vmctx = &mut *vmctx;
-        vmctx.builtin_consume_fuel(len as u64);
+        vmctx.builtin_consume_fuel(bulk_memory_fuel(len));
 
         if vmctx
             .heap_fill(dest as usize, len as usize, val as u8)
@@ -66,7 +74,7 @@ pub(crate) unsafe extern "C" fn builtin_memory_copy(
 ) {
     unsafe {
         let vmctx = &mut *vmctx;
-        vmctx.builtin_consume_fuel(len as u64);
+        vmctx.builtin_consume_fuel(bulk_memory_fuel(len));
         let heap = vmctx.heap();
 
         let (dst_pos, src_pos, len) = (dst_pos as usize, src_pos as usize, len as usize);

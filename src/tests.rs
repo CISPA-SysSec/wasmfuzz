@@ -277,6 +277,25 @@ impl TestModule {
             )"#,
         )
     }
+
+    // `memory.fill` (selector byte 0) or `memory.copy` (otherwise) of a length taken from the
+    // input's first four bytes. The executed blocks do not depend on the length, so the fuel
+    // difference between two lengths is the bulk-memory charge alone.
+    fn bulk_memory_len() -> Self {
+        Self::from_wat(
+            "bulk-memory-len",
+            r#"(module
+                (memory 16)
+                (func (export "malloc") (param $size i32) (result i32) (i32.const 0x1000))
+                (func (export "LLVMFuzzerTestOneInput") (param $ptr i32) (param $len i32)
+                    (if (i32.eqz (i32.load8_u offset=4 (local.get $ptr)))
+                        (then (memory.fill (i32.const 0x20000) (i32.const 0xab)
+                                           (i32.load (local.get $ptr))))
+                        (else (memory.copy (i32.const 0x20000) (i32.const 0x60000)
+                                           (i32.load (local.get $ptr))))))
+            )"#,
+        )
+    }
 }
 
 // Runs a fixed input sequence under one snapshot provider and returns the
@@ -1065,4 +1084,59 @@ fn test_input_len_eq_2048_fails() {
         opts.i.cmpcov_absdist = true.into();
     })
     .assert_solves(TestModule::input_len_eq_2048(), 1_000_000);
+}
+
+fn bulk_memory_run(sess: &mut JitFuzzingSession, len: u32, fill: bool) -> (Option<TrapKind>, u64) {
+    let mut inp = len.to_le_bytes().to_vec();
+    inp.push(if fill { 0 } else { 1 });
+    let res = sess.run_reusable_fresh(&inp, false, &mut Stats::default());
+    let vmctx = &sess.reusable_stage.instance.as_ref().unwrap().vmctx;
+    (res.trap_kind, vmctx.fuel_init - vmctx.fuel)
+}
+
+fn bulk_memory_session(limit: u64) -> JitFuzzingSession {
+    let module = TestModule::bulk_memory_len();
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &module.module).unwrap());
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(crate::jit::FeedbackOptions::nothing())
+        .instruction_limit(Some(limit))
+        .build();
+    sess.initialize(&mut Stats::default());
+    sess
+}
+
+// memory.fill / memory.copy cost one fuel unit per 4 bytes plus one, deterministically, and the
+// instruction limit cuts them off at exactly that cost.
+#[test]
+fn test_bulk_memory_fuel_charge() {
+    use crate::jit::builtins::bulk_memory_fuel;
+    assert_eq!(bulk_memory_fuel(0), 1);
+    assert_eq!(bulk_memory_fuel(3), 1);
+    assert_eq!(bulk_memory_fuel(4), 2);
+    assert_eq!(bulk_memory_fuel(4 << 20), (1 << 20) + 1);
+    assert_eq!(bulk_memory_fuel(u32::MAX), 1 << 30);
+
+    let mut sess = bulk_memory_session(1 << 30);
+    for fill in [true, false] {
+        let (trap, base) = bulk_memory_run(&mut sess, 0, fill);
+        assert_eq!(trap, None);
+        for len in [1u32, 15, 16, 17, 4096, 65536, 0x40000] {
+            let (trap, fuel) = bulk_memory_run(&mut sess, len, fill);
+            assert_eq!(trap, None, "fill={fill} len={len}");
+            assert_eq!(
+                fuel - base,
+                bulk_memory_fuel(len) - bulk_memory_fuel(0),
+                "fill={fill} len={len}"
+            );
+            // same input, same fuel
+            assert_eq!(bulk_memory_run(&mut sess, len, fill).1, fuel);
+        }
+    }
+
+    // the limit binds at exactly the charged cost
+    let (_, cost) = bulk_memory_run(&mut sess, 0x40000, true);
+    let (trap, _) = bulk_memory_run(&mut bulk_memory_session(cost), 0x40000, true);
+    assert_eq!(trap, None);
+    let (trap, _) = bulk_memory_run(&mut bulk_memory_session(cost - 1), 0x40000, true);
+    assert!(matches!(trap, Some(TrapKind::OutOfFuel(_))), "{trap:?}");
 }
