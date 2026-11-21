@@ -296,6 +296,63 @@ impl TestModule {
             )"#,
         )
     }
+
+    // Loops whose trip counts come from the input: byte 0 picks the loop, bytes 1-2 (u16) are the
+    // trip count n and byte 3 the inner trip count m of the nested loop. Counts must be at least 1.
+    // Each loop has its own function, so only that function's fuel depends on the counts. Function
+    // indices: 0 malloc, 1 $spin, 2 $count, 3 $branchy, 4 $nested, 5 $table.
+    //   0: `(loop (br 0))`, never exits
+    //   1: a body of one basic block, 7 operators from `loop` to `br_if`
+    //   2: a body of four basic blocks (an if/else), 5 + 5 + 6 operators on either arm
+    //   3: nested loops: the outer body is 3 + 1 + 6 operators around the inner loop, whose body is
+    //      the 7 operators of 1
+    //   4: a back-edge through `br_table`, 9 operators per iteration
+    fn loops() -> Self {
+        Self::from_wat(
+            "loops",
+            r#"(module
+                (memory 1)
+                (func (export "malloc") (param $size i32) (result i32) (i32.const 0x1000))
+                (func $spin (loop $l (br $l)))
+                (func $count (param $n i32)
+                    (loop $l
+                        (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+                        (br_if $l (local.get $n))))
+                (func $branchy (param $n i32) (local $acc i32)
+                    (loop $l
+                        (if (i32.and (local.get $n) (i32.const 1))
+                            (then (local.set $acc (i32.add (local.get $acc) (i32.const 3))))
+                            (else (local.set $acc (i32.sub (local.get $acc) (i32.const 1)))))
+                        (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+                        (br_if $l (local.get $n))))
+                (func $nested (param $n i32) (param $m i32) (local $j i32)
+                    (loop $outer
+                        (local.set $j (local.get $m))
+                        (loop $inner
+                            (local.set $j (i32.sub (local.get $j) (i32.const 1)))
+                            (br_if $inner (local.get $j)))
+                        (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+                        (br_if $outer (local.get $n))))
+                (func $table (param $n i32)
+                    (block $exit
+                        (loop $l
+                            (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+                            (br_table $l $exit (i32.eqz (local.get $n))))))
+                (func (export "LLVMFuzzerTestOneInput") (param $ptr i32) (param $len i32) (result i32)
+                    (local $op i32) (local $n i32) (local $m i32)
+                    (local.set $op (i32.load8_u (local.get $ptr)))
+                    (local.set $n (i32.load16_u offset=1 (local.get $ptr)))
+                    (local.set $m (i32.load8_u offset=3 (local.get $ptr)))
+                    (if (i32.eq (local.get $op) (i32.const 0)) (then (call $spin)))
+                    (if (i32.eq (local.get $op) (i32.const 1)) (then (call $count (local.get $n))))
+                    (if (i32.eq (local.get $op) (i32.const 2)) (then (call $branchy (local.get $n))))
+                    (if (i32.eq (local.get $op) (i32.const 3))
+                        (then (call $nested (local.get $n) (local.get $m))))
+                    (if (i32.eq (local.get $op) (i32.const 4)) (then (call $table (local.get $n))))
+                    (i32.const 0))
+            )"#,
+        )
+    }
 }
 
 // Runs a fixed input sequence under one snapshot provider and returns the
@@ -1139,4 +1196,121 @@ fn test_bulk_memory_fuel_charge() {
     assert_eq!(trap, None);
     let (trap, _) = bulk_memory_run(&mut bulk_memory_session(cost - 1), 0x40000, true);
     assert!(matches!(trap, Some(TrapKind::OutOfFuel(_))), "{trap:?}");
+}
+
+fn loops_session(limit: u64, feedback: crate::jit::FeedbackOptions) -> JitFuzzingSession {
+    let module = TestModule::loops();
+    let mod_spec = Arc::new(ModuleSpec::parse("test.wasm", &module.module).unwrap());
+    let mut sess = JitFuzzingSession::builder(mod_spec)
+        .feedback(feedback)
+        .instruction_limit(Some(limit))
+        .build();
+    sess.initialize(&mut Stats::default());
+    sess
+}
+
+// One persistent-mode exec of `TestModule::loops`: trap kind and fuel used. An out-of-fuel trap
+// leaves `vmctx.fuel` stale, so it counts as the whole limit.
+fn loops_run(sess: &mut JitFuzzingSession, op: u8, n: u16, m: u8) -> (Option<TrapKind>, u64) {
+    let [lo, hi] = n.to_le_bytes();
+    let res = sess.run(&[op, lo, hi, m], &mut Stats::default());
+    let vmctx = &sess.reusable_stage.instance.as_ref().unwrap().vmctx;
+    let fuel = match res.trap_kind {
+        Some(TrapKind::OutOfFuel(_)) => vmctx.fuel_init,
+        _ => vmctx.fuel_init - vmctx.fuel,
+    };
+    (res.trap_kind, fuel)
+}
+
+// Every iteration of a loop pays for the loop's header block, so a loop's fuel is linear in its
+// trip count with the operator count of one iteration as the slope.
+#[test]
+fn test_loop_fuel_per_iteration() {
+    use crate::jit::FeedbackOptions;
+    let mut sess = loops_session(1 << 32, FeedbackOptions::nothing());
+    // (loop, operators per iteration)
+    for (op, per_iter) in [(1u8, 7u64), (2, 16), (4, 9)] {
+        let (trap, base) = loops_run(&mut sess, op, 1, 0);
+        assert_eq!(trap, None);
+        for n in [1u16, 2, 3, 10, 64, 1000, u16::MAX] {
+            let (trap, fuel) = loops_run(&mut sess, op, n, 0);
+            assert_eq!(trap, None, "op={op} n={n}");
+            assert_eq!(fuel - base, per_iter * (n as u64 - 1), "op={op} n={n}");
+            // same input, same fuel
+            assert_eq!(loops_run(&mut sess, op, n, 0), (None, fuel), "op={op} n={n}");
+        }
+    }
+
+    // nested: each outer iteration costs 10 plus 7 per inner iteration
+    let (_, base) = loops_run(&mut sess, 3, 1, 1);
+    for n in [1u16, 2, 5, 40] {
+        for m in [1u8, 2, 7, 200] {
+            let (trap, fuel) = loops_run(&mut sess, 3, n, m);
+            assert_eq!(trap, None, "n={n} m={m}");
+            assert_eq!(fuel - base, n as u64 * (10 + 7 * m as u64) - 17, "n={n} m={m}");
+        }
+    }
+
+    // an independent session and a fresh-instance replay agree
+    let mut other = loops_session(1 << 32, FeedbackOptions::nothing());
+    for (op, n, m) in [(1u8, 1000u16, 0u8), (2, 77, 0), (3, 9, 13), (4, 500, 0)] {
+        let fuel = loops_run(&mut sess, op, n, m);
+        assert_eq!(loops_run(&mut other, op, n, m), fuel);
+        let [lo, hi] = n.to_le_bytes();
+        let res = sess.run_reusable_fresh(&[op, lo, hi, m], false, &mut Stats::default());
+        assert_eq!(res.trap_kind, None);
+        let vmctx = &sess.reusable_stage.instance.as_ref().unwrap().vmctx;
+        assert_eq!(vmctx.fuel_init - vmctx.fuel, fuel.1);
+
+        // the limit binds at exactly the charged cost
+        let cost = fuel.1;
+        let (trap, _) = loops_run(&mut loops_session(cost, FeedbackOptions::nothing()), op, n, m);
+        assert_eq!(trap, None);
+        let (trap, _) = loops_run(&mut loops_session(cost - 1, FeedbackOptions::nothing()), op, n, m);
+        assert!(matches!(trap, Some(TrapKind::OutOfFuel(_))), "{trap:?}");
+    }
+}
+
+// `(loop (br 0))` runs out of fuel at any limit.
+#[test]
+fn test_loop_without_exit_runs_out_of_fuel() {
+    use crate::jit::FeedbackOptions;
+    for limit in [1_000, 100_000, 10_000_000] {
+        let mut sess = loops_session(limit, FeedbackOptions::nothing());
+        for _ in 0..2 {
+            let (trap, fuel) = loops_run(&mut sess, 0, 0, 0);
+            assert!(matches!(trap, Some(TrapKind::OutOfFuel(_))), "limit={limit}: {trap:?}");
+            assert_eq!(fuel, limit);
+        }
+        // the instance still works after the trap
+        assert_eq!(loops_run(&mut sess, 1, 5, 0).0, None);
+    }
+}
+
+// The basic-block hit counters count every iteration at a loop header.
+#[test]
+fn test_loop_header_hit_counts() {
+    use crate::instrumentation::PerffuzzBBPass;
+    use crate::ir::Location;
+    use crate::jit::FeedbackOptions;
+    let mut feedback = FeedbackOptions::nothing();
+    feedback.perffuzz_bb = true;
+    let mut sess = loops_session(1 << 32, feedback);
+    let hits = |sess: &JitFuzzingSession, function, index| {
+        let loc = Location { function, index };
+        *sess.get_pass::<PerffuzzBBPass>().coverage.saved_val(&loc)
+    };
+    let mut max = 0;
+    for n in [1u16, 5, 3, 64] {
+        loops_run(&mut sess, 1, n, 0);
+        max = max.max(n as u32);
+        assert_eq!(hits(&sess, 2, 0), max, "n={n}");
+        // the block after the loop runs once
+        assert_eq!(hits(&sess, 2, 7), 1, "n={n}");
+    }
+    loops_run(&mut sess, 3, 6, 9);
+    // outer header, inner header
+    assert_eq!((hits(&sess, 4, 0), hits(&sess, 4, 3)), (6, 54));
+    loops_run(&mut sess, 4, 33, 0);
+    assert_eq!(hits(&sess, 5, 1), 33);
 }

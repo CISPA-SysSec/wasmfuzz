@@ -116,6 +116,10 @@ pub(crate) fn translate_control<'a, 'b, 's>(
             bcx.switch_to_block(block);
             state.push_control_frame();
             state.pushn(&tys, &block_params);
+            if matches!(op, ControlInstruction::Loop { .. }) {
+                // entry and every back-edge run the header block's charge
+                state.instrument_bb_start(bcx, state.loc());
+            }
         }
 
         ControlInstruction::If {

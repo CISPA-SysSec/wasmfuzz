@@ -31,7 +31,7 @@ use super::{
 use crate::{
     AbortCode,
     instrumentation::{ErasedInstrumentationPass, InstrCtx},
-    ir::{InsnIdx, Location, MemoryInstruction, ModuleSpec, WFOperator},
+    ir::{ControlInstruction, InsnIdx, Location, MemoryInstruction, ModuleSpec, WFOperator},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -512,9 +512,11 @@ impl<'a, 's> FuncTranslator<'a, 's> {
             }
         }
 
-        if self.fspec().is_bb_start[ip.i()] {
-            super::instrumentation::instrument_bb(self, bcx, loc);
-            self.iter_passes(bcx, |pass, ctx| pass.instrument_basic_block(ctx));
+        // A loop's header block is the target of its back-edges, so `translate_control`
+        // instruments it inside the loop, where every iteration runs it.
+        let is_loop = matches!(op, WFOperator::Control(ControlInstruction::Loop { .. }));
+        if self.fspec().is_bb_start[ip.i()] && !is_loop {
+            self.instrument_bb_start(bcx, loc);
         }
 
         match op {
@@ -534,6 +536,12 @@ impl<'a, 's> FuncTranslator<'a, 's> {
                 panic!("trying to jit unimplemented op: {op:?}");
             }
         }
+    }
+
+    // Fuel and basic-block instrumentation for the basic block starting at `loc`.
+    pub(crate) fn instrument_bb_start(&mut self, bcx: &mut FunctionBuilder, loc: Location) {
+        super::instrumentation::instrument_bb(self, bcx, loc);
+        self.iter_passes(bcx, |pass, ctx| pass.instrument_basic_block(ctx));
     }
 
     pub(crate) fn jit_builtin_call(
