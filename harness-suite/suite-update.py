@@ -30,7 +30,7 @@ assert harness_dir.exists()
 def get_remote_head(remote: str):
     return subprocess.check_output([
         "git", "ls-remote", remote, "HEAD"
-    ]).decode().split()[0]
+    ], timeout=120).decode().split()[0]
 
 
 CLONE_RE = re.compile(
@@ -61,7 +61,7 @@ def update_from_prepare(proj_dir):
     for m in CLONE_RE.finditer(text):
         try:
             head = get_remote_head(m.group("url"))
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             print("    !!", m.group("url"), e)
             continue
         if head and head != m.group("rev"):
@@ -93,7 +93,11 @@ for harness in harness_dir.glob("*.wasm"):
     git_metadata = io.StringIO(git_metadata.decode())
     reader = csv.DictReader(git_metadata)
     for row in reader:
-        head = get_remote_head(row["origin"])
+        try:
+            head = get_remote_head(row["origin"])
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            print("    !!", row["origin"], e)
+            continue
         path = Path(row["path"]).parts[2]
         proj_dirs = Path(args.suite_dir).glob("*/" + path)
         proj_dirs = [x for x in proj_dirs if "corpus" not in x.parts]

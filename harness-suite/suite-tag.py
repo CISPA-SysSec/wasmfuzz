@@ -210,27 +210,32 @@ def tag_from_corpus():
 
 tag_fuzzbench(
     [
-        # "bloaty-fuzz_target.wasm",
-        # "curl-curl_fuzzer_http.wasm",
+        # Exactly the modules built from a FuzzBench benchmark's fuzz target
+        # (same harness source; library revisions and suite patches differ).
+        # Mapping and verdicts: ~/lod-runs/fbports-1116/REPORT.md (2026-11-16).
+        "bloaty-fuzz_target.wasm",
         "freetype2-ftfuzzer.wasm",
-        # "harfbuzz-hb-shape-fuzzer.wasm",
-        # "jsoncpp-fuzzer.wasm",
+        "harfbuzz-hb-shape.wasm",
+        "jsoncpp.wasm",
         "lcms-cms_transform.wasm",
-        # "libjpeg-turbo-fuzzer.wasm",
-        # "libpcap-fuzz-both.wasm",
+        "libjpeg-turbo-decompress.wasm",  # FB libjpeg_turbo_fuzzer = fuzz/decompress.cc
+        "libpcap-fuzz_both.wasm",
+        # "libpng-read.wasm",  # same harness, but not built (see the lod-list footgun)
         "libxml2-xml.wasm",
-        # "libxslt-xpath.wasm",
+        "libxslt-xpath.wasm",
         "mbedtls-fuzz_dtlsclient.wasm",
+        "mruby-mruby.wasm",
+        "openh264-decoder.wasm",
         "openssl-x509.wasm",
-        # "openthread-ot-ip6-send-fuzzer.wasm",
-        "openthread-radio-one-node.wasm",
-        # "proj4-proj_crs_to_crs_fuzzer.wasm",
-        # "re2-fuzzer.wasm",
+        # openthread: FB ot-ip6-send-fuzzer (ip6_send.cpp) was removed upstream in
+        # 6d4097778 (2025-05); openthread-ip6 is its FDP-based successor, not the same harness.
+        "re2.wasm",  # FB re2_fuzzer's own target.cc
         "sqlite-ossfuzz.wasm",
-        # "systemd-fuzz-link-parser.wasm",
+        "stb-stbi_read.wasm",
         "vorbis-decode.wasm",
         "woff2-convert_woff2ttf.wasm",
         "zlib-uncompress.wasm",
+        # no port: curl-curl_fuzzer_http, proj4-proj_crs_to_crs_fuzzer, systemd-fuzz-link-parser
     ]
 )
 
@@ -384,9 +389,7 @@ tag_browser(
         "opus-multistream_decode_float": "chromium media/filters/opus_audio_decoder.cc",
         "ots-sanitize": "chromium third_party/blink/renderer/platform/fonts/web_font_decoder.cc, firefox gfx/thebes/gfxUserFontSet.cpp",
         "serde_json-from_slice": "firefox dom/base/speculationrules/parser.rs",
-        "sfv-parse_dictionary": "chromium net/http/structured_headers.cc, firefox netwerk/base/http-sfv/src/lib.rs",
-        "sfv-parse_item": "chromium net/http/structured_headers.cc, firefox netwerk/base/http-sfv/src/lib.rs",
-        "sfv-parse_list": "chromium net/http/structured_headers.cc, firefox netwerk/base/http-sfv/src/lib.rs",
+        "sfv-parse": "chromium net/http/structured_headers.cc, firefox netwerk/base/http-sfv/src/lib.rs",
         "sfv-reparse_dictionary": "chromium net/http/structured_headers.cc, firefox netwerk/base/http-sfv/src/lib.rs",
         "sfv-reparse_item": "chromium net/http/structured_headers.cc, firefox netwerk/base/http-sfv/src/lib.rs",
         "sfv-reparse_list": "chromium net/http/structured_headers.cc, firefox netwerk/base/http-sfv/src/lib.rs",
