@@ -1,3 +1,10 @@
+render: skip the XYB conversion in convert_color_for_record when the color transform cannot be built
+or run, instead of unwrapping the error (util.rs: called `Result::unwrap()` on an `Err` value:
+UnsupportedColorEncoding). Test: xyb_transform_soft_fail
+(crates/jxl-oxide-tests/tests/xyb_transform_soft_fail.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
 diff --git a/crates/jxl-render/src/util.rs b/crates/jxl-render/src/util.rs
 index a217ba3..66774c4 100644
 --- a/crates/jxl-render/src/util.rs
@@ -38,3 +45,35 @@ index a217ba3..66774c4 100644
              fb.remove_color_channels(output_channels);
              Ok(())
          })?;
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/xyb_transform_soft_fail.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/xyb_transform_soft_fail.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..e0d1ab639025a57ca204f6fdb03e56c39a8eb667
+GIT binary patch
+literal 26
+hcmey*#US9!Fv-Y)iKBsmL4%>Q#*T@_&W@>f9so~-1_b~B
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/xyb_transform_soft_fail.rs b/crates/jxl-oxide-tests/tests/xyb_transform_soft_fail.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..cd1f8cf77688a4f53eead9698d62df074ad03b86
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/xyb_transform_soft_fail.rs
+@@ -0,0 +1,16 @@
++//! Regression test: XYB conversion of a frame for reference unwrapped an UnsupportedColorEncoding error.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn xyb_transform_soft_fail() {
++    let data = include_bytes!("fuzz_findings/xyb_transform_soft_fail.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

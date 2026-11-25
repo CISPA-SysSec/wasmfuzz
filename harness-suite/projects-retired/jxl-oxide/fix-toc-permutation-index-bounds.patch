@@ -1,0 +1,56 @@
+frame: map group indices past the end of the TOC permutation to usize::MAX, which callers then fail
+to look up, instead of indexing out of bounds (toc.rs: index out of bounds). Test:
+toc_permutation_index_bounds (crates/jxl-oxide-tests/tests/toc_permutation_index_bounds.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-frame/src/data/toc.rs b/crates/jxl-frame/src/data/toc.rs
+index 0d9d40a..c86d92d 100644
+--- a/crates/jxl-frame/src/data/toc.rs
++++ b/crates/jxl-frame/src/data/toc.rs
+@@ -137,7 +137,11 @@ impl Toc {
+         if self.original_to_bitstream.is_empty() {
+             original_order
+         } else {
+-            self.original_to_bitstream[original_order]
++            // Out-of-range group indices map past the end; callers look the result up with `get`.
++            self.original_to_bitstream
++                .get(original_order)
++                .copied()
++                .unwrap_or(usize::MAX)
+         }
+     }
+ 
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/toc_permutation_index_bounds.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/toc_permutation_index_bounds.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6555ed8f93efec1cd7f8b2f10eccc40cf55feca
+GIT binary patch
+literal 69
+zcmey*mB=8&z`zmE|M`VN<`hnb6b4Md2voq%!5;8YfJw}OAq5OlQ&I$g%tMD(AKDK9
+D%a0GJ
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/toc_permutation_index_bounds.rs b/crates/jxl-oxide-tests/tests/toc_permutation_index_bounds.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..706d573d5fa312f04bb8e36d86f03808a907fecc
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/toc_permutation_index_bounds.rs
+@@ -0,0 +1,16 @@
++//! Regression test: Looking up a group index past the TOC permutation panicked.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn toc_permutation_index_bounds() {
++    let data = include_bytes!("fuzz_findings/toc_permutation_index_bounds.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

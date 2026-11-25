@@ -1,3 +1,14 @@
+vardct: return an error instead of asserting when the LF buffers passed to adaptive LF smoothing
+don't have the expected lengths, and check width * height for overflow.
+
+No regression test: no input found. About 380k decode harness inputs (crash and corpus files),
+replayed on x86_64 and i686 with this patch reverted, never reach the asserts. adaptive_lf_smoothing
+gets the three channels of one LF image, whose sizes follow the same jpeg_upsampling shifts that
+select the subsampled path, and width * height is the size of buffers that are already allocated.
+Kept as a defensive change.
+
+Upstream: open PR tirr-c/jxl-oxide#504 (by tirr-c, 2026-08-16) rewrites adaptive LF smoothing in the same file to work per MCU; it keeps the length asserts this patch replaces, and would conflict with it.
+
 diff --git a/crates/jxl-render/src/vardct/generic/mod.rs b/crates/jxl-render/src/vardct/generic/mod.rs
 index 5e057b9..e57a257 100644
 --- a/crates/jxl-render/src/vardct/generic/mod.rs

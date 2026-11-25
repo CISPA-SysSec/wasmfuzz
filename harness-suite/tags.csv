@@ -158,7 +158,7 @@ image-script_webp.wasm,0,0,1,0,0,1,1,0,1,0,0,0,0,0,0,0,0,1
 jbig2dec.wasm,0,1,1,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0
 json5format-fuzz_parse.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 jsoncpp.wasm,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,1,0
-jxl-oxide-libfuzzer-decode.wasm,0,0,1,0,0,1,0,0,1,1,0,0,0,0,0,0,0,1
+jxl-oxide-libfuzzer-decode.wasm,0,0,1,0,0,1,0,0,1,1,0,0,0,0,0,0,0,0
 jxl-rs-decode.wasm,0,0,1,0,0,1,1,0,1,1,0,0,0,0,0,0,0,1
 jxl-rs-decode_header.wasm,0,0,1,0,0,1,1,0,1,0,0,0,0,0,0,0,0,0
 jxl-rs-decode_progressive.wasm,0,0,0,0,0,1,1,0,1,1,0,0,0,0,0,0,0,0
@@ -169,7 +169,7 @@ lcms-cms_transform.wasm,0,0,0,1,0,0,1,0,0,0,1,1,0,0,0,0,0,0
 lcms-cms_transform_all.wasm,1,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,1
 lcms-cms_transform_extended.wasm,0,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0
 lcms-cms_universal_transform.wasm,0,0,0,1,0,0,1,0,0,0,1,0,0,0,0,0,0,0
-lewton-parse_ogg.wasm,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1
+lewton-parse_ogg.wasm,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0
 libarchive-ossfuzz.wasm,0,0,1,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0
 libarchive-ossfuzz2.wasm,0,0,1,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0
 libarchive-upstream.wasm,0,0,1,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0

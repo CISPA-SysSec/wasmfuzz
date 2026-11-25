@@ -1,3 +1,9 @@
+blend: skip patches whose area or reference/base channel buffers are empty; borrowing a zero-sized
+buffer as a subgrid panicked (shared_subgrid.rs: assertion failed: width > 0). Test:
+patch_empty_ref_grid (crates/jxl-oxide-tests/tests/patch_empty_ref_grid.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
 diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
 index 87b211c..cf09b2d 100644
 --- a/crates/jxl-render/src/blend.rs
@@ -50,3 +56,36 @@ index 87b211c..cf09b2d 100644
              let base_alpha;
              let new_alpha;
              let premultiplied;
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/patch_empty_ref_grid.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/patch_empty_ref_grid.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..d42e182cb6d940228dd82827f2d16cce8f2762a9
+GIT binary patch
+literal 49
+zcmV-10M7sa3PT16kbeLeAS4U`L;wNU|I?hD1!O<~J^=3Pyn7y4KRN*{0Mh6fCo(Vk
+H0Md{FigOUd
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/patch_empty_ref_grid.rs b/crates/jxl-oxide-tests/tests/patch_empty_ref_grid.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..2eaf1a75f4a3fea79aca52f9063ea0295b50b78d
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/patch_empty_ref_grid.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A patch from an empty reference frame region panicked when borrowed as a subgrid.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn patch_empty_ref_grid() {
++    let data = include_bytes!("fuzz_findings/patch_empty_ref_grid.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

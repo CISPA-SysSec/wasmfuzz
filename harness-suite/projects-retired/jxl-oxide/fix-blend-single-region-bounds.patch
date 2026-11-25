@@ -1,0 +1,77 @@
+blend: skip blend_single when the blending region does not fit into the base or the new grid; it
+indexed past the end of a row (blend.rs: index out of bounds). The check is duplicated by mistake;
+fix-blend-alpha-region-bounds folds both copies into blend_region_fits. Test:
+blend_single_region_bounds (crates/jxl-oxide-tests/tests/blend_single_region_bounds.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index 42e1366..554feda 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -560,6 +560,32 @@ fn blend_single(
+         height,
+     } = blend_params;
+ 
++    let base_right = base_x.saturating_add(width);
++    let base_bottom = base_y.saturating_add(height);
++    let new_right = new_x.saturating_add(width);
++    let new_bottom = new_y.saturating_add(height);
++
++    if base_right > base.width()
++        || base_bottom > base.height()
++        || new_right > new_grid.width()
++        || new_bottom > new_grid.height()
++    {
++        return;
++    }
++
++    let base_right = base_x.saturating_add(width);
++    let base_bottom = base_y.saturating_add(height);
++    let new_right = new_x.saturating_add(width);
++    let new_bottom = new_y.saturating_add(height);
++
++    if base_right > base.width()
++        || base_bottom > base.height()
++        || new_right > new_grid.width()
++        || new_bottom > new_grid.height()
++    {
++        return;
++    }
++
+     match mode {
+         BlendMode::Replace | BlendMode::Blend(BlendAlpha { new: None, .. }) => {
+             for dy in 0..height {
+diff --git a/crates/jxl-oxide-tests/tests/blend_single_region_bounds.rs b/crates/jxl-oxide-tests/tests/blend_single_region_bounds.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6b0d77e02cae1caa9dd1c4253b2760a58a8cf6f
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/blend_single_region_bounds.rs
+@@ -0,0 +1,16 @@
++//! Regression test: blend_single indexed past the end of the base or new grid when the blending region did not fit.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn blend_single_region_bounds() {
++    let data = include_bytes!("fuzz_findings/blend_single_region_bounds.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/blend_single_region_bounds.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/blend_single_region_bounds.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..a256025ac5642abb42d630c0365bffa567a61e4e
+GIT binary patch
+literal 69
+zcmey*<!HbVV#r*`!N<VB;K1OmAi?$RdyFbWLPBE#qk&AuK1Rm>Dvb>G3fIe-7(5sz
+YZ4FS}?c?LaXrQ%>Yd>3tYz|Nx0DOEBk^lez
+
+literal 0
+HcmV?d00001
+

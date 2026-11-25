@@ -1,0 +1,104 @@
+grid: return OutOfMemory from AlignedGrid::with_alloc_tracker when width * height or the aligned
+buffer length overflows usize, instead of expect("grid dimensions overflow usize"). Reachable on
+32-bit targets. Test: grid_dimension_overflow
+(crates/jxl-oxide-tests/tests/grid_dimension_overflow.rs). The input only fails on 32-bit targets
+(upstream CI runs the tests on armv7).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-grid/src/lib.rs b/crates/jxl-grid/src/lib.rs
+index 0a50950..1935639 100644
+--- a/crates/jxl-grid/src/lib.rs
++++ b/crates/jxl-grid/src/lib.rs
+@@ -84,10 +84,10 @@ impl<S: Default + Clone> AlignedGrid<S> {
+     ) -> Result<Self, OutOfMemory> {
+         let len = width
+             .checked_mul(height)
+-            .expect("grid dimensions overflow usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         let buf_len = len
+             .checked_add((Self::ALIGN - 1) / std::mem::size_of::<S>())
+-            .expect("aligned grid buffer length overflows usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         let handle = tracker
+             .map(|tracker| tracker.alloc::<S>(buf_len))
+             .transpose()?;
+@@ -97,7 +97,7 @@ impl<S: Default + Clone> AlignedGrid<S> {
+         let offset = ((Self::ALIGN - extra) % Self::ALIGN) / std::mem::size_of::<S>();
+         let len_with_offset = len
+             .checked_add(offset)
+-            .expect("aligned grid buffer length overflows usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         buf.resize_with(len_with_offset, S::default);
+ 
+         Ok(Self {
+@@ -117,10 +117,10 @@ impl<S: Default + Clone> AlignedGrid<S> {
+     ) -> Result<Self, OutOfMemory> {
+         let len = width
+             .checked_mul(height)
+-            .expect("grid dimensions overflow usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         let buf_len = len
+             .checked_add((Self::ALIGN - 1) / std::mem::size_of::<S>())
+-            .expect("aligned grid buffer length overflows usize");
++            .ok_or(OutOfMemory::new(usize::MAX))?;
+         let handle = tracker
+             .map(|tracker| tracker.alloc::<S>(buf_len))
+             .transpose()?;
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/grid_dimension_overflow.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/grid_dimension_overflow.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..15c70f9217268ee360eea652d1b1b9a266c308f8
+GIT binary patch
+literal 15042
+zcmeIy`!|$n902e^rFGr1WYG@VW6I9P(9%tu+)|yavejXntdMpU3ERw+AxD`oqg;#0
+zt#!%BZ3eYYCc}`8+%_sFm#~#G73DU(`#iS#8~pHn&iT&seV_OHyzldV-gh2Ch4fZo
+zrItmcQ_Z~6>>3IwodgX8KmY_l00fqbz$(S1vJzMa2!H?xfB*=900@8p2!H?xfB*=9
+z00@8p2!H?xfB*=900@8p2!H?xfB*=900@8p2!H?xfB*=900@8p2!H?xfB*<AApy@-
+zq>N&3m4S=^MemH3mX-|fPc37yU5ONl8R`mX!R@xm{R3Wt2eEb$x9q#N)7$NQl$cSR
+z-U?Iei@PQNJkSgLAT}!(ybpU7MGypg0sWMcB>hbFbyL$Q?}?5st;2&_4de8jRqOd&
+zg#g`LwF$pS&5jQO&aEWh5$Eu}8>oPgWYM{}GOB)NFP>_Rf-TJyso~zHHuQY)Sl;M!
+z@^MZ9?ZA-IV}JX7gGt<RsY+dvM-x@*F^bB_GzyE4%bgMhn~UCG*fxU>h+6F-YDoo!
+zFGqP&@!7chc(9Sjm@Aqdu}IKz3^H?9x10?NdR;%@_;mM`ziuB=a{1Y!pLb@I+<;5%
+zvs3fa6wHp{`ByKVG<~M-)IWuC90fId{mWVzo$pXC+vCnT#PCw>^xa9G$Hg5ZaVhUn
+z-=pwo0{2-c2-5)JEj9d{EOB<_xS{d#%(5I>>76b1@s7v*a{aSH68*l(8Vj<~3E5qU
+z>uFu#QziIn&-Y&PZ^0uTD<ZPo9?!0xL%Du>3MKhwlC$JhM^nMn$gwbLwpHn@a9th8
+zB*}El6W^6s`3tl5jrrNHo2^gVD~$(OJ6ROTC7XTdhPqP~CC`8St#IY$4Q~hVEhyY4
+zdY<{^?RnapngY8+<~Pz}?4~)vVvd7=x1m*epH7gYfzh9=bLmFu5ypad<@hmhc*=$o
+z$8<Z(gJ;o!ETqq}Svsw3;#$NIMNsPVcU7m29_9x+=!<h-FB`-aC^R(`FR+_r)ZoQe
+z<fheXe7b%-1uue?GLTdBF_G%*wEf!JA-{O)WvN}uHMedX>zc;P(z{Z(^*d<Qdo+Yw
+zvOP;>^E|Q!nnSdDP3nhwt-dE>D(C&-jITMiwoTVS=f+q2OKszy(uZ8f-=INWM$DNR
+z3YV67^Sk55y#~WZCKA^@FDU2?oAKzX%D?*Omse#SJ+X_&O*mUeXW-==Q4Q9@Z#vC1
+z?k8cjM%s=|<p(CO6LdLS9z9oZc-d+UFwf6_w~!y+$x91hnB!R!C_aB9M?5L*s(Ibv
+z$-OQcD~99B&?$CUs#UKZKR(q_v_rS*;EPGC815;<+TWG`j%Ty{2=8Kvk=~O#+Wq`C
+zR7|K{-fD;^m6JXUbuaX-dEK_<+2<RuPfR_WX2p6JGks#WC(s-!D|>D?2H_>lqv(ln
+zSsz8Nv^#a%GOqcYYwl4qZ~35A!d<b@C=va~UQTL~NWmY~NQ(O3e(xos4$I$Y^joEs
+z$WmYKnw8z5J?z#qF)v*4Ws^XA1KKZg(0<_?Sxbs^U)(zWPw(qi?Qgk6+NRn3fE!A_
+z!gT0ub|Od-`NKiQpPCEx-d6P}p&(Qxz+lcsIFY$C`c==bGbfX~KK{TNY?9lF4<2s3
+WzR<u_6iF1yCZqOm+gC}orThns$<3hv
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/grid_dimension_overflow.rs b/crates/jxl-oxide-tests/tests/grid_dimension_overflow.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..890ac172a73d040c11440ba182a8d8600ca577ae
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/grid_dimension_overflow.rs
+@@ -0,0 +1,17 @@
++//! Regression test: Grid dimensions whose product overflows usize panicked.
++//! Only fails on 32-bit targets.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn grid_dimension_overflow() {
++    let data = include_bytes!("fuzz_findings/grid_dimension_overflow.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

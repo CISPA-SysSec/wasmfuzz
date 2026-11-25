@@ -1,0 +1,50 @@
+render: suggested_hdr_tf() returns None when the image has no usable embedded ICC profile instead of
+unwrapping embedded_icc() (lib.rs: called `Option::unwrap()` on a `None` value). Test:
+suggested_hdr_tf_missing_icc (crates/jxl-oxide-tests/tests/suggested_hdr_tf_missing_icc.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-render/src/lib.rs b/crates/jxl-render/src/lib.rs
+--- a/crates/jxl-render/src/lib.rs
++++ b/crates/jxl-render/src/lib.rs
+@@ -206,7 +206,7 @@ impl RenderContext {
+         let tf = match &self.image_header.metadata.colour_encoding {
+             ColourEncoding::Enum(e) => e.tf,
+             ColourEncoding::IccProfile(_) => {
+-                let icc = self.embedded_icc().unwrap();
++                let icc = self.embedded_icc()?;
+                 jxl_color::icc::icc_tf(icc)?
+             }
+         };
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/suggested_hdr_tf_missing_icc.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/suggested_hdr_tf_missing_icc.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..97bce77c892027b24f3da424410ca3eba5846825
+GIT binary patch
+literal 18
+Zcmey*b@+go*dzrGP7VeEhRzzc1^_w<1s?za
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/suggested_hdr_tf_missing_icc.rs b/crates/jxl-oxide-tests/tests/suggested_hdr_tf_missing_icc.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..05191f1987075006da1e4af982343637c7ebe76f
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/suggested_hdr_tf_missing_icc.rs
+@@ -0,0 +1,16 @@
++//! Regression test: suggested_hdr_tf unwrapped a missing embedded ICC profile.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn suggested_hdr_tf_missing_icc() {
++    let data = include_bytes!("fuzz_findings/suggested_hdr_tf_missing_icc.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

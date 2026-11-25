@@ -1,3 +1,9 @@
+blend: also check that the blending region fits into the base and new alpha grids before
+blend_single reads them (blend.rs: index out of bounds, shared_subgrid.rs: row index out of range).
+Test: blend_alpha_region_bounds (crates/jxl-oxide-tests/tests/blend_alpha_region_bounds.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
 diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
 index c68fa3d..1163b9d 100644
 --- a/crates/jxl-render/src/blend.rs
@@ -88,3 +94,36 @@ index c68fa3d..1163b9d 100644
      }
  
      match mode {
+diff --git a/crates/jxl-oxide-tests/tests/blend_alpha_region_bounds.rs b/crates/jxl-oxide-tests/tests/blend_alpha_region_bounds.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..3aa79ac18e719eb0e2223424c64735fb1e7010c9
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/blend_alpha_region_bounds.rs
+@@ -0,0 +1,16 @@
++//! Regression test: blend_single indexed the alpha grids outside their bounds.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn blend_alpha_region_bounds() {
++    let data = include_bytes!("fuzz_findings/blend_alpha_region_bounds.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/blend_alpha_region_bounds.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/blend_alpha_region_bounds.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..9a52d02adb7633ee2615097d5866aa4c050d4042
+GIT binary patch
+literal 49
+zcmey*#lXPOz-7>-!R)}q!JsD3AmG^0z@Wgu5W=8%NRYuhE(HhzSW8m>GjipmB>MmW
+D{TvIi
+
+literal 0
+HcmV?d00001
+

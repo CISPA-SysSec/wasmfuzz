@@ -1,3 +1,9 @@
+color: return UnsupportedColorEncoding when the HLG (inverse) transfer function, which needs three
+channels, runs on fewer channels, instead of panic!() (convert.rs). Test: hlg_transfer_grayscale
+(crates/jxl-oxide-tests/tests/hlg_transfer_grayscale.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
 diff --git a/crates/jxl-color/src/convert.rs b/crates/jxl-color/src/convert.rs
 index ae352cc..c8f41a2 100644
 --- a/crates/jxl-color/src/convert.rs
@@ -73,3 +79,35 @@ index ae352cc..c8f41a2 100644
      }
 +    Ok(())
  }
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/hlg_transfer_grayscale.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/hlg_transfer_grayscale.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..874ee4c909064ef99e2218b73cdd60e5e8e8315c
+GIT binary patch
+literal 16
+Xcmey*)yNRUrr_7aBEaCSV8I9gCPf2_
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/hlg_transfer_grayscale.rs b/crates/jxl-oxide-tests/tests/hlg_transfer_grayscale.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..6df19e1961e4c80fd66a1bccc70740397cc74415
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/hlg_transfer_grayscale.rs
+@@ -0,0 +1,16 @@
++//! Regression test: The HLG transfer function on a grayscale image panicked.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn hlg_transfer_grayscale() {
++    let data = include_bytes!("fuzz_findings/hlg_transfer_grayscale.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

@@ -1,0 +1,77 @@
+frame: use checked arithmetic for the spline control point counts. On 32-bit targets
+acc_control_points + num_points wrapped past the "too many spline points" check and
+Vec::with_capacity(1 + num_points) panicked (capacity overflow). Test: spline_point_count_overflow
+(crates/jxl-oxide-tests/tests/spline_point_count_overflow.rs). The input only fails on 32-bit
+targets (upstream CI runs the tests on armv7).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-frame/src/data/spline.rs b/crates/jxl-frame/src/data/spline.rs
+index 1cf3ac0..3bf3e1f 100644
+--- a/crates/jxl-frame/src/data/spline.rs
++++ b/crates/jxl-frame/src/data/spline.rs
+@@ -167,14 +167,24 @@ impl Bundle<QuantSplineParams<'_>> for QuantSpline {
+         } = params;
+ 
+         let num_points = decoder.read_varint(bitstream, 3)? as usize;
+-        let acc_num_points = acc_control_points + num_points;
++        let acc_num_points = acc_control_points
++            .checked_add(num_points)
++            .ok_or(jxl_bitstream::Error::ValidationFailed(
++                "spline control point count overflowed",
++            ))?;
+         let max_num_points = usize::min(MAX_NUM_CONTROL_POINTS, num_pixels / 2);
+         if acc_num_points > max_num_points {
+             tracing::error!(num_points, max_num_points, "Too many spline points");
+             return Err(jxl_bitstream::Error::ProfileConformance("too many spline points").into());
+         }
+ 
+-        let mut quant_points = Vec::with_capacity(1 + num_points);
++        let mut quant_points = Vec::with_capacity(
++            num_points
++                .checked_add(1)
++                .ok_or(jxl_bitstream::Error::ValidationFailed(
++                    "spline point vector capacity overflowed",
++                ))?,
++        );
+         let mut cur_value = start_point;
+         let mut cur_delta = (0, 0);
+         let mut manhattan_distance = 0u64;
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/spline_point_count_overflow.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/spline_point_count_overflow.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..0311220eb43e58b9335fbc762e97abbb34b2f4c5
+GIT binary patch
+literal 459
+zcmey*WypR{{G22M1G~|_C?z&N1qL9f2N725R_$U)Pf!0}pOjSppONAJq1Ql=1|k@Q
+z8G&j({N-+zyUF?=2wK75`+uM^28Qsku(0bOFnzivh=^R)z=h7|;^OkV?*{^m1_s|4
+z8Gww9ARa@*n>PzDq%r`JQ@u|n(4?@0goF=_|NnDw{pVsnv%dNDYp^>iQQT1{ck>r7
+zFE0c03y52IQ5^OE{{&VB27%`0g=}nW3{0;7K{mkv*o7w>fDXd$qRl{n&ow}Iyn6i_
+zt~~+fAqEB=ps(&AfFJX3px27v{`&ua*?%tn6O2<B;_H7YJg{Z_ydWTg<tG=n22i*-
+vG0Bx7c@BR-d?cI3zm7UDMn-|fnF1OL!0?3`siEP-AkfeNjH2}P5CsJQzIn}r
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/spline_point_count_overflow.rs b/crates/jxl-oxide-tests/tests/spline_point_count_overflow.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..1b700d0a025a8a4acb6f8bf25ddc09cc583ffb7e
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/spline_point_count_overflow.rs
+@@ -0,0 +1,17 @@
++//! Regression test: A huge spline control point count overflowed usize.
++//! Only fails on 32-bit targets.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn spline_point_count_overflow() {
++    let data = include_bytes!("fuzz_findings/spline_point_count_overflow.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

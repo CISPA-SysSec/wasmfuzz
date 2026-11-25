@@ -1,0 +1,91 @@
+vardct: reject varblocks larger than 8x8 in a frame with chroma subsampling, as libjxl does
+(DecodeAcMetadata: "AC strategy not compatible with chroma subsampling"). The HF coefficients of a
+subsampled channel are decoded with the varblock size found at the subsampled position, so a large
+varblock there reached past the channel's grids (hf_coeff.rs: index out of bounds in the non-zeros
+grid; mutable_subgrid.rs: row index out of range). Channel
+shifts are compared as libjxl does, relative to the largest sampling factor, so a frame whose
+channels all share one sampling factor counts as 4:4:4. Test: varblock_chroma_subsampling
+(crates/jxl-oxide-tests/tests/varblock_chroma_subsampling.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15). Open PR #510
+(apply CfL when all channels share the sampling) fixes the same 4:4:4 test in render_vardct and
+JpegBitstreamReconstructor; this check already uses ChannelShift, which compares the same way.
+
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/varblock_chroma_subsampling.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/varblock_chroma_subsampling.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9398bb739994d225d0fbfc44d6d0dea0d0d593d
+GIT binary patch
+literal 86
+zcmey*b&yfz80!QE9mfCl37yJPvl*B;6dD+q7&tdrEZWEkVsa=jOlVM9uv=7N`p-`a
+iubnn-n*N8eK}CVlWc}?``3>s7UC$eza{U%p3I_lW^&x%$
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/varblock_chroma_subsampling.rs b/crates/jxl-oxide-tests/tests/varblock_chroma_subsampling.rs
+new file mode 100644
+index 0000000..b753b5a
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/varblock_chroma_subsampling.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A varblock larger than 8x8 in a chroma-subsampled frame indexed past its group.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn varblock_chroma_subsampling() {
++    let data = include_bytes!("fuzz_findings/varblock_chroma_subsampling.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024))
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-vardct/src/hf_metadata.rs b/crates/jxl-vardct/src/hf_metadata.rs
+index e93277f..d39c312 100644
+--- a/crates/jxl-vardct/src/hf_metadata.rs
++++ b/crates/jxl-vardct/src/hf_metadata.rs
+@@ -1,6 +1,6 @@
+ use jxl_bitstream::Bitstream;
+ use jxl_grid::{AlignedGrid, AllocTracker};
+-use jxl_modular::{MaConfig, Modular, ModularChannelParams, ModularParams};
++use jxl_modular::{ChannelShift, MaConfig, Modular, ModularChannelParams, ModularParams};
+ use jxl_oxide_common::Bundle;
+ 
+ use crate::{Result, TransformType};
+@@ -78,6 +78,12 @@ impl Bundle<HfMetadataParams<'_, '_, '_>> for HfMetadata {
+         if v_upsample {
+             bh = bh.div_ceil(2) * 2;
+         }
++        // Chroma-subsampled channels reuse the varblock size at the subsampled position, so
++        // only 8x8 varblocks are allowed when any channel is subsampled.
++        let is_444 = (0..3).all(|idx| {
++            let shift = ChannelShift::from_jpeg_upsampling(jpeg_upsampling, idx);
++            shift.hshift() == 0 && shift.vshift() == 0
++        });
+ 
+         let nb_blocks =
+             1 + bitstream.read_bits((bw * bh).next_power_of_two().trailing_zeros() as usize)?;
+@@ -141,6 +147,19 @@ impl Bundle<HfMetadataParams<'_, '_, '_>> for HfMetadata {
+                     }
+ 
+                     let (dw, dh) = dct_select.dct_select_size();
++                    if !is_444 && (dw > 1 || dh > 1) {
++                        tracing::error!(
++                            lf_group_idx,
++                            base_x = x,
++                            base_y = y,
++                            ?dct_select,
++                            "varblock not compatible with chroma subsampling",
++                        );
++                        return Err(jxl_bitstream::Error::ValidationFailed(
++                            "varblock not compatible with chroma subsampling",
++                        )
++                        .into());
++                    }
+                     let x_in_group = (x % 32) as u32;
+                     let y_in_group = (y % 32) as u32;
+                     if x_in_group + dw > 32 || y_in_group + dh > 32 {

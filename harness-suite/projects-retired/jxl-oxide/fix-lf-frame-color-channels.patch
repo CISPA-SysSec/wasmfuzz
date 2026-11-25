@@ -1,0 +1,65 @@
+render: convert the LF frame of a VarDCT frame to three float color channels before reading the
+LF coefficients from it. A Modular LF frame of an image that is not XYB encoded keeps integer
+samples, and one of a grayscale image has a single color channel; render_vardct used the buffer as
+three XYB float channels as is and panicked (vardct/mod.rs: range end index 3 out of range for
+slice of length 1; image.rs: called `Option::unwrap()` on a `None` value in as_color_floats).
+libjxl converts every Modular frame, LF frames included, to float and replicates a gray channel
+(ModularImageToDecodedRect); this uses the conversion of jxl-oxide's own Modular output path
+(clone_gray, convert_modular_color). Test: lf_frame_color_channels
+(crates/jxl-oxide-tests/tests/lf_frame_color_channels.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/lf_frame_color_channels.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/lf_frame_color_channels.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..89b363c56f1d16a85989df830ef2157410daac44
+GIT binary patch
+literal 49
+zcmey*B_Y5N!oa}5!387~7&u)R=HF#eWq80mfx(C2e|^HEj$>*K3``sf4Ga!UAwp~b
+D1uF}6
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/lf_frame_color_channels.rs b/crates/jxl-oxide-tests/tests/lf_frame_color_channels.rs
+new file mode 100644
+index 0000000..9c7d04d
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/lf_frame_color_channels.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A Modular LF frame without XYB or with one color channel was read as XYB float samples.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn lf_frame_color_channels() {
++    let data = include_bytes!("fuzz_findings/lf_frame_color_channels.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024))
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-render/src/vardct/mod.rs b/crates/jxl-render/src/vardct/mod.rs
+index fa6ede0..a634fef 100644
+--- a/crates/jxl-render/src/vardct/mod.rs
++++ b/crates/jxl-render/src/vardct/mod.rs
+@@ -185,7 +185,14 @@ pub(crate) fn render_vardct<S: Sample>(
+         let lf_xyb = if let Some(x) = lf_frame {
+             tracing::trace_span!("Copy LFQuant").in_scope(|| -> Result<_> {
+                 let lf_frame = std::sync::Arc::clone(&x.image).run_with_image()?;
+-                let lf_frame = lf_frame.blend(None, pool)?.try_clone()?;
++                let mut lf_frame = lf_frame.blend(None, pool)?.try_clone()?;
++                // A Modular LF frame without XYB keeps integer samples, and a grayscale
++                // one has a single color channel. VarDCT needs three float channels, so
++                // convert the same way the Modular output path does.
++                if lf_frame.color_channels() < 3 {
++                    lf_frame.clone_gray()?;
++                }
++                lf_frame.convert_modular_color(image_header.metadata.bit_depth)?;
+                 Ok(lf_frame)
+             })?
+         } else {

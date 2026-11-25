@@ -1,3 +1,10 @@
+blend: return an error when the region of the base frame (or of its alpha channel) that a frame
+blends onto lies outside the base grid, instead of panicking in MutableSubgrid::subgrid
+(mutable_subgrid.rs: assertion failed: right <= self.width). Test: blend_subgrid_bounds
+(crates/jxl-oxide-tests/tests/blend_subgrid_bounds.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
 diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
 --- a/crates/jxl-render/src/blend.rs
 +++ b/crates/jxl-render/src/blend.rs
@@ -29,3 +36,36 @@ diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
                          base_alpha_grid
                              .as_subgrid()
                              .subgrid(left as usize..right as usize, top as usize..bottom as usize)
+diff --git a/crates/jxl-oxide-tests/tests/blend_subgrid_bounds.rs b/crates/jxl-oxide-tests/tests/blend_subgrid_bounds.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..6067dafe4208780c4f21676c7e964591bcd15de2
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/blend_subgrid_bounds.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A blending base region outside the reference frame's grid panicked in MutableSubgrid::subgrid.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn blend_subgrid_bounds() {
++    let data = include_bytes!("fuzz_findings/blend_subgrid_bounds.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/blend_subgrid_bounds.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/blend_subgrid_bounds.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..941696ac497d4cc80ccb93c8ddca7970ef42d5d7
+GIT binary patch
+literal 59
+zcmey*b)8X#hmVPofsuj1gu(NWk0v8SyP<?WLu=~`>9m9LjR&k4CNM<gFfbTEWb6C?
+LbA|SBnX&-@x;qc(
+
+literal 0
+HcmV?d00001
+

@@ -1,0 +1,66 @@
+modular: return an error when no pass covers a channel's shift after the transforms, instead of
+unwrapping the pass_shifts lookup (image.rs: called `Option::unwrap()` on a `None` value). Test:
+modular_pass_shift_lookup (crates/jxl-oxide-tests/tests/modular_pass_shift_lookup.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-modular/src/image.rs b/crates/jxl-modular/src/image.rs
+index f7df568..d768c17 100644
+--- a/crates/jxl-modular/src/image.rs
++++ b/crates/jxl-modular/src/image.rs
+@@ -256,11 +256,20 @@ impl<S: Sample> ModularImageDestination<S> {
+ 
+             let (groups, grids) = if hshift < 3 || vshift < 3 {
+                 let shift = hshift.min(vshift); // shift < 3
+-                let pass_idx = *pass_shifts
++                let Some((pass_idx, _)) = pass_shifts
+                     .iter()
+                     .find(|&(_, &(minshift, maxshift))| (minshift..maxshift).contains(&shift))
+-                    .unwrap()
+-                    .0;
++                else {
++                    tracing::error!(
++                        shift,
++                        hshift,
++                        vshift,
++                        ?pass_shifts,
++                        "No pass covers channel shift after transform"
++                    );
++                    return Err(crate::Error::InvalidSqueezeParams);
++                };
++                let pass_idx = *pass_idx;
+                 let pass_idx = pass_idx as usize;
+ 
+                 let group_width = group_dim >> hshift;
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/modular_pass_shift_lookup.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/modular_pass_shift_lookup.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..cae30a110b8a4d1ae52ae3e9df29de6f8e75f2c0
+GIT binary patch
+literal 37
+lcmey*#n8ZTgs+T^VFH5&0~~aw2wJ%vd&tPZ^7Lz4005h`32FcU
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/modular_pass_shift_lookup.rs b/crates/jxl-oxide-tests/tests/modular_pass_shift_lookup.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..9a5009168f44384a79e2edfc3406531bbf821ff9
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/modular_pass_shift_lookup.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A modular channel shift that no pass covers panicked on an unwrap.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn modular_pass_shift_lookup() {
++    let data = include_bytes!("fuzz_findings/modular_pass_shift_lookup.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

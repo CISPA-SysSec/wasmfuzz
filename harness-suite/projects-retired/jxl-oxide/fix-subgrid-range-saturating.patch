@@ -1,3 +1,11 @@
+render: clamp group and block ranges to the buffers with saturating arithmetic and check the JPEG
+upsampling target size, so regions reaching past a buffer don't panic in the subgrid constructors
+(shared_subgrid.rs: assertion failed: right <= self.width, mutable_subgrid.rs: bottom <=
+self.height). Test: subgrid_range_saturating
+(crates/jxl-oxide-tests/tests/subgrid_range_saturating.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
 diff --git a/crates/jxl-frame/src/data/pass_group.rs b/crates/jxl-frame/src/data/pass_group.rs
 index c518253..228e067 100644
 --- a/crates/jxl-frame/src/data/pass_group.rs
@@ -254,3 +262,43 @@ index 61c1596..9b6389d 100644
      };
  
      impls::transform_varblocks(&lf, coeff_out, shifts_cbycr, &block_info);
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/subgrid_range_saturating.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/subgrid_range_saturating.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..0dd623dccf470983d07f0475315b56583001f28e
+GIT binary patch
+literal 850
+zcmey*mB25@;K9Yj!l1$sJfZ2t(U~VK7#@U$aq|7!&dT7>(AwP4m$7C(hXRKJ1A_u1
+z175(5BI|&{!@_A`$0A6ikOPtGa4S0?k6Vtgj0J|04;Uik3mjk}N3R1GP311h!VV0K
+zECLP(qB<Lx`9Mk-Eg!HjBs8$PqznK1|D?g#Vm$)`2SdjX_FJw~m>2>W7X10^_vQcp
+zcyITI*Z=>&e?pe0BfaROs%LNU%}0OEuSEeYb2R_=H~ECeKlN<?A1JW6&FOW;k^C<|
+zwohxifACISqSM3&zVCe#8dCrN|KFrw<#Sr;ACPrk)=cZee+K4+E0-AmFdwkL({fGx
+zKO@l7KsnE%sy|PTecSj0$kylB!%)3_FOUV)_51(-+nbj^y8ZuuJy2lJQP=0XF8&7|
+z3GF*JU;3>5RPLfs#`U=+Hg^^ai0lk<h?EZYU#bAq6a7_6%G=LJu|w;G=zLWl!5-$+
+zCDWKPfIj<Q?|4r^H~%igz|ZQjG9Q70^FQaNIrA<`Y!gvoy$R$pAG_<YQ{U1s<lQyK
+mD?n#VpLHd-Mn3e~U*$a(J1?ac)qex(_s_8d8uR~u?{@&*YuyF_
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/subgrid_range_saturating.rs b/crates/jxl-oxide-tests/tests/subgrid_range_saturating.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..f86ef8b77ef27b119d731369346888b295b11577
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/subgrid_range_saturating.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A group region extending past the frame buffer panicked in SharedSubgrid::subgrid.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn subgrid_range_saturating() {
++    let data = include_bytes!("fuzz_findings/subgrid_range_saturating.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

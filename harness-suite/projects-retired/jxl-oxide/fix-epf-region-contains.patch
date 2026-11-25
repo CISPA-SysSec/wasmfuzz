@@ -1,0 +1,83 @@
+filter: skip the edge-preserving filter when the padded color region is not inside the frame buffer,
+instead of assert!(region.contains(color_padded_region)) (epf.rs). Test: epf_region_contains
+(crates/jxl-oxide-tests/tests/epf_region_contains.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-render/src/filter/epf.rs b/crates/jxl-render/src/filter/epf.rs
+index 4f4f4dc..34333cf 100644
+--- a/crates/jxl-render/src/filter/epf.rs
++++ b/crates/jxl-render/src/filter/epf.rs
+@@ -22,7 +22,9 @@ pub fn apply_epf<S: Sample>(
+     let _guard = span.enter();
+ 
+     let region = fb_image.regions_and_shifts()[0].0;
+-    assert!(region.contains(color_padded_region));
++    if !region.contains(color_padded_region) {
++        return;
++    }
+     let left = region.left.abs_diff(color_padded_region.left) as usize;
+     let top = region.top.abs_diff(color_padded_region.top) as usize;
+     let right = left + color_padded_region.width as usize;
+diff --git a/crates/jxl-oxide-tests/tests/epf_region_contains.rs b/crates/jxl-oxide-tests/tests/epf_region_contains.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..5102deb27ef5e0c7d34fc540a0581e8757419f81
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/epf_region_contains.rs
+@@ -0,0 +1,16 @@
++//! Regression test: The edge-preserving filter on a region outside the frame buffer hit an assert.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn epf_region_contains() {
++    let data = include_bytes!("fuzz_findings/epf_region_contains.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/epf_region_contains.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/epf_region_contains.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e5cb82f3c8eacbd3ca4fb2d8a350bcd50ce1ce8
+GIT binary patch
+literal 2178
+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
+Vy1qk0RGNSfK;swmCQjY#^CzW+YF_{V
+
+literal 0
+HcmV?d00001
+

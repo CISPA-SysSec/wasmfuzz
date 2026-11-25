@@ -1,0 +1,75 @@
+render: return an error when the LF frame of a VarDCT frame is smaller than the frame's LF image.
+render_vardct reads the LF coefficients from the LF frame at the frame's own block positions. The
+LF frame is sized from the image header, but a frame with a custom size can be larger than the
+image, and the reads went past the end of the LF frame (shared_subgrid.rs: coordinate out of
+range). Test: lf_frame_size_mismatch (crates/jxl-oxide-tests/tests/lf_frame_size_mismatch.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/lf_frame_size_mismatch.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/lf_frame_size_mismatch.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..df097d7a2702baf9e73043a547bbd87d3da30ecc
+GIT binary patch
+literal 173
+zcmey*#ULQS$;H6Hpu*6}Vs-4;vl-^v3gNrBjT+=+ComW=0cD_ov7x{Fs9>)z10#!o
+z0|R3Ni;Cl&UUf#jMIp>!6+5;wg6T8}1=AKFlp%d@dKN>^M_=En^wq1=-dFz({`SOX
+Rxwdh+@>W@xGQ#x#{{W^-B2NGS
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/lf_frame_size_mismatch.rs b/crates/jxl-oxide-tests/tests/lf_frame_size_mismatch.rs
+new file mode 100644
+index 0000000..65527ee
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/lf_frame_size_mismatch.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A VarDCT frame larger than the image read LF coefficients past the end of its LF frame.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn lf_frame_size_mismatch() {
++    let data = include_bytes!("fuzz_findings/lf_frame_size_mismatch.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024))
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-render/src/vardct/mod.rs b/crates/jxl-render/src/vardct/mod.rs
+index a634fef..93254ee 100644
+--- a/crates/jxl-render/src/vardct/mod.rs
++++ b/crates/jxl-render/src/vardct/mod.rs
+@@ -98,6 +98,28 @@ pub(crate) fn render_vardct<S: Sample>(
+         (bw * 8, bh * 8)
+     };
+ 
++    if let Some(lf_frame) = lf_frame {
++        // LF coefficients are read from the LF frame at frame-relative block positions, so
++        // the LF frame has to be at least as large as this frame's LF image. It is sized from
++        // the image header, but this frame can have a custom size larger than the image.
++        let lf_header = lf_frame.frame.header();
++        if lf_header.sample_width(1) < width.div_ceil(8) as u32
++            || lf_header.sample_height(1) < height.div_ceil(8) as u32
++        {
++            tracing::error!(
++                lf_width = lf_header.sample_width(1),
++                lf_height = lf_header.sample_height(1),
++                width,
++                height,
++                "LF frame is smaller than the frame"
++            );
++            return Err(jxl_bitstream::Error::ValidationFailed(
++                "LF frame is smaller than the frame",
++            )
++            .into());
++        }
++    }
++
+     let aligned_region = region.container_aligned(frame_header.group_dim());
+     let aligned_lf_region = {
+         // group_dim is multiple of 8

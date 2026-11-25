@@ -1,0 +1,57 @@
+blend: return an error when a patch's reference frame has a different number of color channels than
+the frame, instead of assert_eq!(patch_ref_grid.color_channels(), color_channels) (blend.rs). Test:
+patch_ref_channel_mismatch (crates/jxl-oxide-tests/tests/patch_ref_channel_mismatch.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index 1163b9d..87b211c 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -458,7 +458,12 @@ pub fn patch(
+     use jxl_frame::data::PatchBlendMode;
+ 
+     let color_channels = base_grid.color_channels();
+-    assert_eq!(patch_ref_grid.color_channels(), color_channels);
++    if patch_ref_grid.color_channels() != color_channels {
++        return Err(jxl_bitstream::Error::ValidationFailed(
++            "patch reference grid color channel count mismatch",
++        )
++        .into());
++    }
+     for target in &patch_ref.patch_targets {
+         for (idx, blending_info) in std::iter::repeat_n(&target.blending[0], color_channels)
+             .chain(&target.blending[1..])
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/patch_ref_channel_mismatch.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/patch_ref_channel_mismatch.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..06853fc79ec0890cdd8b0f476a671b3ab4eece17
+GIT binary patch
+literal 81
+zcmey*rQqNoA<DqOz{Hcl!l1z5S<t|;?+4SHj5r1c<_0z<h8%{11I?#rI&KnGVgf2-
+lxZRo~C6)5~<S7o31A+fP$~I0;ueny1CNgPbmjVMr2mqxr8gu{v
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/patch_ref_channel_mismatch.rs b/crates/jxl-oxide-tests/tests/patch_ref_channel_mismatch.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..009c0539657b53d03cc15dcb336e3eb489898992
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/patch_ref_channel_mismatch.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A patch reference frame with a different number of color channels hit an assert_eq.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn patch_ref_channel_mismatch() {
++    let data = include_bytes!("fuzz_findings/patch_ref_channel_mismatch.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

@@ -1,0 +1,148 @@
+modular: don't build the MA lookup table for split values of i32::MIN or i32::MAX; value + 1 and
+lower_bound - 1 overflowed and produced out-of-range table indices (ma.rs: range end index out of
+range). Test: ma_table_bound_overflow (crates/jxl-oxide-tests/tests/ma_table_bound_overflow.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-modular/src/ma.rs b/crates/jxl-modular/src/ma.rs
+index d76e09e..1e59b8f 100644
+--- a/crates/jxl-modular/src/ma.rs
++++ b/crates/jxl-modular/src/ma.rs
+@@ -502,6 +502,12 @@ impl MaTreeNode {
+         else {
+             return None;
+         };
++        // `value + 1` and `lower_bound - 1` below overflow i32 at the extremes (wrapping in
++        // release builds and producing out-of-range table indices). Fall back to the regular
++        // decision tree for such values.
++        if value == i32::MIN || value == i32::MAX {
++            return None;
++        }
+ 
+         let mut lower_bound = value;
+         let mut upper_bound = value;
+@@ -526,7 +532,10 @@ impl MaTreeNode {
+             };
+             let new_lower_bound = lower_bound.min(value);
+             let new_upper_bound = upper_bound.max(value);
+-            if new_upper_bound.abs_diff(new_lower_bound) > 1024 - 2 {
++            if value == i32::MIN
++                || value == i32::MAX
++                || new_upper_bound.abs_diff(new_lower_bound) > 1024 - 2
++            {
+                 range_nodes.push((node, *range.end()));
+                 continue;
+             }
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/ma_table_bound_overflow.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/ma_table_bound_overflow.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..d4ba7ef23545ba2dba1410e5d6568014477e7c04
+GIT binary patch
+literal 4239
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/ma_table_bound_overflow.rs b/crates/jxl-oxide-tests/tests/ma_table_bound_overflow.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..804fa46a40f49da9270b941253f2cacb1915e757
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/ma_table_bound_overflow.rs
+@@ -0,0 +1,16 @@
++//! Regression test: An MA tree split value of i32::MIN or i32::MAX overflowed the lookup table bounds.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn ma_table_bound_overflow() {
++    let data = include_bytes!("fuzz_findings/ma_table_bound_overflow.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

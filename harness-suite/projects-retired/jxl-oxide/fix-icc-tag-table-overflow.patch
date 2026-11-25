@@ -1,0 +1,72 @@
+color: compute the ICC tag table end and the tag ends in u64. 12 * tag_count and offset + tag_size
+overflowed and wrapped past the bounds checks, and slicing the profile panicked (parse.rs: range end
+index out of range). Test: icc_tag_table_overflow
+(crates/jxl-oxide-tests/tests/icc_tag_table_overflow.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-color/src/icc/parse.rs b/crates/jxl-color/src/icc/parse.rs
+index abf38c6..2692e5c 100644
+--- a/crates/jxl-color/src/icc/parse.rs
++++ b/crates/jxl-color/src/icc/parse.rs
+@@ -260,20 +260,23 @@ pub(crate) fn parse_icc_raw(profile: &[u8]) -> Result<IccProfile<'_>> {
+ 
+     let tag_count =
+         u32::from_be_bytes([profile[0x80], profile[0x81], profile[0x82], profile[0x83]]);
+-    if size < 0x84 + 12 * tag_count {
++    // Compute in u64: `12 * tag_count` and `offset + tag_size` can overflow u32 (and usize on
++    // 32-bit targets), wrapping past the bounds checks below.
++    let tag_list_end = 0x84u64 + 12 * tag_count as u64;
++    if (size as u64) < tag_list_end {
+         return Err(Error::IccParseFailure(
+             "unexpected end of profile while reading tag list",
+         ));
+     }
+ 
+     let mut tags = Vec::new();
+-    let tag_bytes = &profile[0x84..][..12 * tag_count as usize];
++    let tag_bytes = &profile[0x84..tag_list_end as usize];
+     for raw_tag in tag_bytes.chunks_exact(12) {
+         let tag = [raw_tag[0], raw_tag[1], raw_tag[2], raw_tag[3]];
+         let offset = u32::from_be_bytes([raw_tag[4], raw_tag[5], raw_tag[6], raw_tag[7]]);
+         let tag_size = u32::from_be_bytes([raw_tag[8], raw_tag[9], raw_tag[10], raw_tag[11]]);
+-        let tag_end = offset + tag_size;
+-        if size < tag_end {
++        let tag_end = offset as u64 + tag_size as u64;
++        if (size as u64) < tag_end {
+             return Err(Error::IccParseFailure(
+                 "unexpected end of profile while reading tag data",
+             ));
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/icc_tag_table_overflow.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/icc_tag_table_overflow.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..288f7c8024fe7ea424eeb2c28e8aa98515703797
+GIT binary patch
+literal 79
+zcmey*wU~k9>138Ao(|7im?tr0q$u#rN?~MVV0;1Ocf<LNK=5DTKZs&vpEUjMe+NEB
+T1)jwzjBIb>K&pY@JrDx`@Ol<3
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/icc_tag_table_overflow.rs b/crates/jxl-oxide-tests/tests/icc_tag_table_overflow.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a424cd56b7ea29c1ade5c390f379d11aae63fec8
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/icc_tag_table_overflow.rs
+@@ -0,0 +1,16 @@
++//! Regression test: An ICC tag table whose end overflows u32 slipped past the bounds check.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn icc_tag_table_overflow() {
++    let data = include_bytes!("fuzz_findings/icc_tag_table_overflow.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

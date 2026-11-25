@@ -2,7 +2,6 @@ set -e
 git clone-rev.sh https://github.com/tirr-c/jxl-oxide.git "$PROJECT/repo" c0cc4c7ea57c1207f38ff2970d94757470613be4
 git -C "$PROJECT/repo" apply ../limit-jbr-decode-resources.patch
 git -C "$PROJECT/repo" apply ../port-wasi-render-wait-no-trace.patch
-git -C "$PROJECT/repo" apply ../fix-dct-common-mutex-reentrancy.patch
 git -C "$PROJECT/repo" apply ../port-tracing-release-max-level-off.patch
 git -C "$PROJECT/repo" apply ../port-wasi-composite-drop-render-lock.patch
 git -C "$PROJECT/repo" apply ../fix-blend-subgrid-bounds.patch
@@ -29,3 +28,7 @@ git -C "$PROJECT/repo" apply ../fix-icc-tag-table-overflow.patch
 git -C "$PROJECT/repo" apply ../fix-patch-empty-ref-grid.patch
 git -C "$PROJECT/repo" apply ../fix-vardct-modular-region-block-aligned.patch
 git -C "$PROJECT/repo" apply ../fix-ma-table-bound-overflow.patch
+git -C "$PROJECT/repo" apply ../fix-lf-frame-color-channels.patch
+git -C "$PROJECT/repo" apply ../fix-lf-frame-size-mismatch.patch
+git -C "$PROJECT/repo" apply ../fix-varblock-chroma-subsampling.patch
+git -C "$PROJECT/repo" apply ../fix-spline-position-bounds.patch

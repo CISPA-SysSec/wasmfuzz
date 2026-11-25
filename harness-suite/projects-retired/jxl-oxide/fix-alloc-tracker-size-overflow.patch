@@ -1,0 +1,59 @@
+grid: return OutOfMemory from AllocTracker::alloc when count * size_of::<T>() overflows. On 32-bit
+targets the product wrapped, the request passed the limit, and the following allocation panicked
+(capacity overflow). Test: alloc_tracker_size_overflow
+(crates/jxl-oxide-tests/tests/alloc_tracker_size_overflow.rs). The input only fails on 32-bit
+targets (upstream CI runs the tests on armv7).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-grid/src/alloc_tracker.rs b/crates/jxl-grid/src/alloc_tracker.rs
+index 131e1ab..031fd9a 100644
+--- a/crates/jxl-grid/src/alloc_tracker.rs
++++ b/crates/jxl-grid/src/alloc_tracker.rs
+@@ -28,7 +28,11 @@ impl AllocTracker {
+     ///
+     /// Returns an error if the allocation exceeds the current limit.
+     pub fn alloc<T>(&self, count: usize) -> Result<AllocHandle, crate::OutOfMemory> {
+-        let bytes = count * std::mem::size_of::<T>();
++        // Unchecked on 32-bit targets this wraps, so a huge request passes the limit and the
++        // following `vec!` panics with "capacity overflow" instead of reporting OutOfMemory.
++        let Some(bytes) = count.checked_mul(std::mem::size_of::<T>()) else {
++            return Err(crate::OutOfMemory::new(usize::MAX));
++        };
+         let result = self.inner.bytes_left.fetch_update(
+             Ordering::Relaxed,
+             Ordering::Relaxed,
+diff --git a/crates/jxl-oxide-tests/tests/alloc_tracker_size_overflow.rs b/crates/jxl-oxide-tests/tests/alloc_tracker_size_overflow.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..d51a78638febdb54db81c415393e34d20e58f667
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/alloc_tracker_size_overflow.rs
+@@ -0,0 +1,17 @@
++//! Regression test: An allocation size that overflows usize passed the allocation tracker.
++//! Only fails on 32-bit targets.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn alloc_tracker_size_overflow() {
++    let data = include_bytes!("fuzz_findings/alloc_tracker_size_overflow.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/alloc_tracker_size_overflow.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/alloc_tracker_size_overflow.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..10912a46f1b759a94fcf0cb068e7a133bf8e9908
+GIT binary patch
+literal 1784
+zcmey*rI6sv(C~`+pC{A3L^B5_rW>r=`5g=t85kHMfOr&)hQMeDjE2By2#kin&<p`b
+Yfot=%Bw15Hu4iUYVB~)NkFj7501H75UjP6A
+
+literal 0
+HcmV?d00001
+

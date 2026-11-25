@@ -1,0 +1,105 @@
+frame: bound spline control points and their deltas as libjxl does (ValidateSplinePointPos:
+coordinates and accumulated deltas below 2^23 in magnitude, delta-deltas below 2^30). Splines are
+rendered in f32, and at coordinates around 2^24 and above a step of one unit along the spline no
+longer changes the position, so Spline::get_samples never reached the end of a segment and grew its
+list of arcs without bound: "capacity overflow" on 32-bit targets, unbounded memory use and a hang
+on 64-bit ones. The parse-time checks of fix-spline-point-count-overflow bound the number of
+points, not their positions, so they don't catch this; this patch goes after it in the same
+function. Test: spline_position_bounds (crates/jxl-oxide-tests/tests/spline_position_bounds.rs);
+without the fix it fails with "capacity overflow" on i686 and does not finish on x86_64.
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-frame/src/data/spline.rs b/crates/jxl-frame/src/data/spline.rs
+index 3bf3e1f..31e6d6a 100644
+--- a/crates/jxl-frame/src/data/spline.rs
++++ b/crates/jxl-frame/src/data/spline.rs
+@@ -103,6 +103,19 @@ impl Splines {
+     }
+ }
+ 
++/// Bounds spline coordinates and accumulated deltas, as libjxl does. Rendering works in `f32`,
++/// which can't step along a spline by unit arc lengths at larger coordinates.
++fn validate_spline_point_pos(x: i64, y: i64) -> std::result::Result<(), jxl_bitstream::Error> {
++    const SPLINE_POS_LIMIT: i64 = 1 << 23;
++    if x.abs() >= SPLINE_POS_LIMIT || y.abs() >= SPLINE_POS_LIMIT {
++        tracing::error!(x, y, "Spline coordinates out of bounds");
++        return Err(jxl_bitstream::Error::ValidationFailed(
++            "spline coordinates out of bounds",
++        ));
++    }
++    Ok(())
++}
++
+ #[inline]
+ fn log2_ceil(x: u64) -> u32 {
+     x.next_power_of_two().trailing_zeros()
+@@ -188,14 +201,24 @@ impl Bundle<QuantSplineParams<'_>> for QuantSpline {
+         let mut cur_value = start_point;
+         let mut cur_delta = (0, 0);
+         let mut manhattan_distance = 0u64;
++        validate_spline_point_pos(cur_value.0, cur_value.1)?;
+         quant_points.push(cur_value);
+         for _ in 0..num_points {
+             let prev_value = cur_value;
+             let delta_x = unpack_signed(decoder.read_varint(bitstream, 4)?) as i64;
+             let delta_y = unpack_signed(decoder.read_varint(bitstream, 4)?) as i64;
++            const DELTA_LIMIT: i64 = 1 << 30;
++            if delta_x.abs() >= DELTA_LIMIT || delta_y.abs() >= DELTA_LIMIT {
++                tracing::error!(delta_x, delta_y, "Spline delta-delta out of bounds");
++                return Err(jxl_bitstream::Error::ValidationFailed(
++                    "spline delta-delta out of bounds",
++                )
++                .into());
++            }
+ 
+             cur_delta.0 += delta_x;
+             cur_delta.1 += delta_y;
++            validate_spline_point_pos(cur_delta.0, cur_delta.1)?;
+             manhattan_distance += (cur_delta.0.abs() + cur_delta.1.abs()) as u64;
+             cur_value.0 = cur_value.0.checked_add(cur_delta.0).ok_or(
+                 jxl_bitstream::Error::ValidationFailed("control point overflowed"),
+@@ -203,6 +226,7 @@ impl Bundle<QuantSplineParams<'_>> for QuantSpline {
+             cur_value.1 = cur_value.1.checked_add(cur_delta.1).ok_or(
+                 jxl_bitstream::Error::ValidationFailed("control point overflowed"),
+             )?;
++            validate_spline_point_pos(cur_value.0, cur_value.1)?;
+             if cur_value == prev_value {
+                 return Err(jxl_bitstream::Error::ValidationFailed(
+                     "two consecutive control points have the same value",
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/spline_position_bounds.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/spline_position_bounds.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..930ac239254794e2383dc712d7bd9c717f3e0c1b
+GIT binary patch
+literal 245
+zcmey*Rlp#?!^Obp!pO+Lz|NGwprBvqa)KpuflMU>6a@TdN|~Jk1P>V}+?D4oWK2)@
+zO;1k;%Jy(F{9<76_g5(8Q)FN?28u9oeHQ=f@R0GVz{7tZ{?{8EO*_oM!UQpB5<_1`
+z4ikq$0|OI>$Hpm!AEN{<AAsc~7C&ZVs9-qqd7j66<?QXIMHUPU3ET`E3J0z+GN>#o
+zE$<GlZ@5+d%;(bT@bzp!(|%m||Np-o5ZB*R+*`EG{O{?MN!dalSW?3Dc73~N{QSy-
+gRj=|Qw0{9r?7x~nD{<+jcarQ33a1$O8CV#Y0e`(%!2kdN
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/spline_position_bounds.rs b/crates/jxl-oxide-tests/tests/spline_position_bounds.rs
+new file mode 100644
+index 0000000..0a22038
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/spline_position_bounds.rs
+@@ -0,0 +1,16 @@
++//! Regression test: Spline control points far outside the image made spline rendering loop without end.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn spline_position_bounds() {
++    let data = include_bytes!("fuzz_findings/spline_position_bounds.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024))
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

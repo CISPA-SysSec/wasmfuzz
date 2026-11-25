@@ -1,3 +1,15 @@
+blend: skip blend_single when the clipped region of the new frame is empty, return an error for a
+zero-sized new channel, and reject empty base regions; borrowing a zero-sized buffer as a subgrid
+panicked (shared_subgrid.rs: assertion failed: width > 0).
+
+No regression test: the decode harness only calls render_frame(). The one input found,
+blend_empty_grid.fuzz from tirr-c/jxl-oxide#516, reaches the empty region through
+render_loading_frame(); there it panics without this patch and passes with it, and through
+render_frame() it decodes fine either way. About 380k decode harness inputs never hit these
+branches. Kept as a defensive change.
+
+Upstream: open PR tirr-c/jxl-oxide#516 (by nguyenthuan155632, 2026-11-13) fixes the same SharedSubgrid "width > 0" panic by skipping blend_single() when the clipped region is empty; it does not add our left >= right / top >= bottom guards. Drop the matching hunk once #516 lands.
+
 diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
 index 42e1366..0c15c28 100644
 --- a/crates/jxl-render/src/blend.rs

@@ -1,0 +1,56 @@
+blend: return an error when the reference frame has a different number of color channels than the
+frame being blended, instead of assert_eq!(base_grid.color_channels(), color_channels). Test:
+blend_color_channel_mismatch (crates/jxl-oxide-tests/tests/blend_color_channel_mismatch.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-render/src/blend.rs b/crates/jxl-render/src/blend.rs
+index 0c15c28..a8f3e21 100644
+--- a/crates/jxl-render/src/blend.rs
++++ b/crates/jxl-render/src/blend.rs
+@@ -253,7 +253,12 @@ pub(crate) fn blend<S: Sample>(
+ 
+             let base_grid_render = Arc::clone(&grid.image).run_with_image()?;
+             let base_grid = base_grid_render.blend(Some(output_image_region), pool)?;
+-            assert_eq!(base_grid.color_channels(), color_channels);
++            if base_grid.color_channels() != color_channels {
++                return Err(jxl_bitstream::Error::ValidationFailed(
++                    "blend base grid color channel count mismatch",
++                )
++                .into());
++            }
+ 
+             if base_grid.regions_and_shifts()[idx].0.is_empty() {
+                 clone_empty = true;
+diff --git a/crates/jxl-oxide-tests/tests/blend_color_channel_mismatch.rs b/crates/jxl-oxide-tests/tests/blend_color_channel_mismatch.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd6439155efe7f76436d0407da968ad3b2ee50d3
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/blend_color_channel_mismatch.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A reference frame with a different number of color channels hit an assert_eq in blend.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn blend_color_channel_mismatch() {
++    let data = include_bytes!("fuzz_findings/blend_color_channel_mismatch.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/blend_color_channel_mismatch.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/blend_color_channel_mismatch.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd3353e5109486da78b6435835c8e3647e75e1b9
+GIT binary patch
+literal 50
+scmey*#gHH{MZu4Ofr&wZ!Ly)&WgiO*3!eiEf~W4$00oSm+qP~403%%u^Z)<=
+
+literal 0
+HcmV?d00001
+

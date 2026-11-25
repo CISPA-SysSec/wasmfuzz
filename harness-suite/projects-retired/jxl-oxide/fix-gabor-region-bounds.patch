@@ -1,3 +1,9 @@
+filter: return an error from apply_gabor_like when the padded color region is not inside the frame
+buffer, instead of assert!(region.contains(color_padded_region)), and clamp the subgrid ranges.
+Test: gabor_region_bounds (crates/jxl-oxide-tests/tests/gabor_region_bounds.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
 diff --git a/crates/jxl-render/src/filter/gabor.rs b/crates/jxl-render/src/filter/gabor.rs
 --- a/crates/jxl-render/src/filter/gabor.rs
 +++ b/crates/jxl-render/src/filter/gabor.rs
@@ -72,3 +78,44 @@ diff --git a/crates/jxl-render/src/render.rs b/crates/jxl-render/src/render.rs
          scratch_buffer = Some(fb_scratch);
      }
  
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/gabor_region_bounds.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/gabor_region_bounds.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..2f8c46acd403e19cf689506c8483f3e54929cc69
+GIT binary patch
+literal 507
+zcmV<X0R;a43OIls1jqymT>t<;03-ka0DuAj0002MH2?qr0DvP?kfg}PnaDT*V|Hkp
+zL$OU4@DbXTBG~&$WJ>#NkO$<#7C9!MJTUOu8}qkB0<v8WWuK0Jf2c)rcIq4*a)0wC
+zIpgsaZjFH?A0hz&5>!KB(acrer>as9gGhb;9#PRU(O4pO@)o5z%a4k$mCcnHzQUCO
+z@uvtl(}PZ2&Ch)q=<@>bpbQ~fy^9bcVV?XCadA^)*_2p+2)V-rO1LEJm?XZXa8Kzm
+z)viS?DGodeLBC&ZUtH*WOy0i9@-E|S=!%j5<H|Z9tFD%%7@o{k^LVea7y;1f>s2E+
+z-ILZYRMoCP?PJ5mNW$vRokN}<*2e!3Of#RkRNS5p*39hf4@sP8-|l!xs3>fqgw=#$
+z$F@}%AyXOMh2oUEReVt!-R19|q9ur+5IGg-h+yJK+W-I6Ij(|6@0IVhfUI|$_ubH6
+zLZP%W?@Cx~Z9G0&gxZ5I{@;9)h?i9H@0G5zTB8#V8I&gOXo7!%%~Z4okU_cvxIggV
+z)<hCG2mqlAG5|CI00000000000Q)~v7m)$zh{h&>00IagfPl3U0S6oa00002a=-}y
+xzyJ$~&L;f-|K~9QM(#>!QG}x^oGOw4G+}9oU)F}!Nm4(h03QGV000000035Y;g$dZ
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/gabor_region_bounds.rs b/crates/jxl-oxide-tests/tests/gabor_region_bounds.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..6d4c50f941ac13ae368f7a9053b5cfea97621146
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/gabor_region_bounds.rs
+@@ -0,0 +1,16 @@
++//! Regression test: Gabor-like filtering of a region outside the frame buffer hit an assert.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn gabor_region_bounds() {
++    let data = include_bytes!("fuzz_findings/gabor_region_bounds.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

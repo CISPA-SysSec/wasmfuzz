@@ -1,0 +1,71 @@
+render: clone the gray channel before JPEG chroma upsampling when the frame buffer has fewer than
+three color channels, and return an error in upsample_jpeg instead of
+assert_eq!(self.color_channels, 3). Test: upsample_jpeg_grayscale
+(crates/jxl-oxide-tests/tests/upsample_jpeg_grayscale.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-render/src/image.rs b/crates/jxl-render/src/image.rs
+index 8ff6e6b..a2c1d4e 100644
+--- a/crates/jxl-render/src/image.rs
++++ b/crates/jxl-render/src/image.rs
+@@ -450,7 +450,12 @@ impl ImageWithRegion {
+         valid_region: Region,
+         bit_depth: BitDepth,
+     ) -> Result<()> {
+-        assert_eq!(self.color_channels, 3);
++        if self.color_channels != 3 {
++            return Err(jxl_bitstream::Error::ValidationFailed(
++                "jpeg upsample requires three color channels",
++            )
++            .into());
++        }
+         self.convert_modular_color(bit_depth)?;
+ 
+         for (g, (region, shift)) in self.buffer.iter_mut().zip(&mut self.regions).take(3) {
+diff --git a/crates/jxl-render/src/render.rs b/crates/jxl-render/src/render.rs
+index 497407e..64893e9 100644
+--- a/crates/jxl-render/src/render.rs
++++ b/crates/jxl-render/src/render.rs
+@@ -68,6 +68,9 @@ pub(crate) fn render_frame<S: Sample>(
+     };
+ 
+     if frame_header.do_ycbcr {
++        if fb.color_channels() < 3 {
++            fb.clone_gray()?;
++        }
+         fb.upsample_jpeg(color_padded_region, image_header.metadata.bit_depth)?;
+     }
+ 
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/upsample_jpeg_grayscale.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/upsample_jpeg_grayscale.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..c63adfa73b234c1a2055b54966c41d9b2a71cdca
+GIT binary patch
+literal 30
+lcmey*#ULOsMS+WrfkB4Bvw>xw3k%BwX8{HVhWreMbO2$a22ub3
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/upsample_jpeg_grayscale.rs b/crates/jxl-oxide-tests/tests/upsample_jpeg_grayscale.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..d7456379a9a11d4894f901cebd22f7358254568a
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/upsample_jpeg_grayscale.rs
+@@ -0,0 +1,16 @@
++//! Regression test: JPEG chroma upsampling of a grayscale frame buffer hit assert_eq!(self.color_channels, 3).
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn upsample_jpeg_grayscale() {
++    let data = include_bytes!("fuzz_findings/upsample_jpeg_grayscale.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}

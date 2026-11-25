@@ -1,0 +1,65 @@
+render: when a VarDCT frame's modular image uses palette or squeeze (and is decoded whole), size the
+modular region to the block-aligned frame, as a full-frame render does; compute_modular_region could
+return a size that is not whole blocks, and appending the modular channels to the frame buffer hit
+assert_eq!(buffer.width(), width) (image.rs). Test: vardct_modular_region_block_aligned
+(crates/jxl-oxide-tests/tests/vardct_modular_region_block_aligned.rs).
+
+Upstream: not reported; the code is unchanged at upstream HEAD (c0cc4c7, 2026-08-15).
+
+diff --git a/crates/jxl-render/src/vardct/mod.rs b/crates/jxl-render/src/vardct/mod.rs
+index 11e0bb6..fa6ede0 100644
+--- a/crates/jxl-render/src/vardct/mod.rs
++++ b/crates/jxl-render/src/vardct/mod.rs
+@@ -123,8 +123,15 @@ pub(crate) fn render_vardct<S: Sample>(
+         width_rounded as u32 / 8,
+         height_rounded as u32 / 8,
+     ));
+-    let modular_region =
+-        modular::compute_modular_region(frame_header, &gmodular, aligned_region, false);
++    let modular_region = if gmodular.modular.has_palette() || gmodular.modular.has_squeeze() {
++        // The whole modular image is decoded. `compute_modular_region` sizes it to the color
++        // sample size, which need not be a whole number of (upsampled) 8x8 blocks when `region`
++        // doesn't cover the frame; the VarDCT frame buffer below is always block-aligned.
++        // Use the block-aligned full size, as a full-frame render would.
++        Region::with_size(width_rounded as u32, height_rounded as u32)
++    } else {
++        modular::compute_modular_region(frame_header, &gmodular, aligned_region, false)
++    };
+     let modular_lf_region =
+         modular::compute_modular_region(frame_header, &gmodular, aligned_lf_region, true)
+             .intersection(Region::with_size(
+diff --git a/crates/jxl-oxide-tests/tests/fuzz_findings/vardct_modular_region_block_aligned.fuzz b/crates/jxl-oxide-tests/tests/fuzz_findings/vardct_modular_region_block_aligned.fuzz
+new file mode 100644
+index 0000000000000000000000000000000000000000..9995873c9e219f4f01a62480dda81b59dbcfb641
+GIT binary patch
+literal 204
+zcmey*b-utMf{9@PGsB0ax8)zy$1pH(EaFgbV9sG+VPOCQZq{;_WMKyeMiv1F1_e*`
+zm+^|97-C`=`}_Ml-}p^%kdc>{H<D)n5{1(k{&W3jXRNvKpNRvglf6E*o<S(3BgJoy
+zg4Lx*Gg3BkTCRO4^XSnd=YZt@bA$;Q-`~&hAp06ma9kPCE*Nu0-@l`;>JGud|NsB2
+M7j3L#;!tP+0F8r6l>h($
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/jxl-oxide-tests/tests/vardct_modular_region_block_aligned.rs b/crates/jxl-oxide-tests/tests/vardct_modular_region_block_aligned.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..de8611afe4a53a68dd2bcd979a4fb54a90175bab
+--- /dev/null
++++ b/crates/jxl-oxide-tests/tests/vardct_modular_region_block_aligned.rs
+@@ -0,0 +1,16 @@
++//! Regression test: A VarDCT frame with a palette or squeeze modular image hit a size assert.
++
++use jxl_oxide::{AllocTracker, JxlImage};
++
++#[test]
++fn vardct_modular_region_block_aligned() {
++    let data = include_bytes!("fuzz_findings/vardct_modular_region_block_aligned.fuzz");
++    let image = JxlImage::builder()
++        .alloc_tracker(AllocTracker::with_limit(128 * 1024 * 1024)) // 128 MiB
++        .read(std::io::Cursor::new(data));
++    if let Ok(image) = image {
++        for keyframe_idx in 0..image.num_loaded_keyframes() {
++            let _ = image.render_frame(keyframe_idx);
++        }
++    }
++}
