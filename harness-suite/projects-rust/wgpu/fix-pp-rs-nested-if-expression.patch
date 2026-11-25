@@ -1,0 +1,66 @@
+diff --git a/src/pp/if_parser.rs b/src/pp/if_parser.rs
+index 07505a3..ea4610d 100644
+--- a/src/pp/if_parser.rs
++++ b/src/pp/if_parser.rs
+@@ -15,8 +15,13 @@ pub(super) struct IfParser<'macros> {
+ 
+     parsing_if: bool,
+     carry: Option<Token>,
++    // Nesting depth of unary operators and parentheses, see parse_unary.
++    depth: u32,
+ }
+ 
++// Parentheses and unary operators recurse on the native stack.
++const MAX_EXPRESSION_DEPTH: u32 = 64;
++
+ impl<'macros> IfParser<'macros> {
+     /// Builds a new IfParser that can be reused
+     ///
+@@ -38,6 +43,7 @@ impl<'macros> IfParser<'macros> {
+ 
+             parsing_if,
+             carry: None,
++            depth: 0,
+         }
+     }
+ 
+@@ -190,6 +196,20 @@ impl<'macros> IfParser<'macros> {
+     }
+ 
+     fn parse_unary(&mut self) -> Step<i64> {
++        if self.depth >= MAX_EXPRESSION_DEPTH {
++            return Err(StepExit::Error((
++                PreprocessorError::RecursionLimitReached,
++                self.location,
++            )));
++        }
++
++        self.depth += 1;
++        let val = self.parse_unary_nested();
++        self.depth -= 1;
++        val
++    }
++
++    fn parse_unary_nested(&mut self) -> Step<i64> {
+         match self.expect_peek()?.value {
+             TokenValue::Punct(punct) => match punct {
+                 Punct::Plus | Punct::Minus | Punct::Bang | Punct::Tilde => {
+diff --git a/src/pp_tests.rs b/src/pp_tests.rs
+index 9804665..277ea14 100644
+--- a/src/pp_tests.rs
++++ b/src/pp_tests.rs
+@@ -1425,3 +1425,14 @@ fn recursive_define_in_parameter() {
+         "1",
+     );
+ }
++
++#[test]
++fn deeply_nested_if_expression() {
++    let nested = |n: usize| format!("#if {}1{}\nA\n#endif", "(".repeat(n), ")".repeat(n));
++    check_preprocessed_result(&nested(32), "A");
++    check_preprocessing_error(&nested(10_000), PreprocessorError::RecursionLimitReached);
++    check_preprocessing_error(
++        &format!("#if {}1\nA\n#endif", "!".repeat(10_000)),
++        PreprocessorError::RecursionLimitReached,
++    );
++}

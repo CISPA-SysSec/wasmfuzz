@@ -1,5 +1,18 @@
+Return early from ARMT_Convert() for buffers shorter than one 4-byte instruction.
+
+ARMT_Convert() computes lim = data + size - 4 before its first bounds check. The 7z reader
+calls the folder's branch filter even when the folder unpacks to 0 bytes, with a NULL output
+buffer: a 7z archive whose encoded header is a Copy + ARMT folder of unpack size 0 makes
+SzReadAndDecodePackedStreams() call ARMT_Convert(NULL, 0, ...). lim then wraps to just below
+the top of the address space, the p > lim exit never fires, and the loop reads from address 1
+(ASan SEGV in the oss-fuzz/CI build of 7z_fuzzer, out-of-bounds trap in wasm). Adds
+corpus/7z_fuzzer/armt_empty_header.7z (58 bytes, valid CRCs), which the CI's "Run fuzzer
+against corpus" step runs: it crashes 7z_fuzzer without the fix and passes with it.
+Upstream: 7-Zip 23.01+ rewrote Bra.c and BranchConv_ARMT returns early for size <= 2, so the bug is fixed in 7-Zip itself; lzma-fuzz still vendors the old SDK, and its open PR fancycode/lzma-fuzz#4 (2024-04-16) updates it to 23.01.
+Drop this patch once #4 lands or the SDK is updated.
+
 diff --git a/sdk/C/Bra.c b/sdk/C/Bra.c
-index b57c9de..d2d5ecf 100644
+index aed17e3..657dd24 100644
 --- a/sdk/C/Bra.c
 +++ b/sdk/C/Bra.c
 @@ -66,6 +66,10 @@ SizeT ARMT_Convert(Byte *data, SizeT size, UInt32 ip, int encoding)
@@ -13,3 +26,14 @@ index b57c9de..d2d5ecf 100644
    p = data;
    lim = data + size - 4;
  
+diff --git a/corpus/7z_fuzzer/armt_empty_header.7z b/corpus/7z_fuzzer/armt_empty_header.7z
+new file mode 100644
+index 0000000000000000000000000000000000000000..0ec9dddd1bac681217e42366e3081276e3babb07
+GIT binary patch
+literal 58
+zcmXr7+Ou9=hJoeU`=C<{P#^`R4}?6o5ocpy<YZuA=VoMJVq{=pW@cw(WZ(fQ003Jz
+B2l4;_
+
+literal 0
+HcmV?d00001
+

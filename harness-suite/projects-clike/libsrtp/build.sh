@@ -16,11 +16,12 @@ BSSL_LIB="$PROJECT/boringssl/build/libcrypto.a"
 # --- libsrtp (upstream HEAD, 3.x) with the OpenSSL backend on BoringSSL; the
 # source list matches CMakeLists.txt for CRYPTO_LIBRARY=openssl. The -D set
 # replaces the CMake-generated config.h (an empty one satisfies HAVE_CONFIG_H).
+# Upstream fea3c74 renamed GCM to HAVE_GCM (+ HAVE_AES_192); 5ad4fbf added crypto_backend.c.
 cd "$PROJECT/libsrtp"
 SRTP_DEFS=(
   -DPACKAGE_STRING='"libsrtp3 3.0.0"'
   -DPACKAGE_VERSION='"3.0.0"'
-  -DHAVE_CONFIG_H -DOPENSSL -DGCM
+  -DHAVE_CONFIG_H -DOPENSSL -DHAVE_GCM -DHAVE_AES_192
   -DHAVE_STDLIB_H -DHAVE_STDINT_H -DHAVE_INTTYPES_H
   -DHAVE_INT32_T -DHAVE_UINT8_T -DHAVE_UINT16_T -DHAVE_UINT32_T -DHAVE_UINT64_T
   -DHAVE_ARPA_INET_H -DHAVE_NETINET_IN_H -DHAVE_SYS_TYPES_H -DHAVE_UNISTD_H -DHAVE_INLINE
@@ -30,7 +31,7 @@ SRTP_SRCS=(
   crypto/cipher/aes_gcm_ossl.c crypto/cipher/aes_icm_ossl.c crypto/cipher/cipher.c
   crypto/cipher/cipher_test_cases.c crypto/cipher/null_cipher.c
   crypto/hash/auth.c crypto/hash/auth_test_cases.c crypto/hash/hmac_ossl.c crypto/hash/null_auth.c
-  crypto/kernel/alloc.c crypto/kernel/crypto_kernel.c crypto/kernel/err.c crypto/kernel/key.c
+  crypto/kernel/alloc.c crypto/kernel/crypto_backend.c crypto/kernel/crypto_kernel.c crypto/kernel/err.c crypto/kernel/key.c
   crypto/math/datatypes.c crypto/replay/rdb.c crypto/replay/rdbx.c srtp/srtp.c srtp/srtp_policy.c
 )
 mkdir -p build/config

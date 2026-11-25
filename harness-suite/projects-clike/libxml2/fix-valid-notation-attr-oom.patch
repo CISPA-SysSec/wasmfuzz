@@ -1,0 +1,113 @@
+Subject: [PATCH] valid: Report invalid on malloc failure in xmlValidateAttributeCallback
+
+xmlValidateAttributeCallback (part of xmlValidateDtdFinal) splits the element
+name of NOTATION attribute declarations with xmlSplitQName4. If this
+allocation fails, it reported the memory error but left ctxt->valid set, so
+xmlValidateDocument and xmlCtxtValidateDocument returned 1 (valid) after a
+malloc failure. Set ctxt->valid = 0 like the other error paths of the
+validation.
+
+Found with the valid fuzzer's malloc failure injection
+("xmlCtxtValidateDocument: malloc failure not reported", NOTATION attribute
+declared on a prefixed element name). Regression test
+testValidateNotationOom in testparser.c, which fails each allocation of the
+post validation in turn.
+
+Not fixed upstream as of 21c8223.
+Upstream: none found.
+---
+diff --git a/testparser.c b/testparser.c
+index 9aefe63..9149245 100644
+--- a/testparser.c
++++ b/testparser.c
+@@ -420,6 +420,70 @@ testSwitchDtd(void) {
+ 
+     return err;
+ }
++
++static int
++testValidateNotationOom(void) {
++    /*
++     * Make each allocation of the post validation fail in turn. The
++     * document is valid, so a failed allocation must make
++     * xmlCtxtValidateDocument report invalid with XML_ERR_NO_MEMORY.
++     */
++    const char docContent[] =
++        "<!DOCTYPE p:d [\n"
++        "<!ELEMENT p:d ANY>\n"
++        "<!ATTLIST p:d xmlns:p CDATA #FIXED 'u' a NOTATION (n) #IMPLIED>\n"
++        "<!NOTATION n SYSTEM 'n'>\n"
++        "]>\n"
++        "<p:d/>\n";
++    xmlFreeFunc freeFunc;
++    xmlMallocFunc mallocFunc;
++    xmlReallocFunc reallocFunc;
++    xmlStrdupFunc strdupFunc;
++    int err = 0;
++
++    xmlMemGet(&freeFunc, &mallocFunc, &reallocFunc, &strdupFunc);
++
++    for (testFailAllocNum = 1; ; testFailAllocNum++) {
++        xmlParserCtxtPtr ctxt;
++        xmlDocPtr doc;
++        int valid, failed;
++
++        ctxt = xmlNewParserCtxt();
++        doc = xmlCtxtReadMemory(ctxt, docContent, sizeof(docContent) - 1,
++                                NULL, NULL, XML_PARSE_NOERROR);
++        if (doc == NULL) {
++            fprintf(stderr, "testValidateNotationOom: parse failed\n");
++            xmlFreeParserCtxt(ctxt);
++            return(1);
++        }
++        xmlCtxtSetErrorHandler(ctxt, testIgnoreError, NULL);
++
++        testFailAllocCount = 0;
++        xmlMemSetup(free, testFailMalloc, testFailRealloc, testFailStrdup);
++        valid = xmlCtxtValidateDocument(ctxt, doc);
++        xmlMemSetup(freeFunc, mallocFunc, reallocFunc, strdupFunc);
++        failed = (testFailAllocCount >= testFailAllocNum);
++
++        if ((failed) &&
++            ((valid != 0) || (ctxt->errNo != XML_ERR_NO_MEMORY))) {
++            fprintf(stderr, "testValidateNotationOom: allocation %d failed, "
++                    "but valid=%d errNo=%d\n", testFailAllocNum, valid,
++                    ctxt->errNo);
++            err = 1;
++        }
++        if ((!failed) && (valid != 1)) {
++            fprintf(stderr, "testValidateNotationOom: document invalid\n");
++            err = 1;
++        }
++
++        xmlFreeDoc(doc);
++        xmlFreeParserCtxt(ctxt);
++        if ((err) || (!failed))
++            break;
++    }
++
++    return(err);
++}
+ #endif /* LIBXML_VALID_ENABLED */
+ 
+ #ifdef LIBXML_OUTPUT_ENABLED
+@@ -2030,6 +2094,7 @@ main(void) {
+     err |= testCtxtInputGetters();
+ #ifdef LIBXML_VALID_ENABLED
+     err |= testSwitchDtd();
++    err |= testValidateNotationOom();
+ #endif
+ #ifdef LIBXML_OUTPUT_ENABLED
+     err |= testCtxtParseContent();
+diff --git a/valid.c b/valid.c
+index 774f51a..b7deb8c 100644
+--- a/valid.c
++++ b/valid.c
+@@ -6170,6 +6170,7 @@ xmlValidateAttributeCallback(void *payload, void *data,
+         elemLocalName = xmlSplitQName4(cur->elem, &elemPrefix);
+         if (elemLocalName == NULL) {
+             xmlVErrMemory(ctxt);
++            ctxt->valid = 0;
+             return;
+         }
+ 

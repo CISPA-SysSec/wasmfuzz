@@ -1,0 +1,23 @@
+Enable `allocator_api` on the suite's pinned nightly
+
+Upstream now implements std::alloc::Allocator for its custom-mem allocators and uses
+Box/Vec *_in unconditionally (MSRV 1.100; merged PR #560 "Custom allocators for real:
+first steps", 2026-11-23). The suite builds with nightly-2026-08-24
+(build-rust-harness.py), which predates the stabilization (nightly-2026-11-01 accepts
+the same code), so the feature gate is needed there. Drop this patch once the suite
+toolchain is bumped past the stabilization.
+Upstream: none open (toolchain-only; gh search allocator/allocator_api, 2026-11-24).
+
+diff --git a/c2rust-lib.rs b/c2rust-lib.rs
+index b2abf2a..20b2662 100644
+--- a/c2rust-lib.rs
++++ b/c2rust-lib.rs
+@@ -38,6 +38,8 @@
+ #![cfg_attr(all(feature = "nightly", test), feature(test))]
+ #![cfg_attr(feature = "nightly", feature(likely_unlikely))]
+ #![cfg_attr(feature = "nightly", feature(hint_prefetch))]
++// harness-suite: the pinned nightly predates the stabilization of `allocator_api`.
++#![feature(allocator_api)]
+ // FIXME
+ #![allow(clippy::missing_safety_doc)]
+ 

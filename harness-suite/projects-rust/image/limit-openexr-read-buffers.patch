@@ -1,0 +1,141 @@
+Subject: [PATCH] openexr: reserve exr's width-proportional read buffers; fit the exr fuzzer to the wasm heap
+
+Found by the suite's image `script_exr` target (allocation failures of
+0.7-1.9 GB and capacity overflows on wasm32, all inside one block decode).
+limit-openexr-block-size.patch reserves one uncompressed block against
+max_alloc, but decoding a block also holds buffers that grow with the block
+width, not its area, so a block one line high costs many times its own size:
+
+- exr's `rgba_channels` reader (`SpecificChannelsReader::read_block`) fills
+  one rgba f32 line per block: 16 bytes per pixel of width;
+- DWA: one row of 8x8 DCT blocks (`[[f32; 64]; 3]` per 8 pixels, 96 bytes
+  per pixel of width, fix-exr-dwa-dct-row-buffers.patch) and the AC
+  coefficients, up to 63 u16 per 8x8 block and channel (the bound that
+  fix-exr-dwa-section-sizes.patch enforces), used as the zlib size hint that
+  zune-inflate allocates up front.
+
+`set_limits` now reserves these on top of the block. Separately the fuzz
+harness used `Limits::default()` (max_alloc 512 MiB, the whole wasm heap)
+and accepted 256 MiB output buffers, which exr then copies once more; it now
+caps the output at 64 MiB and max_alloc at 128 MiB so that the output
+buffer, exr's copy and the reserved per-block buffers fit together.
+Regression test in `codecs::openexr::test`.
+
+Not fixed upstream as of e70e9fe (image) / exr 1.74.2.
+Upstream: open issue image-rs/image#3104 (by qarmin, 2026-08-27), item 038,
+reports missing max_alloc accounting in OpenExrDecoder; open PR
+johannesvollmer/exrs#310 decodes the lossy DCT one row of blocks at a time
+(the row buffer accounted here). Suite-only.
+
+diff --git a/fuzz/fuzzers/fuzzer_script_exr.rs b/fuzz/fuzzers/fuzzer_script_exr.rs
+index d4eb3bd..7f4ef07 100644
+--- a/fuzz/fuzzers/fuzzer_script_exr.rs
++++ b/fuzz/fuzzers/fuzzer_script_exr.rs
+@@ -18,9 +18,14 @@ fn roundtrip(bytes: &[u8]) -> ImageResult<()> {
+     fn read_as_rgba_byte_image(read: impl BufRead + Seek) -> ImageResult<(u32, u32, Vec<u8>)> {
+         let mut decoder = OpenExrDecoder::with_alpha_preference(read, Some(true))?;
+         let prep = decoder.prepare_image()?;
++        // The wasm heap is 512 MiB: the output buffer below, exr's own copy of
++        // the pixels and the per-block buffers that `set_limits` reserves
++        // against `max_alloc` all have to fit at once.
+         match usize::try_from(prep.total_bytes()) {
+-            Ok(decoded_size) if decoded_size <= 256 * 1024 * 1024 => {
+-                decoder.set_limits(Limits::default())?;
++            Ok(decoded_size) if decoded_size <= 64 * 1024 * 1024 => {
++                let mut limits = Limits::default();
++                limits.max_alloc = Some(128 * 1024 * 1024);
++                decoder.set_limits(limits)?;
+                 let (width, height) = prep.layout.dimensions();
+                 let mut buffer = vec![0; decoded_size];
+                 decoder.read_image(buffer.as_mut_slice())?;
+diff --git a/src/codecs/openexr.rs b/src/codecs/openexr.rs
+index d38a8d7..8e5c8bf 100644
+--- a/src/codecs/openexr.rs
++++ b/src/codecs/openexr.rs
+@@ -147,10 +147,33 @@ impl<R: BufRead + Seek> ImageDecoder for OpenExrDecoder<R> {
+                 .filter(|header| !header.deep) // deep blocks are rejected before decompression
+                 .map(|header| {
+                     let block_size = header.max_block_pixel_size();
+-                    block_size
+-                        .width()
+-                        .checked_mul(block_size.height())
++                    let (width, height) = (block_size.width(), block_size.height());
++                    // While a block is decoded, exr also holds buffers that grow
++                    // with the block width rather than its area: the rgba f32
++                    // line of `rgba_channels` (16 bytes per pixel), and for DWA
++                    // one row of 8x8 DCT blocks (`[[f32; 64]; 3]` per 8 pixels)
++                    // and up to 63 u16 AC coefficients per 8x8 block and
++                    // channel. For a block one line high these are many times
++                    // the block itself.
++                    let dwa_bytes = || {
++                        let blocks_x = width.div_ceil(8);
++                        let dct_row = blocks_x.checked_mul(3 * 64 * 4)?;
++                        let ac = blocks_x
++                            .checked_mul(height.div_ceil(8))?
++                            .checked_mul(63 * 2)?
++                            .checked_mul(header.channels.list.len())?;
++                        dct_row.checked_add(ac)
++                    };
++                    let width_bytes = match header.compression {
++                        Compression::DWAA(_)
++                        | Compression::DWAB(_) => dwa_bytes(),
++                        _ => Some(0),
++                    };
++                    width
++                        .checked_mul(height)
+                         .and_then(|area| area.checked_mul(header.channels.bytes_per_pixel))
++                        .and_then(|bytes| bytes.checked_add(width.checked_mul(16)?))
++                        .and_then(|bytes| bytes.checked_add(width_bytes?))
+                         .and_then(|bytes| u64::try_from(bytes).ok())
+                         .unwrap_or(u64::MAX)
+                 })
+@@ -618,4 +641,49 @@ mod test {
+         let mut decoder = OpenExrDecoder::new(Cursor::new(&bytes)).unwrap();
+         decoder.set_limits(crate::Limits::no_limits()).unwrap();
+     }
++
++    #[test]
++    fn set_limits_accounts_for_width_proportional_buffers() {
++        let image = Rgb32FImage::from_raw(1, 1, vec![0.5; 3]).unwrap();
++        let mut bytes = Vec::new();
++        write_rgb_image(Cursor::new(&mut bytes), &image).unwrap();
++
++        // Make the tiles 2^20 pixels wide and one line high: 12 MiB of rgb
++        // f32 per block, but the rgba f32 line that is filled from each block
++        // takes another 16 MiB.
++        let attribute = b"tiles\0tiledesc\0";
++        let tiles = bytes
++            .windows(attribute.len())
++            .position(|window| window == attribute)
++            .expect("encoder did not write tiles")
++            + attribute.len()
++            + 4; // attribute byte size
++        bytes[tiles..tiles + 4].copy_from_slice(&(1_u32 << 20).to_le_bytes());
++        bytes[tiles + 4..tiles + 8].copy_from_slice(&1_u32.to_le_bytes());
++
++        let limits = |max_alloc: u64| {
++            let mut limits = crate::Limits::default();
++            limits.max_alloc = Some(max_alloc);
++            limits
++        };
++        let mut decoder = OpenExrDecoder::new(Cursor::new(&bytes)).unwrap();
++        assert!(decoder.set_limits(limits(20 << 20)).is_err());
++        let mut decoder = OpenExrDecoder::new(Cursor::new(&bytes)).unwrap();
++        decoder.set_limits(limits(32 << 20)).unwrap();
++
++        // With DWAA compression, decoding a block also holds a row of 8x8 DCT
++        // blocks (96 bytes per pixel of width) and the AC coefficients.
++        let attribute = b"compression\0compression\0";
++        let compression = bytes
++            .windows(attribute.len())
++            .position(|window| window == attribute)
++            .expect("encoder did not write a compression attribute")
++            + attribute.len()
++            + 4; // attribute byte size
++        bytes[compression] = 8; // DWAA_COMPRESSION
++        let mut decoder = OpenExrDecoder::new(Cursor::new(&bytes)).unwrap();
++        assert!(decoder.set_limits(limits(32 << 20)).is_err());
++        let mut decoder = OpenExrDecoder::new(Cursor::new(&bytes)).unwrap();
++        decoder.set_limits(limits(256 << 20)).unwrap();
++    }
+ }

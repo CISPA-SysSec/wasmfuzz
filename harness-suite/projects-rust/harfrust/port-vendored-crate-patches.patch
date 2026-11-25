@@ -1,0 +1,18 @@
+Build harfrust against the vendored, patched read-fonts crate (../read-fonts, unpacked and
+patched with fix-read-fonts-varc-region-count-alloc.patch by prepare.sh).
+Upstream: none (suite-specific; the read-fonts fix itself has no upstream issue/PR yet).
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 4e2e263..90df76b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -25,6 +25,9 @@ inherits = "release"
+ harfrust = { version = "0.16.1", path = "./harfrust", default-features = false }
+ read-fonts = { version = "0.47.0", default-features = false }
+ 
++[patch.crates-io]
++read-fonts = { path = "../read-fonts" }
++
+ [workspace.lints.rust]
+ unused_qualifications = "warn"
+ 

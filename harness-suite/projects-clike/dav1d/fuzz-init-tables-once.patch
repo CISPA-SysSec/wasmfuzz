@@ -1,0 +1,35 @@
+Subject: [PATCH] tests/libfuzzer: run dav1d's one-time init in LLVMFuzzerInitialize
+
+dav1d_open() runs init_internal() through pthread_once() on its first
+call: the inter-intra wedge masks, the intra edge tree and the QM tables
+(about 2.5M wasm instructions). In the fuzzer that cost lands in the first
+input, so every fresh process / fresh instance pays it on its first input
+and coverage tools that run each input on a fresh instance see a 2.8x
+higher per-input cost than the persistent fuzzer. Open and close one
+decoder in LLVMFuzzerInitialize() with the same thread settings as the
+per-input path; the per-input dav1d_open() then takes the pthread_once
+fast path, as it already does for every input after the first.
+
+Upstream context: dav1d tracks issues and MRs on code.videolan.org, which
+gh cannot search; the GitHub mirror has none (checked 2026-11-20).
+
+diff --git a/tests/libfuzzer/dav1d_fuzzer.c b/tests/libfuzzer/dav1d_fuzzer.c
+index 502ee22b..b2c00a90 100644
+--- a/tests/libfuzzer/dav1d_fuzzer.c
++++ b/tests/libfuzzer/dav1d_fuzzer.c
+@@ -84,6 +84,15 @@ int LLVMFuzzerInitialize(int *argc, char ***argv) {
+ 
+     *argc = i;
+ 
++    // dav1d_open() builds the static tables (wedge masks, intra edge tree,
++    // QM tables) on its first call; do that here, not in the first input.
++    Dav1dSettings settings;
++    Dav1dContext *ctx = NULL;
++    dav1d_default_settings(&settings);
++    settings.max_frame_delay = settings.n_threads = 1;
++    if (dav1d_open(&ctx, &settings) == 0)
++        dav1d_close(&ctx);
++
+     return 0;
+ }
+ 

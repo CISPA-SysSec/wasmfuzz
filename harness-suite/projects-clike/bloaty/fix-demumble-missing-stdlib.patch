@@ -1,3 +1,13 @@
+Include <stdlib.h> in demumble's vendored swift Demangler.h, which calls malloc() and free().
+
+Build fix, not a runtime bug: with the wasi-sdk 34 libc++ nothing else in the include chain
+declares malloc, so Demangler.cpp fails to compile ("use of undeclared identifier 'malloc'");
+a host build (clang++ with libstdc++) picks it up transitively. No test: there is no runtime
+behaviour to test, the build is the check. Not fixed in demumble as of 10e00fb, which is both
+bloaty's submodule pin and demumble HEAD on 2026-11-21; swift's own Demangler.h (swiftlang/swift
+main) still has no direct include either.
+Upstream: none found (nico/demumble and google/bloaty issues/PRs searched 2026-11-21).
+
 diff --git a/third_party/demumble/third_party/swift/include/swift/Demangling/Demangler.h b/third_party/demumble/third_party/swift/include/swift/Demangling/Demangler.h
 --- a/third_party/demumble/third_party/swift/include/swift/Demangling/Demangler.h
 +++ b/third_party/demumble/third_party/swift/include/swift/Demangling/Demangler.h

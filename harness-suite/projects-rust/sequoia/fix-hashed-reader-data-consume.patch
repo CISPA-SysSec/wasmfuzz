@@ -1,0 +1,115 @@
+Subject: [PATCH] openpgp: HashedReader: consume exactly the data that was hashed
+
+`HashedReader::data_consume(amount)` hashed what `data(amount)`
+returned (`got` bytes) and then called the inner reader's
+`data_consume(amount)`, panicking ("returned less than reader.data()")
+if that failed.  It can fail: a partial body filter over an armor
+reader re-fills on the second call, and the armor reader then returns
+the error it stashed while serving the short read.  It could also
+consume more than `got` bytes, which were then never hashed.  Consume
+exactly `got` bytes with `consume`, which cannot fail for data that
+`data` returned.  Same for `data_consume_hard`.  On an error from
+`data`/`data_hard`, put the cookie back instead of leaving the
+default cookie installed.
+
+Repro: repro/fix-hashed-reader-data-consume.asc (message_from_bytes,
+packet_pile_from_bytes, decrypt/inline_verify_from_bytes).
+---
+diff --git a/openpgp/src/parse/hashed_reader.rs b/openpgp/src/parse/hashed_reader.rs
+index 36e813f1..d97ebfc2 100644
+--- a/openpgp/src/parse/hashed_reader.rs
++++ b/openpgp/src/parse/hashed_reader.rs
+@@ -425,21 +425,30 @@ impl<R: BufferedReader<Cookie>>
+ 
+         let mut state = self.cookie_set(Cookie::default());
+ 
+-        let got = {
+-            let data = self.reader.data(amount)?;
+-            let data = &data[..cmp::min(data.len(), amount)];
+-            state.hash_update(data);
+-            data.len()
++        let got = match self.reader.data(amount) {
++            Ok(data) => {
++                let data = &data[..cmp::min(data.len(), amount)];
++                state.hash_update(data);
++                data.len()
++            },
++            Err(err) => {
++                self.cookie_set(state);
++                return Err(err);
++            },
+         };
+ 
+         self.cookie_set(state);
+ 
+-        if let Ok(data) = self.reader.data_consume(amount) {
+-            assert!(data.len() >= got);
+-            Ok(data)
+-        } else {
+-            panic!("reader.data_consume() returned less than reader.data()!");
+-        }
++        // Consume exactly what we hashed.  Calling
++        // `self.reader.data_consume(amount)` here would ask the inner
++        // reader for more data than it returned above.  Readers that
++        // stash an error while returning a short read (e.g. the
++        // armor reader below a partial body filter) then return the
++        // stashed error, and the bytes we hashed were not consumed.
++        // A longer read would also consume bytes that were not
++        // hashed.  `consume` cannot fail for data that `data`
++        // returned.
++        Ok(self.reader.consume(got))
+     }
+ 
+     fn data_consume_hard(&mut self, amount: usize) -> io::Result<&[u8]> {
+@@ -448,17 +457,22 @@ impl<R: BufferedReader<Cookie>>
+ 
+         let mut state = self.cookie_set(Cookie::default());
+ 
+-        {
+-            let data = self.reader.data_hard(amount)?;
+-            assert!(data.len() >= amount);
+-            state.hash_update(&data[..amount]);
++        match self.reader.data_hard(amount) {
++            Ok(data) => {
++                assert!(data.len() >= amount);
++                state.hash_update(&data[..amount]);
++            },
++            Err(err) => {
++                self.cookie_set(state);
++                return Err(err);
++            },
+         }
+ 
+         self.cookie_set(state);
+ 
+-        let result = self.reader.data_consume(amount);
+-        assert!(result.is_ok());
+-        result
++        // See `data_consume` for why we don't call
++        // `self.reader.data_consume_hard(amount)`.
++        Ok(self.reader.consume(amount))
+     }
+ 
+     fn get_mut(&mut self) -> Option<&mut dyn BufferedReader<Cookie>> {
+@@ -641,4 +655,21 @@ mod test {
+                        &crate::fmt::to_hex(&digest[..], false));
+         }
+     }
++
++    /// `HashedReader::data_consume` used to call `data` and then
++    /// `data_consume` on the inner reader, and panicked when the
++    /// second call failed.  Here the inner reader is a partial body
++    /// filter over an armor reader that returns a short read and
++    /// stashes an "Invalid ASCII Armor footer" error: `data` returns
++    /// the buffered bytes, the partial body filter's refill in
++    /// `data_consume` returns the stashed error.  (Minimized fuzzer
++    /// input.)
++    #[test]
++    fn data_consume_short_read_with_stashed_error() {
++        use crate::parse::Parse;
++
++        let input = b"BEGIN PGP PRIVATE KEY BLOCKyOkAxA0DAAAAAAAAAAAAAAAA8eoA";
++        assert!(crate::PacketPile::from_bytes(&input[..]).is_err());
++        assert!(crate::Message::from_bytes(&input[..]).is_err());
++    }
+ }

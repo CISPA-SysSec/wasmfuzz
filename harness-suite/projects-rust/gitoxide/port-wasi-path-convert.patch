@@ -1,9 +1,9 @@
 diff --git a/gix-path/src/convert.rs b/gix-path/src/convert.rs
-index 23134b454..c93599929 100644
+index c872b56..e48ce9c 100644
 --- a/gix-path/src/convert.rs
 +++ b/gix-path/src/convert.rs
-@@ -7,10 +7,15 @@ use std::{
- use gix_error::ExnMessageResult;
+@@ -6,22 +6,26 @@ use std::{
+ };
  
  use bstr::{BStr, BString};
 -#[cfg(not(unix))]
@@ -20,39 +20,39 @@ index 23134b454..c93599929 100644
  fn utf8_error() -> gix_error::Message {
      gix_error::validation("Could not convert to UTF8 or from UTF8 due to ill-formed input")
  }
-@@ -49,24 +54,22 @@ pub fn try_into_bstr<'a>(path: impl Into<Cow<'a, Path>>) -> ExnMessageResult<Cow
-     let path = path.into();
-     let path_str = match path {
-         Cow::Owned(path) => Cow::Owned({
--            #[cfg(unix)]
-+            #[cfg(any(unix, target_os = "wasi"))]
-             let p: BString = {
--                use std::os::unix::ffi::OsStringExt;
-                 path.into_os_string().into_vec().into()
-             };
--            #[cfg(not(unix))]
-+            #[cfg(all(not(unix), not(target_os = "wasi")))]
-             let p: BString = String::from_utf8(path.into_os_string().into_encoded_bytes())
-                 .or_raise(utf8_error)?
-                 .into();
-             p
-         }),
-         Cow::Borrowed(path) => Cow::Borrowed({
--            #[cfg(unix)]
-+            #[cfg(any(unix, target_os = "wasi"))]
-             let p: &BStr = {
--                use std::os::unix::ffi::OsStrExt;
-                 path.as_os_str().as_bytes().into()
-             };
--            #[cfg(not(unix))]
-+            #[cfg(all(not(unix), not(target_os = "wasi")))]
-             let p: &BStr = std::str::from_utf8(path.as_os_str().as_encoded_bytes())
-                 .or_raise(utf8_error)?
-                 .as_bytes()
-@@ -98,12 +101,11 @@ pub fn join_bstr_unix_pathsep<'a, 'b>(base: impl Into<Cow<'a, BStr>>, path: impl
- /// There are some potential Git versions and Windows installations which produce malformed UTF-16
- /// if certain emojis are in the path. It's as rare as it sounds, but possible.
- pub fn try_from_byte_slice(input: &[u8]) -> ExnMessageResult<&Path> {
+ 
+ /// Like [`into_bstr()`], but takes `OsStr` as input for a lossless, but fallible, conversion.
+ pub fn os_str_into_bstr(path: &OsStr) -> Result<&BStr> {
+-    #[cfg(unix)]
++    #[cfg(any(unix, target_os = "wasi"))]
+     let bytes = {
+-        use std::os::unix::ffi::OsStrExt;
+         path.as_bytes()
+     };
+-    #[cfg(not(unix))]
++    #[cfg(all(not(unix), not(target_os = "wasi")))]
+     let bytes = std::str::from_utf8(path.as_encoded_bytes())
+         .or_raise(utf8_error)?
+         .as_bytes();
+@@ -30,12 +34,11 @@ pub fn os_str_into_bstr(path: &OsStr) -> Result<&BStr> {
+ 
+ /// Like [`into_bstr()`], but takes `OsString` as input for a lossless, but fallible, conversion.
+ pub fn os_string_into_bstring(path: OsString) -> Result<BString> {
+-    #[cfg(unix)]
++    #[cfg(any(unix, target_os = "wasi"))]
+     let bytes = {
+-        use std::os::unix::ffi::OsStringExt;
+         path.into_vec()
+     };
+-    #[cfg(not(unix))]
++    #[cfg(all(not(unix), not(target_os = "wasi")))]
+     let bytes = String::from_utf8(path.into_encoded_bytes())
+         .or_raise(utf8_error)?
+         .into_bytes();
+@@ -75,12 +78,11 @@ pub fn join_bstr_unix_pathsep<'a, 'b>(base: impl Into<Cow<'a, BStr>>, path: impl
+ ///
+ /// On non-Unix platforms, invalid UTF-8 returns an error with the encoding failure as its source.
+ pub fn from_byte_slice(input: &[u8]) -> Result<&Path> {
 -    #[cfg(unix)]
 +    #[cfg(any(unix, target_os = "wasi"))]
      let p = {
@@ -64,9 +64,9 @@ index 23134b454..c93599929 100644
      let p = Path::new(std::str::from_utf8(input).or_raise(utf8_error)?);
      Ok(p)
  }
-@@ -125,12 +127,11 @@ pub fn from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Cow<'a, Path> {
- /// Similar to [`try_from_bstr()`], but takes and produces owned data.
- pub fn try_from_bstring(input: impl Into<BString>) -> ExnMessageResult<PathBuf> {
+@@ -97,12 +99,11 @@ pub fn from_bstr<'a>(input: impl Into<Cow<'a, BStr>>) -> Result<Cow<'a, Path>> {
+ /// Similar to [`from_bstr()`], but takes and produces owned data.
+ pub fn from_bstring(input: impl Into<BString>) -> Result<PathBuf> {
      let input = input.into();
 -    #[cfg(unix)]
 +    #[cfg(any(unix, target_os = "wasi"))]

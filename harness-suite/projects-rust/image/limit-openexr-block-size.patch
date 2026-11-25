@@ -1,0 +1,90 @@
+Subject: [PATCH] openexr: account for the exr block size in set_limits
+
+The exr decompressors allocate one whole uncompressed block (data window width
+x lines per block, or one tile, times bytes per pixel) up front, and
+intermediate buffers of the same size. That size is declared by the header and
+is independent of the display window that the decoder reports as the image
+dimensions, so a few hundred bytes can make a decoder with default limits
+allocate gigabytes. Reserve the largest block of all non-deep headers (a
+chunk's layer is read from the file) against max_alloc in set_limits.
+
+Upstream: open issue image-rs/image#3104 (by qarmin, 2026-08-27), item 038, reports missing max_alloc accounting in OpenExrDecoder; it covers the rgba scratch buffer, not the exr block size.
+This cap stays suite-only.
+
+diff --git a/src/codecs/openexr.rs b/src/codecs/openexr.rs
+index 442a915..d38a8d7 100644
+--- a/src/codecs/openexr.rs
++++ b/src/codecs/openexr.rs
+@@ -130,6 +130,38 @@ impl<R: BufRead + Seek> ImageDecoder for OpenExrDecoder<R> {
+         Ok(DecoderPreparedImage::new(width, height, color))
+     }
+ 
++    fn set_limits(&mut self, mut limits: crate::Limits) -> ImageResult<()> {
++        limits.check_support(&crate::LimitSupport::default())?;
++        let layout = self.prepare_image()?;
++        limits.check_layout_dimensions(&layout)?;
++
++        // The exr decompressors allocate one whole uncompressed block up front.
++        // Its size is only declared by the header (the data window width for
++        // scan line images, the tile size for tiled images), so a tiny file can
++        // request gigabytes of memory, independent of the display window.
++        // Every header counts, because the layer of a chunk is read from the file.
++        if let Some(reader) = &self.exr_reader {
++            let max_block_bytes = reader
++                .headers()
++                .iter()
++                .filter(|header| !header.deep) // deep blocks are rejected before decompression
++                .map(|header| {
++                    let block_size = header.max_block_pixel_size();
++                    block_size
++                        .width()
++                        .checked_mul(block_size.height())
++                        .and_then(|area| area.checked_mul(header.channels.bytes_per_pixel))
++                        .and_then(|bytes| u64::try_from(bytes).ok())
++                        .unwrap_or(u64::MAX)
++                })
++                .max()
++                .unwrap_or(0);
++            limits.reserve(max_block_bytes)?;
++        }
++
++        Ok(())
++    }
++
+     // reads with or without alpha, depending on `self.alpha_preference` and `self.alpha_present_in_file`
+     fn read_image(&mut self, unaligned_bytes: &mut [u8]) -> ImageResult<DecodedImageAttributes> {
+         let layout = self.prepare_image()?;
+@@ -557,4 +589,33 @@ mod test {
+         // the whole image would be printed to the console, which takes forever
+         assert!(original.pixels() == cropped.pixels());
+     }
++
++    #[test]
++    fn set_limits_accounts_for_block_size() {
++        let image = Rgb32FImage::from_raw(1, 1, vec![0.5; 3]).unwrap();
++        let mut bytes = Vec::new();
++        write_rgb_image(Cursor::new(&mut bytes), &image).unwrap();
++
++        let mut decoder = OpenExrDecoder::new(Cursor::new(&bytes)).unwrap();
++        decoder.set_limits(crate::Limits::default()).unwrap();
++
++        // Widen the tiles (the encoder writes tiled files). Every block of
++        // this tiny 1x1 image now decompresses to gigabytes.
++        let attribute = b"tiles\0tiledesc\0";
++        let tile_width = bytes
++            .windows(attribute.len())
++            .position(|window| window == attribute)
++            .expect("encoder did not write tiles")
++            + attribute.len()
++            + 4; // attribute byte size
++        bytes[tile_width..tile_width + 4].copy_from_slice(&(1_u32 << 28).to_le_bytes());
++
++        let mut decoder = OpenExrDecoder::new(Cursor::new(&bytes)).unwrap();
++        assert_eq!(decoder.prepare_image().unwrap().layout.dimensions(), (1, 1));
++        let error = decoder.set_limits(crate::Limits::default()).unwrap_err();
++        assert!(matches!(error, ImageError::Limits(_)), "{error:?}");
++
++        let mut decoder = OpenExrDecoder::new(Cursor::new(&bytes)).unwrap();
++        decoder.set_limits(crate::Limits::no_limits()).unwrap();
++    }
+ }

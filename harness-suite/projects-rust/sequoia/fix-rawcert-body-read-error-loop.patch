@@ -1,0 +1,65 @@
+Subject: [PATCH] openpgp: RawCertParser: Stop after any error reading a packet body
+
+When reading a packet body failed with anything but UnexpectedEof
+(e.g. a base64 DecodeError from the armor reader), RawCertParser
+queued the error but neither consumed the packet nor stopped, so the
+next call re-read the same body and failed the same way: the iterator
+returned the same error forever.  Stop after any body read error.
+
+Repro: repro/fix-rawcert-body-read-error-loop.asc (rawcert_from_bytes,
+cert_parser_binary_from_bytes; hang on every platform).
+---
+diff --git a/openpgp/src/cert/raw.rs b/openpgp/src/cert/raw.rs
+index f360ded5..c9f54c0b 100644
+--- a/openpgp/src/cert/raw.rs
++++ b/openpgp/src/cert/raw.rs
+@@ -915,12 +915,17 @@ impl<'a> Iterator for RawCertParser<'a>
+                         Err(err) => {
+                             t!("Stopping: reading {}'s body: {}", tag, err);
+ 
+-                            // If we encountered an EOF while reading
+-                            // the packet body, then we're done.
+-                            if err.kind() == std::io::ErrorKind::UnexpectedEof {
+-                                t!("Got an unexpected EOF, done.");
+-                                self.done = true;
+-                            }
++                            // We didn't consume anything past
++                            // `packet_start`, so the next call would
++                            // try to read the same body again.  If
++                            // we encountered an EOF, we're done.  For
++                            // any other error (e.g. a base64 decode
++                            // error from the armor reader), the
++                            // retry fails the same way, and the
++                            // iterator would return the same error
++                            // forever.  We're done in that case, too.
++                            t!("Got an error reading the body, done.");
++                            self.done = true;
+ 
+                             pending_error = Some(
+                                 anyhow::Error::from(err).context(format!(
+@@ -1799,6 +1804,25 @@ mod test {
+         }
+     }
+ 
++    #[test]
++    fn body_read_error_terminates() {
++        // Regression: an error other than EOF while reading a packet
++        // body (here: a base64 decode error from the armor reader)
++        // made the iterator return the same error forever.
++        // (Minimized fuzzer input.)
++        let input = b"BEGIN PGP PRIVATE KEY BLOCK0QCAANRAAAAAAAAAAAAAAAAAAAA=AE==";
++
++        let parser = RawCertParser::from_bytes(&input[..]).unwrap();
++        let items = parser.take(100).collect::<Vec<_>>();
++        assert!(items.len() < 100, "RawCertParser does not terminate");
++        assert!(items.iter().any(|i| i.is_err()));
++
++        if let Ok(parser) = CertParser::from_bytes(&input[..]) {
++            assert!(parser.take(100).count() < 100,
++                    "CertParser does not terminate");
++        }
++    }
++
+     #[test]
+     fn concatenated_armored_certs() -> Result<()> {
+         let mut keyring = Vec::new();

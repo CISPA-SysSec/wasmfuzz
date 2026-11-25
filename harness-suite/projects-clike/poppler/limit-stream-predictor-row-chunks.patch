@@ -1,0 +1,257 @@
+StreamPredictor::getNextLine() reads each row into a temporary int array of
+rowBytes - pixBytes entries, four times the row size. /Columns can make a
+row ~256 MB (the constructor only guards rowBytes against int overflow), so
+a stream of a few bytes asks for a 1 GB array per row: a bad_alloc abort on
+the 512 MB wasm heap. The constructor allocates predLine (rowBytes) with
+gmalloc(), which aborts when that fails.
+
+Read the raw row in chunks of at most 4096 ints, so the temporary stays
+16 KB; the bytes and the EOF handling are unchanged (getRawChars() fills
+EOF past the end, and the loop stops at the first EOF as before). Allocate
+predLine with gmalloc_checkoverflow() and leave the predictor not ok when
+it fails, which the Flate/LZW streams already handle. Regression test
+cpp/tests/poppler-predictor-row-test.cpp fails every operator new above
+256 MB and checks PNG Sub/Up rows that span several chunks.
+
+Not fixed upstream as of d50f45b.
+Upstream: related open MR !2404 (StreamPredictor: fix negative-shift UB and
+16-bit truncation in TIFF predictor, 2026-10-18) touches the same function's
+TIFF part, not this allocation; none found for the row allocation.
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 3f71b67cb..8b51cdb42 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -46,6 +46,10 @@ cpp_add_simpletest(poppler-hints-length-test poppler-hints-length-test.cpp)
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-hints-length-test COMMAND poppler-hints-length-test)
+ endif()
++cpp_add_simpletest(poppler-predictor-row-test poppler-predictor-row-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-predictor-row-test COMMAND poppler-predictor-row-test)
++endif()
+ 
+ if(ENABLE_FUZZER)
+   cpp_add_simpletest(doc_fuzzer ./fuzzing/doc_fuzzer.cc)
+diff --git a/cpp/tests/poppler-predictor-row-test.cpp b/cpp/tests/poppler-predictor-row-test.cpp
+new file mode 100644
+index 000000000..ad8779485
+--- /dev/null
++++ b/cpp/tests/poppler-predictor-row-test.cpp
+@@ -0,0 +1,158 @@
++/*
++ * Regression test: StreamPredictor::getNextLine() read every row into a
++ * temporary array of ints, four times the row size, which /Columns can make
++ * ~256 MB: a 1 GB allocation per row, for a stream of a few bytes. It reads
++ * the row in chunks now. Every operator new larger than 256 MB fails in this
++ * test.
++ */
++
++#include <GlobalParams.h>
++#include <Object.h>
++#include <PDFDoc.h>
++#include <Stream.h>
++#include <XRef.h>
++
++#include <cstdio>
++#include <cstdlib>
++#include <iostream>
++#include <memory>
++#include <string>
++#include <vector>
++
++static const size_t allocLimit = 256u << 20;
++
++void *operator new(size_t size)
++{
++    if (size > allocLimit) {
++        fprintf(stderr, "  FAIL: allocation of %zu bytes\n", size);
++        std::_Exit(1);
++    }
++    if (void *p = std::malloc(size ? size : 1)) {
++        return p;
++    }
++    std::abort();
++}
++
++void operator delete(void *p) noexcept
++{
++    std::free(p);
++}
++
++void operator delete(void *p, size_t) noexcept
++{
++    std::free(p);
++}
++
++// zlib stream with one stored block
++static std::string zlib_stored(const std::string &raw)
++{
++    std::string data = "\x78\x01";
++    data += '\x01';
++    data += static_cast<char>(raw.size() & 0xff);
++    data += static_cast<char>(raw.size() >> 8);
++    data += static_cast<char>(~raw.size() & 0xff);
++    data += static_cast<char>((~raw.size() >> 8) & 0xff);
++    return data + raw;
++}
++
++static const int smallColumns = 10000; // rows span several of the chunks the predictor reads
++
++static std::string small_rows()
++{
++    // a PNG "Sub" row, then a PNG "Up" row
++    std::string raw(1, '\x01');
++    for (int i = 0; i < smallColumns; ++i) {
++        raw += static_cast<char>(i % 7 + 1);
++    }
++    raw += '\x02';
++    for (int i = 0; i < smallColumns; ++i) {
++        raw += static_cast<char>(i % 5);
++    }
++    return raw;
++}
++
++static std::string build_pdf()
++{
++    // the PNG "Up" tag byte and 8 bytes of a row that /Columns makes 200000000 bytes long
++    const std::string data = zlib_stored(std::string(1, '\x02') + "\x01\x02\x03\x04\x05\x06\x07\x08");
++    const std::string small = zlib_stored(small_rows());
++
++    const std::vector<std::string> objs = {
++        "<< /Type /Catalog /Pages 2 0 R >>",
++        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
++        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>",
++        "<< /Length " + std::to_string(data.size()) + " /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 200000000 >> >>\nstream\n" + data + "\nendstream",
++        "<< /Length " + std::to_string(small.size()) + " /Filter /FlateDecode /DecodeParms << /Predictor 15 /Columns " + std::to_string(smallColumns) + " >> >>\nstream\n" + small + "\nendstream",
++    };
++    std::string pdf = "%PDF-1.7\n";
++    std::vector<size_t> offsets;
++    for (size_t i = 0; i < objs.size(); ++i) {
++        offsets.push_back(pdf.size());
++        pdf += std::to_string(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
++    }
++    const size_t xrefOffset = pdf.size();
++    pdf += "xref\n0 " + std::to_string(objs.size() + 1) + "\n0000000000 65535 f \n";
++    for (size_t off : offsets) {
++        char entry[32];
++        snprintf(entry, sizeof(entry), "%010zu 00000 n \n", off);
++        pdf += entry;
++    }
++    pdf += "trailer\n<< /Size " + std::to_string(objs.size() + 1) + " /Root 1 0 R >>\nstartxref\n" + std::to_string(xrefOffset) + "\n%%EOF\n";
++    return pdf;
++}
++
++int main()
++{
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    const std::string pdf = build_pdf();
++    {
++        PDFDoc doc(std::make_unique<MemStream>(pdf.data(), 0, pdf.size(), Object::null()));
++        if (!doc.isOk()) {
++            std::cerr << "failed to load the test document\n";
++            return 1;
++        }
++        Object obj = doc.getXRef()->fetch(4, 0);
++        if (!obj.isStream() || !obj.getStream()->rewind()) {
++            std::cerr << "  FAIL: test stream not found\n";
++            return 1;
++        }
++        // PNG Up on the zero first row passes the bytes through
++        for (int i = 1; i <= 8; ++i) {
++            const int c = obj.getStream()->getChar();
++            if (c != i) {
++                std::cerr << "  FAIL: byte " << i << " of the row decoded as " << c << "\n";
++                return 1;
++            }
++        }
++
++        Object small = doc.getXRef()->fetch(5, 0);
++        if (!small.isStream() || !small.getStream()->rewind()) {
++            std::cerr << "  FAIL: second test stream not found\n";
++            return 1;
++        }
++        std::vector<unsigned char> prev(smallColumns, 0);
++        unsigned char left = 0;
++        for (int i = 0; i < smallColumns; ++i) {
++            left = static_cast<unsigned char>(left + i % 7 + 1);
++            prev[i] = left;
++        }
++        for (int row = 0; row < 2; ++row) {
++            for (int i = 0; i < smallColumns; ++i) {
++                const int expected = row == 0 ? prev[i] : static_cast<unsigned char>(prev[i] + i % 5);
++                const int c = small.getStream()->getChar();
++                if (c != expected) {
++                    std::cerr << "  FAIL: row " << row << " byte " << i << " decoded as " << c << ", expected " << expected << "\n";
++                    return 1;
++                }
++            }
++        }
++        if (small.getStream()->getChar() != EOF) {
++            std::cerr << "  FAIL: data past the second row\n";
++            return 1;
++        }
++    }
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/poppler/Stream.cc b/poppler/Stream.cc
+index 6b276c551..381029ca5 100644
+--- a/poppler/Stream.cc
++++ b/poppler/Stream.cc
+@@ -743,7 +743,12 @@ StreamPredictor::StreamPredictor(Stream *strA, int predictorA, int widthA, int n
+     }
+     pixBytes = (nComps * nBits + 7) >> 3;
+     rowBytes = ((nVals * nBits + 7) >> 3) + pixBytes;
+-    predLine = static_cast<unsigned char *>(gmalloc(rowBytes));
++    // rowBytes comes from /Columns etc. and can be ~256 MB: fail the stream,
++    // don't abort, when that does not fit
++    predLine = static_cast<unsigned char *>(gmalloc_checkoverflow(rowBytes));
++    if (!predLine) {
++        return;
++    }
+     memset(predLine, 0, rowBytes);
+     predIdx = rowBytes;
+ 
+@@ -817,23 +822,26 @@ bool StreamPredictor::getNextLine()
+         curPred = predictor;
+     }
+ 
+-    // read the raw line, apply PNG (byte) predictor
+-    int *rawCharLine = new int[rowBytes - pixBytes];
+-    str->getRawChars(rowBytes - pixBytes, rawCharLine);
++    // read the raw line, apply PNG (byte) predictor; read it in chunks, as
++    // a whole line of ints takes four times rowBytes (up to 1 GB)
++    const int rawChunk = std::min(rowBytes - pixBytes, 4096);
++    std::vector<int> rawCharLine(rawChunk);
+     memset(upLeftBuf, 0, pixBytes + 1);
+     for (i = pixBytes; i < rowBytes; ++i) {
++        if ((i - pixBytes) % rawChunk == 0) {
++            str->getRawChars(std::min(rowBytes - i, rawChunk), rawCharLine.data());
++        }
+         for (j = pixBytes; j > 0; --j) {
+             upLeftBuf[j] = upLeftBuf[j - 1];
+         }
+         upLeftBuf[0] = predLine[i];
+-        if ((c = rawCharLine[i - pixBytes]) == EOF) {
++        if ((c = rawCharLine[(i - pixBytes) % rawChunk]) == EOF) {
+             if (i > pixBytes) {
+                 // this ought to return false, but some (broken) PDF files
+                 // contain truncated image data, and Adobe apparently reads the
+                 // last partial line
+                 break;
+             }
+-            delete[] rawCharLine;
+             return false;
+         }
+         switch (curPred) {
+@@ -874,7 +882,6 @@ bool StreamPredictor::getNextLine()
+             break;
+         }
+     }
+-    delete[] rawCharLine;
+ 
+     // apply TIFF (component) predictor
+     if (predictor == 2) {

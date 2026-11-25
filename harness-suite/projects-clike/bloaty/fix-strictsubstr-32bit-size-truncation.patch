@@ -1,0 +1,59 @@
+Take StrictSubstr() offsets and sizes as uint64_t, so a 32-bit size_t cannot truncate them
+before the bounds check.
+
+ELF/Mach-O fields are 64-bit, but StrictSubstr(data, size_t off, size_t n) narrows them on
+32-bit hosts (wasm32 here) before CheckedAdd() and the comparison with data.size(). A section
+header with sh_size = 0x30 << 56 then passes as size 0. With e_shentsize = 0 and e_shnum = 0,
+ElfFile::Initialize() takes the section count from that sh_size, every ReadSection(i) reads the
+same in-bounds header, and the section loops run for ~2^62 iterations (FindSectionByName's
+Elf64_Word index never reaches the count at all). 64-bit builds reject the file with
+"region out-of-bounds"; bloaty on a 32-bit host and the wasm fuzz build hang on a 476-byte
+file. Adds that file to tests/testdata/fuzz_corpus/ (named by its SHA-1 like the others), so
+fuzz_test runs it: it passes on 64-bit hosts either way, and on a 32-bit host it hangs without
+the fix and is rejected with it (checked with the wasm32 fuzz target before and after the fix).
+Not fixed upstream as of ccb49b0, which is also HEAD on 2026-11-21.
+Upstream: none found (no related google/bloaty issue or PR on 2026-11-20; PR #390 touches
+StrictSubstr callers for a different problem).
+
+diff --git a/src/util.h b/src/util.h
+index 078f193..407c67e 100644
+--- a/src/util.h
++++ b/src/util.h
+@@ -89,20 +89,22 @@ inline uint64_t CheckedMul(uint64_t a, uint64_t b) {
+   return static_cast<uint64_t>(c);
+ }
+ 
+-inline std::string_view StrictSubstr(std::string_view data, size_t off,
+-                                     size_t n) {
++// Offsets and sizes come from 64-bit file fields: take them as uint64_t so
++// that a 32-bit size_t cannot truncate them before the bounds check.
++inline std::string_view StrictSubstr(std::string_view data, uint64_t off,
++                                     uint64_t n) {
+   uint64_t end = CheckedAdd(off, n);
+   if (end > data.size()) {
+     THROW("region out-of-bounds");
+   }
+-  return data.substr(off, n);
++  return data.substr(static_cast<size_t>(off), static_cast<size_t>(n));
+ }
+ 
+-inline std::string_view StrictSubstr(std::string_view data, size_t off) {
++inline std::string_view StrictSubstr(std::string_view data, uint64_t off) {
+   if (off > data.size()) {
+     THROW("region out-of-bounds");
+   }
+-  return data.substr(off);
++  return data.substr(static_cast<size_t>(off));
+ }
+ 
+ inline size_t AlignUp(size_t offset, size_t granularity) {
+diff --git a/tests/testdata/fuzz_corpus/63357623ab6f163fa0b7715be01f8e09f8b3e02d b/tests/testdata/fuzz_corpus/63357623ab6f163fa0b7715be01f8e09f8b3e02d
+new file mode 100644
+index 0000000000000000000000000000000000000000..564148fca05a5c3fb7305e45d94ca2940c78f008
+GIT binary patch
+literal 476
+gcmb<-^>JfjWFQD!38`Qvq=13JfUuHL6;uoX06_);(f|Me
+
+literal 0
+HcmV?d00001
+

@@ -1,5 +1,64 @@
+Clamp the table indices in lut_interp_linear_float().
+
+lut_interp_linear_float() (gfx/qcms/src/transform_util.rs) indexes its table with ceil() and
+floor() of value * (len - 1), which is only in range for values in [0, 1]. The modular transform
+chain does not guarantee that: transforming from the XYZ D50 identity profile
+(Profile::new_XYZD50(), as the fuzz target does) to fuzz/samples/0316-eb3f97ab646cd7b66bee80bdfe6098ac.icc
+passes a value of about -0.009, the negative index wraps when cast to usize, and
+qcms_transform_create() panics with an index out of bounds. Clamp both indices to the table;
+negative values already saturate to 0 in the float-to-usize cast.
+Not fixed upstream as of mozilla-firefox b8cbe7118 (2026-11-21) or FirefoxGraphics/qcms
+2ee13006ac (main, 2025-03-05).
+
+Includes a test in src/gtest.rs (sample_0316_from_xyz) that runs that transform and a unit test
+in src/transform_util.rs; both fail without the fix.
+
+Upstream: none found.
+
+diff --git a/gfx/qcms/src/gtest.rs b/gfx/qcms/src/gtest.rs
+index 000a05f24..ecdb46ae8 100644
+--- a/gfx/qcms/src/gtest.rs
++++ b/gfx/qcms/src/gtest.rs
+@@ -261,6 +261,37 @@ mod gtest {
+         }
+     }
+ 
++    #[test]
++    fn sample_0316_from_xyz() {
++        use libc::c_void;
++        use std::io::Read;
++
++        // The fuzz target transforms from an XYZ D50 identity profile to this
++        // sample. The chain feeds values below 0 to lut_interp_linear_float(),
++        // which used to index its table out of bounds.
++        let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
++        qcms_enable_iccv4();
++        p.push("fuzz");
++        p.push("samples");
++        p.push("0316-eb3f97ab646cd7b66bee80bdfe6098ac.icc");
++        let mut file = std::fs::File::open(p).unwrap();
++        let mut data = Vec::new();
++        file.read_to_end(&mut data).unwrap();
++        let profile =
++            unsafe { qcms_profile_from_memory(data.as_ptr() as *const c_void, data.len()) };
++        assert_ne!(profile, std::ptr::null_mut());
++        let identity = Profile::new_XYZD50();
++
++        unsafe { qcms_profile_precache_output_transform(&mut *profile) };
++        let intent = qcms_profile_get_rendering_intent(&identity);
++        let transform = unsafe { qcms_transform_create(&identity, RGB8, &*profile, RGB8, intent) };
++        assert_ne!(transform, std::ptr::null_mut());
++        unsafe {
++            qcms_transform_release(transform);
++            qcms_profile_release(profile);
++        }
++    }
++
+     #[test]
+     fn v4() {
+         use libc::c_void;
 diff --git a/gfx/qcms/src/transform_util.rs b/gfx/qcms/src/transform_util.rs
-index 7284bcecf2..944515a01b 100644
+index 7284bcecf..a15108f04 100644
 --- a/gfx/qcms/src/transform_util.rs
 +++ b/gfx/qcms/src/transform_util.rs
 @@ -114,16 +114,16 @@ fn lut_interp_linear_precache_output(input_value: u32, table: &[u16]) -> u8 {
@@ -26,3 +85,21 @@ index 7284bcecf2..944515a01b 100644
  }
  
  fn compute_curve_gamma_table_type1(gamma_table: &mut [f32; 256], gamma: u16) {
+@@ -607,3 +607,17 @@ pub(crate) fn build_lut_for_tf_from_linear(trc: &curveType) -> Option<Vec<u16>>
+ pub(crate) fn build_output_lut(trc: &curveType) -> Option<Vec<u16>> {
+     build_lut_for_tf_from_linear(trc)
+ }
++
++#[cfg(test)]
++mod test {
++    use super::lut_interp_linear_float;
++
++    #[test]
++    fn lut_interp_linear_float_out_of_range() {
++        let table = [0.0, 0.5, 1.0];
++        assert_eq!(lut_interp_linear_float(0.5, &table), 0.5);
++        // values outside 0..1 clamp to the ends of the table
++        assert_eq!(lut_interp_linear_float(-0.25, &table), 0.0);
++        assert_eq!(lut_interp_linear_float(1.25, &table), 1.0);
++    }
++}

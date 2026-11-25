@@ -1,0 +1,123 @@
+Upstream: none found for this overflow (GitLab search 2026-11-21); open issue
+sequoia-pgp/sequoia#1246 (by nwalfield, 2026-05-11) discusses turning parser assert failures into
+errors.
+
+On 32-bit targets, Subpacket::parse added serialized_len() and len for a five-octet subpacket
+length without an overflow check. A length of 0xfffffffb or more wrapped the sum, so a subpacket
+longer than its area passed the bounds check. Reading the subpacket body then asked the header
+parser's Dup reader for cursor + len bytes, which wrapped as well, data_consume_hard returned a
+short buffer, and the assert in BufferedReader::steal panicked. With overflow checks the addition
+itself panics. Use checked_add and reject a sum that overflows.
+
+A v6 signature has four-octet subpacket area lengths, and an area length of 0xffffffff is
+usize::MAX on 32-bit targets. A subpacket length of 0xfffffffa then fits the area exactly, and
+the body length check after the subpacket value, total_out_before + len, overflowed. Without
+overflow checks it wrapped and the check failed, which rejected the subpacket. The check now
+compares total_out - total_out_before with len; total_out never falls below total_out_before.
+
+openpgp/tests/subpacket_length_overflow.rs parses v4 and v6 signatures with such lengths. On i686
+both tests fail without the patch in the default test profile (overflow at the bounds check and at
+the body length check), also with the rest of the series applied, and pass with it. The v6 test
+also fails with only the checked_add. On x86_64 both pass either way. In i686 release builds the
+v4 test fails without the patch only when fix-rawcert-body-len-overflow.patch (Dup rejects the
+wrapping read) is absent as well (steal assert).
+
+With the patch, the assert in SubpacketArea::parse that the subpacket fits the area holds whenever
+Subpacket::parse returns Ok.
+
+diff --git a/openpgp/src/parse.rs b/openpgp/src/parse.rs
+index 568df8a4..7cd254d3 100644
+--- a/openpgp/src/parse.rs
++++ b/openpgp/src/parse.rs
+@@ -1845,7 +1845,9 @@ impl Subpacket {
+         php.field("subpacket length", length.serialized_len());
+         let len = length.len() as usize;
+ 
+-        if limit < length.serialized_len() + len {
++        let fits = length.serialized_len().checked_add(len)
++            .map_or(false, |n| n <= limit);
++        if ! fits {
+             return Err(Error::MalformedPacket(
+                 "Subpacket extends beyond the end of the subpacket area".into())
+                        .into());
+@@ -2109,7 +2111,7 @@ impl Subpacket {
+         };
+ 
+         let total_out = php.reader.total_out();
+-        if total_out_before + len != total_out {
++        if total_out - total_out_before != len {
+             return Err(Error::MalformedPacket(
+                 format!("Malformed subpacket: \
+                          body length is {} bytes, but read {}",
+diff --git a/openpgp/tests/subpacket_length_overflow.rs b/openpgp/tests/subpacket_length_overflow.rs
+new file mode 100644
+index 00000000..75473d20
+--- /dev/null
++++ b/openpgp/tests/subpacket_length_overflow.rs
+@@ -0,0 +1,66 @@
++//! A five-octet subpacket length close to `u32::MAX` must not wrap
++//! the subpacket area bounds check or the body length check on
++//! 32-bit targets.
++
++use sequoia_openpgp as openpgp;
++use openpgp::{Packet, PacketPile};
++use openpgp::parse::Parse;
++
++#[test]
++fn subpacket_length_close_to_u32_max() {
++    for len in [0xffff_fffb_u32, 0xffff_fffd, 0xffff_ffff] {
++        // A five-octet subpacket length, a private subpacket tag, and
++        // a few bytes of the subpacket body.
++        let mut hashed = vec![0xff];
++        hashed.extend_from_slice(&len.to_be_bytes());
++        hashed.push(100);
++        hashed.extend_from_slice(&[0; 8]);
++
++        // A version 4 positive certification (RSA, SHA256) with that
++        // hashed area, an empty unhashed area, the digest prefix, and
++        // an MPI.
++        let mut body = vec![4, 0x13, 1, 8];
++        body.extend_from_slice(&(hashed.len() as u16).to_be_bytes());
++        body.extend_from_slice(&hashed);
++        body.extend_from_slice(&[0, 0, 0, 0, 0, 8, 0xff]);
++
++        let mut packet = vec![0xc2, body.len() as u8];
++        packet.extend_from_slice(&body);
++
++        let pile = PacketPile::from_bytes(&packet).unwrap();
++        let packets: Vec<&Packet> = pile.descendants().collect();
++        assert_eq!(packets.len(), 1);
++        assert!(matches!(packets[0], Packet::Unknown(_)));
++    }
++}
++
++#[test]
++fn subpacket_length_close_to_u32_max_v6() {
++    // A version 6 signature has four-octet subpacket area lengths.
++    // An area length of u32::MAX is usize::MAX on 32-bit targets, so
++    // the subpacket length plus the size of its encoding must neither
++    // wrap (0xffff_fffb and up) nor reach the end of the address
++    // space (0xffff_fffa).
++    for len in [0xffff_fffa_u32, 0xffff_fffb, 0xffff_ffff] {
++        // A five-octet subpacket length, a signature creation time
++        // subpacket, and a few more bytes.
++        let mut hashed = vec![0xff];
++        hashed.extend_from_slice(&len.to_be_bytes());
++        hashed.push(2);
++        hashed.extend_from_slice(&[0; 16]);
++
++        // A version 6 positive certification (RSA, SHA256) whose
++        // hashed area claims to be u32::MAX bytes long.
++        let mut body = vec![6, 0x13, 1, 8];
++        body.extend_from_slice(&u32::MAX.to_be_bytes());
++        body.extend_from_slice(&hashed);
++
++        let mut packet = vec![0xc2, body.len() as u8];
++        packet.extend_from_slice(&body);
++
++        let pile = PacketPile::from_bytes(&packet).unwrap();
++        let packets: Vec<&Packet> = pile.descendants().collect();
++        assert_eq!(packets.len(), 1);
++        assert!(matches!(packets[0], Packet::Unknown(_)));
++    }
++}

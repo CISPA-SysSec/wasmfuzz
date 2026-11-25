@@ -1,0 +1,331 @@
+diff --git a/naga/src/front/glsl/context.rs b/naga/src/front/glsl/context.rs
+index 39ddd9f90..d3e3f58d3 100644
+--- a/naga/src/front/glsl/context.rs
++++ b/naga/src/front/glsl/context.rs
+@@ -1025,6 +1025,31 @@ impl<'a> Context<'a> {
+                     self.add_expression(Expression::Unary { op, expr }, meta)?
+                 }
+             }
++            // In a constant context `var.expr` lives in the function arena of
++            // this temporary context, so only constants and overrides may be
++            // referenced, and they have to be re-added to the global arena.
++            HirExprKind::Variable(ref var) if self.is_const => {
++                if pos == ExprPos::Lhs {
++                    return Err(Error {
++                        kind: ErrorKind::SemanticError(
++                            "Cannot assign in a constant expression".into(),
++                        ),
++                        meta,
++                    });
++                }
++                if let Some((constant, _)) = var.constant {
++                    self.add_expression(Expression::Constant(constant), meta)?
++                } else if let Expression::Override(o) = self.expressions[var.expr] {
++                    self.add_expression(Expression::Override(o), meta)?
++                } else {
++                    return Err(Error {
++                        kind: ErrorKind::SemanticError(
++                            "Variable is not a constant expression".into(),
++                        ),
++                        meta,
++                    });
++                }
++            }
+             HirExprKind::Variable(ref var) => match pos {
+                 ExprPos::Lhs => {
+                     if !var.mutable {
+@@ -1066,23 +1091,7 @@ impl<'a> Context<'a> {
+                 _ if var.load => {
+                     self.add_expression(Expression::Load { pointer: var.expr }, meta)?
+                 }
+-                ExprPos::Rhs => {
+-                    if let Some((constant, _)) = self.is_const.then_some(var.constant).flatten() {
+-                        self.add_expression(Expression::Constant(constant), meta)?
+-                    } else {
+-                        // Check if this is an Override expression in const context
+-                        if self.is_const {
+-                            if let Expression::Override(o) = self.expressions[var.expr] {
+-                                // Need to add the Override expression to the global arena
+-                                self.add_expression(Expression::Override(o), meta)?
+-                            } else {
+-                                var.expr
+-                            }
+-                        } else {
+-                            var.expr
+-                        }
+-                    }
+-                }
++                ExprPos::Rhs => var.expr,
+             },
+             HirExprKind::Call(ref call) if pos != ExprPos::Lhs => {
+                 let maybe_expr = frontend.function_or_constructor_call(
+@@ -1099,6 +1108,14 @@ impl<'a> Context<'a> {
+             // The ternary operator is defined to only evaluate one of the two possible
+             // expressions which means that it's behavior is that of an `if` statement,
+             // and it's merely syntactic sugar for it.
++            // The ternary operator is lowered to statements, which a constant
++            // context can't hold (it already ended up as a runtime expression).
++            HirExprKind::Conditional { .. } if self.is_const => {
++                return Err(Error {
++                    kind: ErrorKind::SemanticError("Unexpected runtime-expression".into()),
++                    meta,
++                });
++            }
+             HirExprKind::Conditional {
+                 condition,
+                 accept,
+diff --git a/naga/src/front/glsl/functions.rs b/naga/src/front/glsl/functions.rs
+index a618794ac..0812f27fe 100644
+--- a/naga/src/front/glsl/functions.rs
++++ b/naga/src/front/glsl/functions.rs
+@@ -345,9 +345,17 @@ impl Frontend {
+                     }
+                 }
+             }
+-            _ => {
++            TypeInner::Vector { size, .. } if size == rows => {
+                 components = iter::repeat_n(value, columns as usize).collect();
+             }
++            _ => {
++                return Err(Error {
++                    kind: ErrorKind::SemanticError(
++                        "Invalid argument type for matrix constructor".into(),
++                    ),
++                    meta: expr_meta,
++                });
++            }
+         }
+ 
+         ctx.add_expression(Expression::Compose { ty, components }, meta)
+diff --git a/naga/src/front/glsl/parser/declarations.rs b/naga/src/front/glsl/parser/declarations.rs
+index e3cb321c9..01a4730ea 100644
+--- a/naga/src/front/glsl/parser/declarations.rs
++++ b/naga/src/front/glsl/parser/declarations.rs
+@@ -1,4 +1,4 @@
+-use alloc::{string::String, vec, vec::Vec};
++use alloc::{format, string::String, vec, vec::Vec};
+ 
+ use super::{DeclarationContext, ParsingContext, Result};
+ use crate::{
+@@ -15,8 +15,8 @@ use crate::{
+         variables::{GlobalOrConstant, VarDeclaration},
+         Error, ErrorKind, Frontend, Span,
+     },
+-    proc::Alignment,
+-    AddressSpace, Expression, FunctionResult, Handle, Scalar, ScalarKind, Statement, StructMember,
++    proc::{Alignment, TypeResolution},
++    AddressSpace, ArraySize, Expression, FunctionResult, Handle, Scalar, ScalarKind, Statement, StructMember,
+     Type, TypeInner,
+ };
+ 
+@@ -143,6 +143,41 @@ impl ParsingContext<'_> {
+                 }
+             }
+ 
++            // The list must have one initializer per vector component, matrix
++            // column, array element or struct member; the element types are
++            // checked when parsing each initializer. A malformed `Compose`
++            // would otherwise reach the constant evaluator.
++            let expected = match ctx.module.types[ty].inner {
++                TypeInner::Vector { size, .. } => Some(size as usize),
++                TypeInner::Matrix { columns, .. } => Some(columns as usize),
++                TypeInner::Array {
++                    size: ArraySize::Constant(size),
++                    ..
++                } => Some(size.get() as usize),
++                TypeInner::Array { .. } => None,
++                TypeInner::Struct { ref members, .. } => Some(members.len()),
++                _ => {
++                    return Err(Error {
++                        kind: ErrorKind::SemanticError(
++                            "Initializer list for a type that isn't an aggregate".into(),
++                        ),
++                        meta,
++                    })
++                }
++            };
++            if let Some(expected) = expected.filter(|&n| n != components.len()) {
++                return Err(Error {
++                    kind: ErrorKind::SemanticError(
++                        format!(
++                            "Initializer list expects {expected} initializers, found {}",
++                            components.len()
++                        )
++                        .into(),
++                    ),
++                    meta,
++                });
++            }
++
+             Ok((
+                 ctx.add_expression(Expression::Compose { ty, components }, meta)?,
+                 meta,
+@@ -157,6 +192,24 @@ impl ParsingContext<'_> {
+                 ctx.implicit_conversion(&mut init, init_meta, scalar)?;
+             }
+ 
++            // The constant evaluator reads a constant's initializer as a value
++            // of the constant's type, so a mismatch must be rejected here (the
++            // validator reports it for other variables).
++            if ctx.is_const && {
++                let init_ty = ctx.resolve_type_handle(init, init_meta)?;
++                !ctx.module.compare_types(
++                    &TypeResolution::Handle(ty),
++                    &TypeResolution::Handle(init_ty),
++                )
++            } {
++                return Err(Error {
++                    kind: ErrorKind::SemanticError(
++                        "Initializer type doesn't match the declared type".into(),
++                    ),
++                    meta: init_meta,
++                });
++            }
++
+             Ok((init, init_meta))
+         }
+     }
+diff --git a/naga/src/front/glsl/parser_tests.rs b/naga/src/front/glsl/parser_tests.rs
+index 850aa4fed..a47cce3c7 100644
+--- a/naga/src/front/glsl/parser_tests.rs
++++ b/naga/src/front/glsl/parser_tests.rs
+@@ -905,3 +905,139 @@ fn constant_index_in_const_context() {
+             .unwrap_or_else(|e| panic!("{src}: {e:?}"));
+     }
+ }
++
++#[test]
++fn variable_in_const_context() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: a non-constant variable referenced from a constant
++    // expression handed out a handle into the function's expression arena,
++    // which was then looked up in the global expression arena.
++    for src in [
++        "int n; int a[n[5]]; void main(){}",
++        "int n; int a[n]; void main(){}",
++        "struct S { int v; }; S s; int a[--s.v]; void main(){}",
++        "int n; const int c = n + 1; void main(){}",
++    ] {
++        let result = frontend.parse(&Options::from(ShaderStage::Vertex), src);
++        result.expect_err(src);
++    }
++    for src in [
++        "const int n = 2; int a[n]; void main(){}",
++        "const int n = 2; const int c = n + 1; void main(){}",
++    ] {
++        frontend
++            .parse(&Options::from(ShaderStage::Vertex), src)
++            .unwrap_or_else(|e| panic!("{src}: {e:?}"));
++    }
++}
++
++#[test]
++fn matrix_constructor_from_array() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: `mat3(int[7]())` used the array as every column, and
++    // constant folding a product with it unwrapped an empty dot product.
++    for src in [
++        "void main(){ vec3 v = ivec3(8) * mat3(int[7]()); }",
++        "void main(){ mat3 m = mat3(int[2](1, 2)); }",
++    ] {
++        let result = frontend.parse(&Options::from(ShaderStage::Vertex), src);
++        let errors = result.expect_err(src).errors;
++        assert!(
++            matches!(&errors[0].kind, ErrorKind::SemanticError(msg) if msg == "Invalid argument type for matrix constructor"),
++            "{src}: {errors:?}"
++        );
++    }
++}
++
++#[test]
++fn conditional_in_const_context() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: lowering a ternary in a const context started new
++    // statement bodies, and a call in a branch then finished an emitter
++    // that was never started.
++    for src in [
++        "int io(){ return 1; } int a[true ? 2 : io()]; void main(){}",
++        "const int c = true ? 2 : 3; void main(){}",
++    ] {
++        let result = frontend.parse(&Options::from(ShaderStage::Vertex), src);
++        let errors = result.expect_err(src).errors;
++        assert!(
++            matches!(&errors[0].kind, ErrorKind::SemanticError(msg) if msg == "Unexpected runtime-expression"),
++            "{src}: {errors:?}"
++        );
++    }
++    frontend
++        .parse(
++            &Options::from(ShaderStage::Vertex),
++            "void main(){ int x = true ? 2 : 3; }",
++        )
++        .unwrap();
++}
++
++#[test]
++fn initializer_list_shape() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: initializer lists were turned into a `Compose` without
++    // checking their length or element types, and constant folding then
++    // panicked on the malformed matrices and vectors.
++    for src in [
++        "const mat4 a = {1.}; void main(){ mat4 c = a * a; }",
++        "const mat3 a = {7}; int v = a * a; void main(){}",
++        "const bool a = {8, 6, 4, 1, 1}; int a = dot(a, 4); void main(){}",
++        "const float a[2] = {1.0}; void main(){}",
++        "const vec4 a = {1.0, 2.0, 3.0, 4.0, 5.0}; void main(){}",
++        "void main(){ mat4 a = {1.}; }",
++    ] {
++        let result = frontend.parse(&Options::from(ShaderStage::Vertex), src);
++        let errors = result.expect_err(src).errors;
++        assert!(
++            matches!(&errors[0].kind, ErrorKind::SemanticError(msg) if msg.starts_with("Initializer")),
++            "{src}: {errors:?}"
++        );
++    }
++    for src in [
++        "const mat4 t = {vec2(4), vec2(4), vec2(4), vec2(4)}; void main(){ mat4 c = t * t; }",
++        "const bvec2 v = {9, 9}; int u = int(v); void main(){}",
++        "const dvec4 p = {vec4(1.0)}; void main(){}",
++        "const int a = {vec4(9)}; void main(){}",
++    ] {
++        frontend
++            .parse(&Options::from(ShaderStage::Vertex), src)
++            .expect_err(src);
++    }
++    for src in [
++        "const float[2] array = { 1.0, 2.0 }; void main(){}",
++        "const vec4 c0 = { -1.0, -0.0275, -0.572, 0.022 }; void main(){}",
++        "const mat2 m = { vec2(1), vec2(2) }; void main(){}",
++        "struct S { uvec4 a[2]; }; const S s = { { uvec4(0), uvec4(1) } }; void main(){}",
++    ] {
++        frontend
++            .parse(&Options::from(ShaderStage::Vertex), src)
++            .unwrap_or_else(|e| panic!("{src}: {e:?}"));
++    }
++}
++
++#[test]
++fn constant_initializer_type_mismatch() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: a constant whose initializer has another type (`const bool
++    // a = int[1]()`) was folded as if it had the declared type.
++    for src in [
++        "const bool a = int[1](); int n = dot(a, a); void main(){}",
++        "const bool c = mat4(1); int u = mix(c, c, c); void main(){}",
++        "const int u = vec4(9); void main(){}",
++    ] {
++        let result = frontend.parse(&Options::from(ShaderStage::Vertex), src);
++        let errors = result.expect_err(src).errors;
++        assert!(
++            matches!(&errors[0].kind, ErrorKind::SemanticError(msg) if msg == "Initializer type doesn't match the declared type"),
++            "{src}: {errors:?}"
++        );
++    }
++    frontend
++        .parse(
++            &Options::from(ShaderStage::Vertex),
++            "const double d = 1.0; const uint u = 1; const float f = 1; void main(){}",
++        )
++        .unwrap();
++}

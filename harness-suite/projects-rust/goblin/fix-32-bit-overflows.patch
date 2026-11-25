@@ -1,8 +1,27 @@
+Upstream: none found (gh search 2026-11-21; m4b/goblin#542 and PR #547 are other overflows in the Mach-O parser).
+
+On 32-bit targets three usize computations in the ELF and PE parsers overflow on attacker-chosen
+fields: offset + size of the PE debug data directory in DebugData::parse_with_opts_and_fixup
+(size 0xffffffff), offset + 16 + bloom_size * 8 (or * 4) and the bucket and chain offsets in
+gnu_hash_len (bloom size 0x20000000 in a 64-bit ELF, 0x40000000 in a 32-bit one), and
+max_reloc_sym + 1 in Elf::parse (r_sym 0xffffffff in an Elf64_Rela). The patch saturates them, so
+the existing bounds checks and preads reject the input. The tests in tests/elf.rs and tests/pe.rs
+set these fields in existing test binaries; they panic without the patch on i686 in the default
+test profile, which has overflow checks, and pass on x86_64 either way.
+
+The panics need overflow checks (`-C debug-assertions` or `-C overflow-checks`). goblin's build.sh
+does not pass --debug-assertions, which turns both on, so on wasm32 and in other 32-bit release
+builds the sums wrap instead: the wrapped offsets reach only bounds-checked preads,
+Symtab::parse_with_opts uses checked_mul, and a wrapped max_reloc_sym + 1 of 0 loses to cmp::max,
+so no suite harness crashes. The patch is kept as an upstreamable fix for 32-bit builds with
+overflow checks. max_chain - min_chain cannot underflow (gnu_hash_len returns early when
+max_chain < min_chain); the saturating_sub there is defensive.
+
 diff --git a/src/elf/mod.rs b/src/elf/mod.rs
-index 8fe49d9..5ee1a97 100644
+index 5c7ba58..809855e 100644
 --- a/src/elf/mod.rs
 +++ b/src/elf/mod.rs
-@@ -399,7 +399,7 @@ if_sylvan! {
+@@ -404,7 +404,7 @@ if_sylvan! {
                      .chain(pltrelocs.iter())
                      .fold(0, |num, reloc| cmp::max(num, reloc.r_sym));
                  if max_reloc_sym != 0 {
@@ -11,7 +30,7 @@ index 8fe49d9..5ee1a97 100644
                  }
                  dynsyms = Symtab::parse_with_opts(bytes, dyn_info.symtab, num_syms, ctx, opts)?;
              }
-@@ -483,10 +483,10 @@ if_sylvan! {
+@@ -488,10 +488,10 @@ if_sylvan! {
                                                         buckets_num, min_chain, bloom_size)));
          }
          // Find the last bucket.
@@ -24,7 +43,7 @@ index 8fe49d9..5ee1a97 100644
              if max_chain < chain {
                  max_chain = chain;
              }
-@@ -495,7 +495,7 @@ if_sylvan! {
+@@ -500,7 +500,7 @@ if_sylvan! {
              return Ok(0);
          }
          // Find the last chain within the bucket.
@@ -46,3 +65,82 @@ index c7e673f..2bf3c87 100644
              let remaining_bytes = bytes.len().saturating_sub(offset);
              Err(error::Error::Malformed(format!(
                  "ImageDebugDirectory offset {:#x} and size {:#x} exceeds the bounds of the bytes size {:#x}. \
+diff --git a/tests/elf.rs b/tests/elf.rs
+index d7fb57f..5a2ae3c 100644
+--- a/tests/elf.rs
++++ b/tests/elf.rs
+@@ -545,3 +545,54 @@ fn test_symver() -> Result<(), goblin::error::Error> {
+ 
+     Ok(())
+ }
++
++/// Sets a field of a copy of `base` and checks that parsing it returns an error. On 32-bit
++/// targets the field value overflowed a usize computation in `Elf::parse`, which panicked with
++/// overflow checks enabled.
++fn parse_with_field(base: &[u8], sh_type: u32, field_offset: usize, value: &[u8]) {
++    let obj = Elf::parse(base).unwrap();
++    let section = obj
++        .section_headers
++        .iter()
++        .find(|s| s.sh_type == sh_type && s.sh_size > 0)
++        .unwrap();
++    let offset = section.sh_offset as usize + field_offset;
++    let mut data = base.to_vec();
++    data[offset..offset + value.len()].copy_from_slice(value);
++    assert!(Elf::parse(&data).is_err());
++}
++
++#[test]
++fn test_gnu_hash_huge_bloom_size_64bit() {
++    // bloom_size * 8 overflows a 32-bit usize.
++    parse_with_field(
++        include_bytes!("bins/elf/gnu_hash/hello.so"),
++        SHT_GNU_HASH,
++        8,
++        &0x2000_0000u32.to_le_bytes(),
++    );
++}
++
++#[test]
++fn test_gnu_hash_huge_bloom_size_32bit() {
++    // bloom_size * 4 overflows a 32-bit usize.
++    parse_with_field(
++        include_bytes!("bins/elf/gnu_hash/hello32.so"),
++        SHT_GNU_HASH,
++        8,
++        &0x4000_0000u32.to_le_bytes(),
++    );
++}
++
++#[test]
++fn test_dynamic_reloc_max_r_sym() {
++    use goblin::elf::section_header::SHT_RELA;
++    // r_sym 0xffffffff in the high half of the first Elf64_Rela r_info: r_sym + 1 overflows a
++    // 32-bit usize.
++    parse_with_field(
++        include_bytes!("bins/elf/gnu_hash/hello.so"),
++        SHT_RELA,
++        12,
++        &u32::MAX.to_le_bytes(),
++    );
++}
+diff --git a/tests/pe.rs b/tests/pe.rs
+index 2b20722..d4e1ca7 100644
+--- a/tests/pe.rs
++++ b/tests/pe.rs
+@@ -58,3 +58,15 @@ fn test_indirect_section_name() {
+         Err(_) => unreachable!(),
+     }
+ }
++
++#[test]
++fn test_debug_directory_max_size() {
++    // A debug data directory size of 0xffffffff: offset + size overflows a 32-bit usize.
++    let mut data = include_bytes!("bins/pe/debug_directories-msvc.exe.bin").to_vec();
++    let pe = PE::parse(&data).unwrap();
++    let optional_header = pe.header.dos_header.pe_pointer as usize + 24;
++    let data_directories = optional_header + if pe.is_64 { 112 } else { 96 };
++    let debug_size = data_directories + 6 * 8 + 4;
++    data[debug_size..debug_size + 4].copy_from_slice(&u32::MAX.to_le_bytes());
++    assert!(PE::parse(&data).is_err());
++}

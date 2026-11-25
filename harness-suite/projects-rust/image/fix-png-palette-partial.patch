@@ -1,13 +1,21 @@
 Subject: [PATCH] png: skip a partial trailing palette entry
 
-Fixed upstream by image-rs/image-png#682 (8330c2c6, "reject malformed PLTE
-chunks"), which rejects PLTE lengths that are not a multiple of 3 instead.
-Not released yet: png 0.18.1 predates it, and 0.18.2 is pending in
-image-rs/image-png#683. Drop this patch once the vendored png contains 8330c2c6.
+A PLTE chunk whose length is not a multiple of 3 (e.g. 4 bytes) made
+create_rgba_palette() slice past its end when expanding an indexed image, so
+image's PngDecoder panicked on a 1x1 indexed PNG with such a PLTE. The test
+added here fails without the fix.
 
+Upstream: fixed by image-rs/image-png#682 (8330c2c6, "Fix panic with
+malformed palette chunk", merged 2026-04-24), which rejects such PLTE chunks
+instead. Not released yet: png 0.18.1 is the latest on crates.io and the
+0.18.2 release PR image-rs/image-png#683 is still open (2026-11-21). Drop
+this patch once the vendored png contains 8330c2c6.
+
+diff --git a/src/decoder/transform/palette.rs b/src/decoder/transform/palette.rs
+index 7508913..3c46afb 100644
 --- a/src/decoder/transform/palette.rs
 +++ b/src/decoder/transform/palette.rs
-@@ -70,8 +70,8 @@ fn create_rgba_palette(info: &Info) -> [[u8; 4]; 256] {
+@@ -70,7 +70,7 @@ fn create_rgba_palette(info: &Info) -> [[u8; 4]; 256] {
              palette_iter = &palette_iter[3..];
              rgba_iter = &mut rgba_iter[1..];
          }
@@ -16,3 +24,25 @@ image-rs/image-png#683. Drop this patch once the vendored png contains 8330c2c6.
              rgba_iter[0][0..3].copy_from_slice(&palette_iter[0..3]);
          }
      }
+@@ -333,6 +333,21 @@ mod test {
+         );
+     }
+ 
++    #[test]
++    fn test_create_rgba_palette_partial_entry() {
++        // A PLTE chunk whose length is not a multiple of 3: the trailing partial
++        // entry is ignored instead of panicking.
++        for plte_len in [1, 2, 4, 5] {
++            let plte: Vec<u8> = (1..=plte_len).collect();
++            let info = create_info(8, &plte, None);
++            let actual = super::create_rgba_palette(&info);
++            if plte.len() >= 3 {
++                assert_eq!(actual[0], [1, 2, 3, 0xFF]);
++            }
++            assert_eq!(actual[plte.len() / 3], [0, 0, 0, 0xFF]);
++        }
++    }
++
+     #[test]
+     fn test_create_rgba_palette() {
+         fn create_expected_rgba_palette(plte: &[u8], trns: &[u8]) -> [[u8; 4]; 256] {

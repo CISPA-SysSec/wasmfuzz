@@ -1,0 +1,12 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 059c549c8..242ebeb90 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -341,6 +341,7 @@ ndk-sys = "0.6"
+ # These overrides allow our examples to explicitly depend on release crates
+ [patch.crates-io]
+ wgpu = { path = "./wgpu" }
++pp-rs = { path = "../pp-rs" }
+ 
+ [profile.release]
+ lto = "thin"

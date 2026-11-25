@@ -1,0 +1,93 @@
+Subject: [PATCH] fuzz: Hash a bounded window of the input for the hash salt
+
+ParseOneInput() runs siphash24 over the whole input twice, once per key,
+and the fuzzers call it for four parsers, so eight byte-at-a-time passes
+over every input: 16-48 % of the harness's fuel. The salt only has to be
+deterministic and vary with the input (b019c28f, PR #1362; the siphash
+salt comes from the original Android fuzzer, PR #308). Inputs of up to 64
+bytes keep exactly the salt they had; longer inputs hash their first and
+last 32 bytes plus their size, so the cost is constant. For those inputs
+a change confined to the middle no longer changes the hash table layout.
+No related open upstream PRs or issues (gh search libexpat/libexpat
+"fuzz", "salt", 2026-11-20). Drop when upstream bounds the salt hash.
+
+diff --git a/expat/fuzz/xml_parse_fuzzer.c b/expat/fuzz/xml_parse_fuzzer.c
+index 8e9dfd7..380c7e8 100644
+--- a/expat/fuzz/xml_parse_fuzzer.c
++++ b/expat/fuzz/xml_parse_fuzzer.c
+@@ -58,13 +58,33 @@ may_stop_character_handler(void *userData, const XML_Char *s, int len) {
+   }
+ }
+ 
++// Inputs of up to SALT_HASH_WINDOW bytes are hashed whole, longer ones by
++// their first and last SALT_HASH_WINDOW / 2 bytes and their size, so the salt
++// costs the same for any input size.
++#define SALT_HASH_WINDOW 64
++
++static uint64_t
++saltHash(const uint8_t *data, size_t size, unsigned char key[16]) {
++  if (size <= SALT_HASH_WINDOW) {
++    return siphash24(data, size, sip_keyof(key));
++  }
++  const size_t half = SALT_HASH_WINDOW / 2;
++  const uint64_t size64 = (uint64_t)size;
++  struct siphash state;
++  sip24_init(&state, sip_keyof(key));
++  sip24_update(&state, data, half);
++  sip24_update(&state, data + size - half, half);
++  sip24_update(&state, &size64, sizeof(size64));
++  return sip24_final(&state);
++}
++
+ static void
+ ParseOneInput(XML_Parser p, const uint8_t *data, size_t size) {
+   // Set the hash salt using siphash to generate a deterministic hash.
+   // The salt is 16 bytes and siphash24 produces 8, so the input is hashed
+   // under two keys.
+-  const uint64_t first = siphash24(data, size, sip_keyof(hash_key_1));
+-  const uint64_t second = siphash24(data, size, sip_keyof(hash_key_2));
++  const uint64_t first = saltHash(data, size, hash_key_1);
++  const uint64_t second = saltHash(data, size, hash_key_2);
+   uint8_t entropy[16];
+   memcpy(entropy, &first, sizeof(first));
+   memcpy(entropy + sizeof(first), &second, sizeof(second));
+diff --git a/expat/fuzz/xml_parsebuffer_fuzzer.c b/expat/fuzz/xml_parsebuffer_fuzzer.c
+index eec3924..02c1e8d 100644
+--- a/expat/fuzz/xml_parsebuffer_fuzzer.c
++++ b/expat/fuzz/xml_parsebuffer_fuzzer.c
+@@ -58,13 +58,33 @@ may_stop_character_handler(void *userData, const XML_Char *s, int len) {
+   }
+ }
+ 
++// Inputs of up to SALT_HASH_WINDOW bytes are hashed whole, longer ones by
++// their first and last SALT_HASH_WINDOW / 2 bytes and their size, so the salt
++// costs the same for any input size.
++#define SALT_HASH_WINDOW 64
++
++static uint64_t
++saltHash(const uint8_t *data, size_t size, unsigned char key[16]) {
++  if (size <= SALT_HASH_WINDOW) {
++    return siphash24(data, size, sip_keyof(key));
++  }
++  const size_t half = SALT_HASH_WINDOW / 2;
++  const uint64_t size64 = (uint64_t)size;
++  struct siphash state;
++  sip24_init(&state, sip_keyof(key));
++  sip24_update(&state, data, half);
++  sip24_update(&state, data + size - half, half);
++  sip24_update(&state, &size64, sizeof(size64));
++  return sip24_final(&state);
++}
++
+ static void
+ ParseOneInput(XML_Parser p, const uint8_t *data, size_t size) {
+   // Set the hash salt using siphash to generate a deterministic hash.
+   // The salt is 16 bytes and siphash24 produces 8, so the input is hashed
+   // under two keys.
+-  const uint64_t first = siphash24(data, size, sip_keyof(hash_key_1));
+-  const uint64_t second = siphash24(data, size, sip_keyof(hash_key_2));
++  const uint64_t first = saltHash(data, size, hash_key_1);
++  const uint64_t second = saltHash(data, size, hash_key_2);
+   uint8_t entropy[16];
+   memcpy(entropy, &first, sizeof(first));
+   memcpy(entropy + sizeof(first), &second, sizeof(second));

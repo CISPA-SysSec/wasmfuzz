@@ -1,0 +1,93 @@
+naga: spv-in: bound the composite size that OpCompositeInsert is lowered for
+
+`insert_composite` rebuilds the whole composite as a `Compose` of one
+`AccessIndex` expression per component. For an array the component count is
+the declared array length, so a module of a few hundred bytes declaring an
+array of 2^30 elements made a single `OpCompositeInsert` allocate tens of
+gigabytes. Reject composites with more than 2^16 components with the new
+`Error::CompositeTooLarge`. The constant is arbitrary; a lowering through a
+local variable would avoid the expansion altogether.
+---
+diff --git a/naga/src/front/spv/error.rs b/naga/src/front/spv/error.rs
+index 48f864492..56b93dc1b 100644
+--- a/naga/src/front/spv/error.rs
++++ b/naga/src/front/spv/error.rs
+@@ -161,6 +161,9 @@ pub enum Error {
+ 
+     #[error("type layout error: {0}")]
+     Layout(LayoutError),
++
++    #[error("composite type %{0} is too large for OpCompositeInsert")]
++    CompositeTooLarge(spirv::Word),
+ }
+ 
+ impl Error {
+diff --git a/naga/src/front/spv/mod.rs b/naga/src/front/spv/mod.rs
+index 7d1aefe3c..d8fca2133 100644
+--- a/naga/src/front/spv/mod.rs
++++ b/naga/src/front/spv/mod.rs
+@@ -100,6 +100,13 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+     "SPV_KHR_fragment_shader_barycentric",
+ ];
+ 
++/// The largest composite that `OpCompositeInsert` is lowered for.
++///
++/// The lowering rebuilds the whole composite from one expression per
++/// component, so an array type with a huge declared length would make a
++/// handful of instructions allocate gigabytes.
++const MAX_COMPOSITE_INSERT_COMPONENTS: usize = 1 << 16;
++
+ #[derive(Copy, Clone, Debug)]
+ pub struct Instruction {
+     op: spirv::Op,
+@@ -1393,6 +1400,12 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         if selection as usize >= count {
+             return Err(Error::InvalidAccessIndex(selection));
+         }
++        // Every component of the composite is spelled out as its own
++        // expression below, so the cost is linear in the array length that
++        // the module declares, not in the size of the module.
++        if count > MAX_COMPOSITE_INSERT_COMPONENTS {
++            return Err(Error::CompositeTooLarge(root_type_id));
++        }
+ 
+         let mut components = Vec::with_capacity(count);
+         for index in 0..count as u32 {
+diff --git a/naga/tests/naga/spirv_malformed.rs b/naga/tests/naga/spirv_malformed.rs
+index 4378e1ba1..6caef0efc 100644
+--- a/naga/tests/naga/spirv_malformed.rs
++++ b/naga/tests/naga/spirv_malformed.rs
+@@ -727,3 +727,33 @@ fn spill_of_call_result_with_undefined_type() {
+         "{result:?}"
+     );
+ }
++
++/// `OpCompositeInsert` into an array whose declared length is huge. The
++/// lowering spells out one expression per element, so this used to allocate
++/// memory proportional to the declared length.
++#[test]
++fn composite_insert_into_huge_array() {
++    let (void, float, uint, len, array, null, f0, fn_void) = (1, 2, 3, 4, 5, 6, 7, 8);
++    let (main, label, result) = (9, 10, 11);
++    let mut w = module_start(5, main, &[]); // GLCompute
++    inst(&mut w, OP_EXECUTION_MODE, &[main, 17, 1, 1, 1]); // LocalSize 1 1 1
++    inst(&mut w, OP_TYPE_VOID, &[void]);
++    inst(&mut w, OP_TYPE_FLOAT, &[float, 32]);
++    inst(&mut w, OP_TYPE_INT, &[uint, 32, 0]);
++    inst(&mut w, OP_CONSTANT, &[uint, len, 1 << 20]);
++    inst(&mut w, OP_TYPE_ARRAY, &[array, float, len]);
++    inst(&mut w, OP_CONSTANT_NULL, &[array, null]);
++    inst(&mut w, OP_CONSTANT, &[float, f0, 0]);
++    inst(&mut w, OP_TYPE_FUNCTION, &[fn_void, void]);
++    inst(&mut w, OP_FUNCTION, &[void, main, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[label]);
++    inst(&mut w, OP_COMPOSITE_INSERT, &[array, result, f0, null, 0]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++
++    let result = parse(&w);
++    assert!(
++        matches!(result, Err(spv::Error::CompositeTooLarge(5))),
++        "{result:?}"
++    );
++}

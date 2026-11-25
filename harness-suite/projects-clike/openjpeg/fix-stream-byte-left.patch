@@ -1,5 +1,26 @@
+Return -1 from opj_stream_get_number_byte_left() instead of failing an assert when the stream
+position is past the declared stream length, and treat a negative result as end of stream (or
+an error) in its callers.
+
+opj_j2k_read_tile_header() seeks to tile-part offsets that opj_j2k_build_tp_index_from_tlm()
+derives from the TLM marker lengths without checking them against the stream length. The
+in-memory callbacks of tests/fuzzers/opj_decompress_fuzzer_{J2K,JP2}.cpp store the position in a
+size_t, so with a 32-bit size_t (wasm32 here) a seek to 2^32 + n lands at n and succeeds. The
+reads that follow return data while m_byte_offset is beyond m_user_data_length, and the next
+opj_stream_get_number_byte_left() call (in opj_j2k_read_tile_header(), or in
+opj_jp2_read_boxhdr() for a last box of length 0) aborts on its assert. On 64-bit hosts the
+fuzzer's read callback fails at that offset and decoding stops cleanly. Includes
+test_tlm_seek_past_end, which builds such a codestream and decodes it through callbacks that
+keep 32-bit positions; it aborts without this change. Rejecting seeks beyond
+m_user_data_length in opj_stream_read_seek(), or beyond nLength in the fuzzers' SeekCallback,
+would also avoid the abort.
+Not fixed upstream as of 8314119 (master on 2026-11-21).
+Upstream: none found (uclouvain/openjpeg issues and PRs searched for
+opj_stream_get_number_byte_left on 2026-11-21; #1151 and #455 are older reports of the same
+assert on other paths).
+
 diff --git a/src/lib/openjp2/cio.c b/src/lib/openjp2/cio.c
-index 4fde9fe..435948a 100644
+index 4fde9fe2..435948a2 100644
 --- a/src/lib/openjp2/cio.c
 +++ b/src/lib/openjp2/cio.c
 @@ -499,7 +499,7 @@ OPJ_OFF_T opj_stream_read_skip(opj_stream_private_t * p_stream,
@@ -25,7 +46,7 @@ index 4fde9fe..435948a 100644
             (OPJ_OFF_T)(p_stream->m_user_data_length) - p_stream->m_byte_offset :
             0;
 diff --git a/src/lib/openjp2/cio.h b/src/lib/openjp2/cio.h
-index 7caee30..94e4d97 100644
+index 7caee30a..94e4d972 100644
 --- a/src/lib/openjp2/cio.h
 +++ b/src/lib/openjp2/cio.h
 @@ -320,7 +320,8 @@ OPJ_OFF_T opj_stream_tell(const opj_stream_private_t * p_stream);
@@ -39,7 +60,7 @@ index 7caee30..94e4d97 100644
  OPJ_OFF_T opj_stream_get_number_byte_left(const opj_stream_private_t *
          p_stream);
 diff --git a/src/lib/openjp2/j2k.c b/src/lib/openjp2/j2k.c
-index ad76aca..38231f6 100644
+index 0d5e6572..85adda4d 100644
 --- a/src/lib/openjp2/j2k.c
 +++ b/src/lib/openjp2/j2k.c
 @@ -4995,12 +4995,18 @@ static OPJ_BOOL opj_j2k_read_sod(opj_j2k_t *p_j2k,
@@ -62,7 +83,7 @@ index ad76aca..38231f6 100644
      } else {
          /* Check to avoid pass the limit of OPJ_UINT32 */
          if (p_j2k->m_specific_param.m_decoder.m_sot_length >= 2) {
-@@ -9768,7 +9774,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
+@@ -9770,7 +9776,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
          /* Try to read until the Start Of Data is detected */
          while (l_current_marker != J2K_MS_SOD) {
  
@@ -71,7 +92,7 @@ index ad76aca..38231f6 100644
                  p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_NEOC;
                  break;
              }
-@@ -9792,7 +9798,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
+@@ -9794,7 +9800,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
  
              /* cf. https://code.google.com/p/openjpeg/issues/detail?id=226 */
              if (l_current_marker == 0x8080 &&
@@ -80,7 +101,7 @@ index ad76aca..38231f6 100644
                  p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_NEOC;
                  break;
              }
-@@ -9903,7 +9909,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
+@@ -9905,7 +9911,7 @@ OPJ_BOOL opj_j2k_read_tile_header(opj_j2k_t * p_j2k,
                                 &l_current_marker, 2);
              }
          }
@@ -89,7 +110,7 @@ index ad76aca..38231f6 100644
                  && p_j2k->m_specific_param.m_decoder.m_state == J2K_STATE_NEOC) {
              break;
          }
-@@ -10180,7 +10186,7 @@ OPJ_BOOL opj_j2k_decode_tile(opj_j2k_t * p_j2k,
+@@ -10182,7 +10188,7 @@ OPJ_BOOL opj_j2k_decode_tile(opj_j2k_t * p_j2k,
      p_j2k->m_specific_param.m_decoder.m_can_decode = 0;
      p_j2k->m_specific_param.m_decoder.m_state &= (~(OPJ_UINT32)J2K_STATE_DATA);
  
@@ -98,7 +119,7 @@ index ad76aca..38231f6 100644
              && p_j2k->m_specific_param.m_decoder.m_state == J2K_STATE_NEOC) {
          return OPJ_TRUE;
      }
-@@ -10197,7 +10203,7 @@ OPJ_BOOL opj_j2k_decode_tile(opj_j2k_t * p_j2k,
+@@ -10199,7 +10205,7 @@ OPJ_BOOL opj_j2k_decode_tile(opj_j2k_t * p_j2k,
              p_j2k->m_current_tile_number = 0;
              p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_EOC;
          } else if (l_current_marker != J2K_MS_SOT) {
@@ -107,7 +128,7 @@ index ad76aca..38231f6 100644
                  p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_NEOC;
                  opj_event_msg(p_manager, EVT_WARNING, "Stream does not end with EOC\n");
                  return OPJ_TRUE;
-@@ -12123,7 +12129,7 @@ static OPJ_BOOL opj_j2k_decode_tiles(opj_j2k_t *p_j2k,
+@@ -12125,7 +12131,7 @@ static OPJ_BOOL opj_j2k_decode_tiles(opj_j2k_t *p_j2k,
          opj_event_msg(p_manager, EVT_INFO,
                        "Image data has been updated with tile %d.\n\n", l_current_tile_no + 1);
  
@@ -117,7 +138,7 @@ index ad76aca..38231f6 100644
              break;
          }
 diff --git a/src/lib/openjp2/jp2.c b/src/lib/openjp2/jp2.c
-index 3d16d10..83405a4 100644
+index 3d16d107..83405a4e 100644
 --- a/src/lib/openjp2/jp2.c
 +++ b/src/lib/openjp2/jp2.c
 @@ -496,6 +496,11 @@ static OPJ_BOOL opj_jp2_read_boxhdr(opj_jp2_box_t *box,
@@ -132,3 +153,254 @@ index 3d16d10..83405a4 100644
          if (bleft > (OPJ_OFF_T)(0xFFFFFFFFU - 8U)) {
              opj_event_msg(p_manager, EVT_ERROR,
                            "Cannot handle box sizes higher than 2^32\n");
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 73a19d6c..d1de3835 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -43,6 +43,9 @@ target_link_libraries(j2k_random_tile_access ${OPENJPEG_LIBRARY_NAME})
+ add_executable(test_tile_part_interleaved test_tile_part_interleaved.c)
+ target_link_libraries(test_tile_part_interleaved ${OPENJPEG_LIBRARY_NAME})
+ 
++add_executable(test_tlm_seek_past_end test_tlm_seek_past_end.c)
++target_link_libraries(test_tlm_seek_past_end ${OPENJPEG_LIBRARY_NAME})
++
+ add_executable(compare_raw_files ${compare_raw_files_SRCS})
+ 
+ add_executable(test_tile_encoder test_tile_encoder.c)
+@@ -90,6 +93,10 @@ set_property(TEST rta5 APPEND PROPERTY DEPENDS tte5)
+ # whose tile-parts are interleaved across tiles (self-contained, no test data).
+ add_test(NAME rta_interleaved_tile_parts COMMAND test_tile_part_interleaved)
+ 
++# Non-regression test: TLM tile-part offsets past the end of the stream, with a
++# seek callback that keeps 32-bit positions (self-contained, no test data).
++add_test(NAME tlm_seek_past_end COMMAND test_tlm_seek_past_end)
++
+ add_test(NAME tda_prep_reversible_no_precinct COMMAND test_tile_encoder 1 256 256 32 32 8 0 reversible_no_precinct.j2k 4 4 3 0 0 1)
+ add_test(NAME tda_reversible_no_precinct COMMAND test_decode_area -q reversible_no_precinct.j2k)
+ set_property(TEST tda_reversible_no_precinct APPEND PROPERTY DEPENDS tda_prep_reversible_no_precinct)
+diff --git a/tests/test_tlm_seek_past_end.c b/tests/test_tlm_seek_past_end.c
+new file mode 100644
+index 00000000..1933d077
+--- /dev/null
++++ b/tests/test_tlm_seek_past_end.c
+@@ -0,0 +1,220 @@
++/*
++ * Copyright (c) 2026, OpenJPEG contributors
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS `AS IS'
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
++ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++ * POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/*
++ * Non-regression test: a TLM marker whose tile-part lengths add up to more
++ * than the codestream makes the decoder seek to a tile-part offset past the
++ * end of the stream. The seek callback below keeps the position in 32 bits,
++ * as the in-memory callbacks of tests/fuzzers/ do on hosts with a 32-bit
++ * size_t, so the seek "succeeds" at offset mod 2^32 and the next reads return
++ * data. opj_stream_get_number_byte_left() then saw a byte offset beyond the
++ * declared stream length and failed an assert(); decoding must fail or stop
++ * cleanly instead.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "openjpeg.h"
++
++static void quiet_callback(const char *msg, void *client_data)
++{
++    (void)msg;
++    (void)client_data;
++}
++
++typedef struct {
++    const unsigned char *data;
++    OPJ_UINT32 len;
++    OPJ_UINT32 pos; /* 32-bit position, as with a 32-bit size_t */
++} mem_stream_t;
++
++static OPJ_SIZE_T mem_read(void *buf, OPJ_SIZE_T n, void *user)
++{
++    mem_stream_t *m = (mem_stream_t *)user;
++    OPJ_UINT32 avail;
++    if (m->pos >= m->len) {
++        return (OPJ_SIZE_T) - 1;
++    }
++    avail = m->len - m->pos;
++    if (n > avail) {
++        n = avail;
++    }
++    memcpy(buf, m->data + m->pos, n);
++    m->pos += (OPJ_UINT32)n;
++    return n;
++}
++
++static OPJ_OFF_T mem_skip(OPJ_OFF_T n, void *user)
++{
++    mem_stream_t *m = (mem_stream_t *)user;
++    m->pos += (OPJ_UINT32)n;
++    return n;
++}
++
++static OPJ_BOOL mem_seek(OPJ_OFF_T n, void *user)
++{
++    mem_stream_t *m = (mem_stream_t *)user;
++    m->pos = (OPJ_UINT32)n;
++    return OPJ_TRUE;
++}
++
++static void put16(unsigned char **p, OPJ_UINT32 v)
++{
++    *(*p)++ = (unsigned char)(v >> 8);
++    *(*p)++ = (unsigned char)v;
++}
++
++static void put32(unsigned char **p, OPJ_UINT32 v)
++{
++    put16(p, v >> 16);
++    put16(p, v & 0xffff);
++}
++
++/* SOT + SOD of an empty tile-part */
++static void put_tile_part(unsigned char **p, OPJ_UINT32 tile,
++                          OPJ_UINT32 psot, OPJ_UINT32 tpsot,
++                          OPJ_UINT32 tnsot)
++{
++    put16(p, 0xff90);
++    put16(p, 10);
++    put16(p, tile);
++    put32(p, psot);
++    *(*p)++ = (unsigned char)tpsot;
++    *(*p)++ = (unsigned char)tnsot;
++    put16(p, 0xff93);
++}
++
++int main(void)
++{
++    unsigned char cs[256];
++    unsigned char *p = cs;
++    OPJ_UINT32 main_header_end, tp1_offset;
++    mem_stream_t m;
++    opj_codec_t *codec;
++    opj_stream_t *stream;
++    opj_image_t *image = NULL;
++    opj_dparameters_t params;
++
++    /* Main header: 2x1 tiles of 16x16, one 8-bit component. */
++    put16(&p, 0xff4f);              /* SOC */
++    put16(&p, 0xff51);              /* SIZ */
++    put16(&p, 41);
++    put16(&p, 0);                   /* Rsiz */
++    put32(&p, 32);                  /* Xsiz */
++    put32(&p, 16);                  /* Ysiz */
++    put32(&p, 0);                   /* XOsiz */
++    put32(&p, 0);                   /* YOsiz */
++    put32(&p, 16);                  /* XTsiz */
++    put32(&p, 16);                  /* YTsiz */
++    put32(&p, 0);                   /* XTOsiz */
++    put32(&p, 0);                   /* YTOsiz */
++    put16(&p, 1);                   /* Csiz */
++    *p++ = 7;                       /* Ssiz: 8 bits unsigned */
++    *p++ = 1;                       /* XRsiz */
++    *p++ = 1;                       /* YRsiz */
++    put16(&p, 0xff52);              /* COD */
++    put16(&p, 12);
++    *p++ = 0;                       /* Scod */
++    *p++ = 0;                       /* LRCP */
++    put16(&p, 1);                   /* layers */
++    *p++ = 0;                       /* no MCT */
++    *p++ = 0;                       /* 0 decomposition levels */
++    *p++ = 4;                       /* code-block 64x64 */
++    *p++ = 4;
++    *p++ = 0;                       /* code-block style */
++    *p++ = 1;                       /* 5-3 reversible */
++    put16(&p, 0xff5c);              /* QCD */
++    put16(&p, 4);
++    *p++ = 0;                       /* no quantization, 0 guard bits */
++    *p++ = 8 << 3;
++    /* TLM, Stlm: 8-bit Ttlm, 32-bit Ptlm. Tile 0 is split into the two
++     * tile-parts at the start of the tile data, but the TLM entries put a
++     * tile-part of tile 1 of 2^32 - 1 bytes between them, so the second
++     * tile-part of tile 0 is announced 2^32 bytes after its real offset. */
++    put16(&p, 0xff55);
++    put16(&p, 4 + 3 * 5);
++    *p++ = 0;                       /* Ztlm */
++    *p++ = 0x50;                    /* Stlm */
++    *p++ = 0;                       /* tile 0, first tile-part */
++    put32(&p, 0xffffffffU);
++    *p++ = 1;                       /* tile 1 */
++    put32(&p, 15);
++    *p++ = 0;                       /* tile 0, second tile-part */
++    put32(&p, 0);
++    main_header_end = (OPJ_UINT32)(p - cs);
++
++    /* the real tile-parts */
++    put_tile_part(&p, 0, 14, 0, 2);
++    tp1_offset = (OPJ_UINT32)(p - cs);
++    put_tile_part(&p, 0, 0, 1, 2);
++    put16(&p, 0xffd9);              /* EOC */
++
++    /* TLM puts the second tile-part of tile 0 at
++     * main_header_end + (2^32 - 1) + 15 == tp1_offset + 2^32 */
++    if (tp1_offset != main_header_end + 14) {
++        fprintf(stderr, "test_tlm_seek_past_end: bad layout\n");
++        return EXIT_FAILURE;
++    }
++
++    m.data = cs;
++    m.len = (OPJ_UINT32)(p - cs);
++    m.pos = 0;
++
++    codec = opj_create_decompress(OPJ_CODEC_J2K);
++    opj_set_info_handler(codec, quiet_callback, NULL);
++    opj_set_warning_handler(codec, quiet_callback, NULL);
++    opj_set_error_handler(codec, quiet_callback, NULL);
++    opj_set_default_decoder_parameters(&params);
++    opj_setup_decoder(codec, &params);
++
++    stream = opj_stream_create(1024, OPJ_TRUE);
++    opj_stream_set_user_data(stream, &m, NULL);
++    opj_stream_set_user_data_length(stream, m.len);
++    opj_stream_set_read_function(stream, mem_read);
++    opj_stream_set_skip_function(stream, mem_skip);
++    opj_stream_set_seek_function(stream, mem_seek);
++
++    if (!opj_read_header(stream, codec, &image)) {
++        fprintf(stderr, "test_tlm_seek_past_end: opj_read_header failed\n");
++        opj_stream_destroy(stream);
++        opj_destroy_codec(codec);
++        return EXIT_FAILURE;
++    }
++    /* Decode tile 0 only: the decoder then seeks to its tile-parts by the
++     * TLM offsets. The result does not matter, only that it returns. */
++    if (opj_set_decode_area(codec, image, 0, 0, 16, 16)) {
++        (void)opj_decode(codec, stream, image);
++        (void)opj_end_decompress(codec, stream);
++    }
++
++    opj_image_destroy(image);
++    opj_stream_destroy(stream);
++    opj_destroy_codec(codec);
++    printf("test_tlm_seek_past_end: OK\n");
++    return EXIT_SUCCESS;
++}

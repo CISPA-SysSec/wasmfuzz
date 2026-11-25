@@ -1,8 +1,11 @@
+Upstream: open issue pdeljanov/Symphonia#622 (by KuSh, 2026-11-15) reports the same lookup1_values panic (pow overflow / assert) in symphonia-codec-vorbis codebook.rs; no fix proposed yet.
+Drop this patch once a fix for #622 lands.
+
 diff --git a/symphonia-codec-vorbis/src/codebook.rs b/symphonia-codec-vorbis/src/codebook.rs
-index 6a47818..82da777 100644
+index ea54aaa..8cc076d 100644
 --- a/symphonia-codec-vorbis/src/codebook.rs
 +++ b/symphonia-codec-vorbis/src/codebook.rs
-@@ -31,20 +31,27 @@ fn float32_unpack(x: u32) -> f32 {
+@@ -31,20 +31,25 @@ fn float32_unpack(x: u32) -> f32 {
  /// The return value for this function is defined to be ’the greatest integer value for which the
  /// return value to the power of `dimensions` is less than or equal to `entries`.
  #[inline(always)]
@@ -25,12 +28,10 @@ index 6a47818..82da777 100644
 +    let d = u32::from(dimensions);
 +    let mut x = 1u32;
 +    loop {
-+        let xpow = match x.checked_pow(d) {
-+            Some(p) => p,
-+            None => return decode_error("vorbis: codebook lookup size overflow"),
-+        };
-+        if xpow > entries {
-+            break;
++        // x^d overflowing u32 means it is certainly greater than `entries`.
++        match x.checked_pow(d) {
++            Some(xpow) if xpow <= entries => {}
++            _ => break,
 +        }
 +        x = x.saturating_add(1);
 +        if x == u32::MAX {
@@ -41,19 +42,7 @@ index 6a47818..82da777 100644
  }
  
  /// As defined in section 3.2.1 of the Vorbis I specification.
-@@ -132,8 +139,9 @@ fn synthesize_codewords(code_lens: &[u8]) -> Result<Vec<u32>> {
-     let mut next_codeword = [0u32; 33];
- 
-     for &len in code_lens.iter() {
--        // This should always be true.
--        debug_assert!(len <= 32);
-+        if len > 32 {
-+            return decode_error("vorbis: invalid codebook codeword length");
-+        }
- 
-         // Zero length codewords are invalid and ignored.
-         if len == 0 {
-@@ -336,8 +344,11 @@ impl VorbisCodebook {
+@@ -342,8 +347,11 @@ impl VorbisCodebook {
  
                  // Lookup type is either 1 or 2 as per outer match.
                  let lookup_values = match lookup_type {
@@ -67,7 +56,7 @@ index 6a47818..82da777 100644
                      _ => unreachable!(),
                  };
  
-@@ -376,6 +387,10 @@ impl VorbisCodebook {
+@@ -382,6 +390,10 @@ impl VorbisCodebook {
          // Generate a canonical list of codewords given the set of codeword lengths.
          let code_words = synthesize_codewords(&code_lens)?;
  
@@ -78,7 +67,7 @@ index 6a47818..82da777 100644
          // Finally, generate the codebook with a reverse (LSb) bit order.
          let mut builder = CodebookBuilder::new(BitOrder::Reverse);
  
-@@ -384,6 +399,10 @@ impl VorbisCodebook {
+@@ -390,6 +402,10 @@ impl VorbisCodebook {
  
          let codebook = builder.make::<Entry32x32>(&code_words, &code_lens, &code_values)?;
  
@@ -89,7 +78,7 @@ index 6a47818..82da777 100644
          Ok(VorbisCodebook { codebook, dimensions: codebook_dimensions, vq_vec })
      }
  
-@@ -454,18 +473,20 @@ mod tests {
+@@ -460,18 +476,20 @@ mod tests {
  
      #[test]
      fn verify_lookup1_values() {

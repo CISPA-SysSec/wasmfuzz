@@ -1,0 +1,113 @@
+Subject: [PATCH] modular: Refresh the padding after subtracting patches
+
+The modular encoder pads the frame to a multiple of the block size by
+replicating the last column and row. Patches are subtracted only inside the
+image, so with Gaborish forced on, the inverse Gaborish read padding that
+still held the pixels before patch subtraction, while the decoder mirrors the
+image at its border: a patch that touches the right or bottom border came out
+several steps off in "lossless" mode. Re-pad the image after subtracting the
+patches when Gaborish is on.
+
+Found with streaming_fuzzer ("Check(outlier_count == 0)").
+Test: JxlTest.LosslessModularGaborishPatchesAtBorder.
+Upstream: libjxl#5158 (12e4bf40, merged 2026-11-19) moved the inverse Gaborish
+after the patch subtraction but does not refresh the padding; the test still
+fails without this patch at 12e4bf40. #5158 also stops modular streaming with
+forced Gaborish, so the streaming fuzzer no longer sees this (the reproducer
+passes without the patch at 12e4bf40).
+
+diff --git a/lib/jxl/enc_modular.cc b/lib/jxl/enc_modular.cc
+index eb7fffc6..f9335566 100644
+--- a/lib/jxl/enc_modular.cc
++++ b/lib/jxl/enc_modular.cc
+@@ -732,6 +732,26 @@ Status ModularFrameEncoder::ComputeEncodingData(
+         cparams_.color_transform == ColorTransform::kXYB));
+     JXL_RETURN_IF_ERROR(PatchDictionaryEncoder::SubtractFrom(
+         enc_state->shared.image_features.patches, color));
++    // The image was padded to a multiple of the block size by replicating
++    // its last column and row. Patches are only subtracted inside the image,
++    // so refresh the padding: the inverse Gaborish below would otherwise
++    // read the stale padding, while the decoder mirrors the image at its
++    // border.
++    const size_t xs = patch_dim.xsize;
++    const size_t ys = patch_dim.ysize;
++    if (frame_header.loop_filter.gab && xs > 0 && ys > 0 &&
++        xs <= color->xsize() && ys <= color->ysize()) {
++      for (size_t c = 0; c < 3; c++) {
++        for (size_t y = 0; y < ys; y++) {
++          float* JXL_RESTRICT row = color->PlaneRow(c, y);
++          for (size_t x = xs; x < color->xsize(); x++) row[x] = row[xs - 1];
++        }
++        for (size_t y = ys; y < color->ysize(); y++) {
++          memcpy(color->PlaneRow(c, y), color->ConstPlaneRow(c, ys - 1),
++                 color->xsize() * sizeof(float));
++        }
++      }
++    }
+   }
+ 
+   if (do_color && frame_header.loop_filter.gab && !groupwise) {
+diff --git a/lib/jxl/jxl_test.cc b/lib/jxl/jxl_test.cc
+index 4c35ed36..4d545387 100644
+--- a/lib/jxl/jxl_test.cc
++++ b/lib/jxl/jxl_test.cc
+@@ -2045,5 +2045,59 @@ TEST(JxlTest, LossyThinImageButteraugliIterations) {
+   EXPECT_GT(psnr8, psnr7 - 1.0f);
+ }
+ 
++// With Gaborish forced on, the padding of the image kept the pixels from
++// before patch subtraction, and the inverse Gaborish read them at the right
++// and bottom border, so a patch at the border was off by several steps.
++TEST(JxlTest, LosslessModularGaborishPatchesAtBorder) {
++  // Two rows that repeat every 64 rows and end at the right image border.
++  static const uint16_t kRows[2][13] = {
++      {0x41d6, 0x6d90, 0x9d2f, 0x798c, 0x0f40, 0xbdb8, 0x3f64, 0x9fdd, 0xf389,
++       0xd8fe, 0x87f1, 0xf18d, 0xc771},
++      {0x7d75, 0xe86b, 0x6d78, 0xef27, 0xb0bc, 0x1c41, 0x9d53, 0x40e5, 0x3925,
++       0xcf83, 0xe40f, 0x79bf, 0x8e6f}};
++  const size_t xsize = 13;
++  const size_t ysize = 2054;
++  TestImage image;
++  ASSERT_TRUE(image.SetDimensions(xsize, ysize));
++  ASSERT_TRUE(image.SetChannels(1));
++  image.SetAllBitDepths(4);
++  image.SetDataType(JXL_TYPE_UINT16).SetEndianness(JXL_LITTLE_ENDIAN);
++  JXL_TEST_ASSIGN_OR_DIE(auto frame, image.AddFrame());
++  frame.ZeroFill();
++  ASSERT_EQ(image.ppf().frames[0].color.stride, xsize * 2);
++  uint16_t* pixels =
++      reinterpret_cast<uint16_t*>(image.ppf().frames[0].color.pixels());
++  for (size_t y = 0; y < ysize; ++y) {
++    if (y % 64 >= 2) continue;
++    for (size_t x = 0; x < xsize; ++x) {
++      pixels[y * xsize + x] = kRows[y % 64][x];
++    }
++  }
++
++  JXLCompressParams cparams;
++  cparams.distance = 0.0;
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_EFFORT, 8);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_DECODING_SPEED, 0);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_GABORISH, 1);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_MODULAR_GROUP_SIZE, 0);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_BUFFERING, 0);
++  extras::JXLDecompressParams dparams;
++  dparams.accepted_formats = {{1, JXL_TYPE_UINT16, JXL_LITTLE_ENDIAN, 0}};
++
++  PackedPixelFile ppf_out;
++  Roundtrip(image.ppf(), cparams, dparams, nullptr, &ppf_out);
++  ASSERT_EQ(ppf_out.frames[0].color.stride, xsize * 2);
++  const uint16_t* out =
++      reinterpret_cast<const uint16_t*>(ppf_out.frames[0].color.pixels());
++  int max_diff = 0;
++  for (size_t i = 0; i < xsize * ysize; ++i) {
++    // Compare at the 4-bit precision of the image.
++    int a = (pixels[i] * 15 + 32767) / 65535;
++    int b = (out[i] * 15 + 32767) / 65535;
++    max_diff = std::max(max_diff, std::abs(a - b));
++  }
++  EXPECT_LE(max_diff, 1);
++}
++
+ }  // namespace
+ }  // namespace jxl

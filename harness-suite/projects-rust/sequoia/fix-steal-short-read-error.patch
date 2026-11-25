@@ -1,0 +1,35 @@
+Upstream: open issue sequoia-pgp/sequoia#1246 (by nwalfield, 2026-05-11) discusses turning parser
+assert failures into errors, the direction of this patch; no MR yet.
+
+BufferedReader::steal asserted that data_consume_hard returned at least `amount` bytes. Return an
+UnexpectedEof error instead when a reader returns a short buffer. This is defensive: the only
+known way to reach the assert was the 32-bit subpacket length wrap, and
+fix-subpacket-len-overflow.patch and fix-rawcert-body-len-overflow.patch each prevent it on their
+own. With the rest of the series applied, none of 645k distinct crash inputs collected by
+fuzzing the openpgp fuzz targets reaches the assert without this patch (native x86_64 and i686
+release builds). No test: no reader is known to break the contract.
+
+diff --git a/buffered-reader/src/lib.rs b/buffered-reader/src/lib.rs
+index 409d6ea4..bdc5fb9f 100644
+--- a/buffered-reader/src/lib.rs
++++ b/buffered-reader/src/lib.rs
+@@ -822,12 +822,14 @@ pub trait BufferedReader<C> : io::Read + fmt::Debug + fmt::Display + Send + Sync
+     /// [`BufferedReader`] implementations may optimize this to avoid a
+     /// copy by directly returning the internal buffer.
+     fn steal(&mut self, amount: usize) -> Result<Vec<u8>, std::io::Error> {
+-        let mut data = self.data_consume_hard(amount)?;
+-        assert!(data.len() >= amount);
+-        if data.len() > amount {
+-            data = &data[..amount];
++        let data = self.data_consume_hard(amount)?;
++        if data.len() < amount {
++            return Err(Error::new(
++                ErrorKind::UnexpectedEof,
++                "short read in BufferedReader::steal",
++            ));
+         }
+-        Ok(data.to_vec())
++        Ok(data[..amount].to_vec())
+     }
+ 
+     /// Like [`BufferedReader::steal`], but instead of stealing a fixed number of

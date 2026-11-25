@@ -1,5 +1,12 @@
+Upstream: none found.
+
+A CAF channel layout chunk that uses channel descriptions but lists none replaces the channels from
+the audio description with an empty set. The AAC (without a magic cookie) and ADPCM decoders
+accepted that, and AudioBuffer::new divided by the channel count of zero. The PCM decoder already
+rejects zero channels the same way.
+
 diff --git a/symphonia-codec-aac/src/aac/mod.rs b/symphonia-codec-aac/src/aac/mod.rs
-index f005179..0c77965 100644
+index f005179..d686bc5 100644
 --- a/symphonia-codec-aac/src/aac/mod.rs
 +++ b/symphonia-codec-aac/src/aac/mod.rs
 @@ -87,6 +87,11 @@ impl AacDecoder {
@@ -14,8 +21,30 @@ index f005179..0c77965 100644
          // Check complexity.
          if asc.object_type != AudioObjectType::Lc
              || asc.sbr_present
+diff --git a/symphonia-codec-aac/tests/zero_channels.rs b/symphonia-codec-aac/tests/zero_channels.rs
+new file mode 100644
+index 0000000..b5eafe6
+--- /dev/null
++++ b/symphonia-codec-aac/tests/zero_channels.rs
+@@ -0,0 +1,16 @@
++use symphonia_codec_aac::AacDecoder;
++use symphonia_core::audio::Channels;
++use symphonia_core::codecs::audio::well_known::CODEC_ID_AAC;
++use symphonia_core::codecs::audio::{AudioCodecParameters, AudioDecoderOptions};
++
++#[test]
++fn reject_zero_channels() {
++    // Without an AudioSpecificConfig the channels come from the codec parameters.
++    let mut params = AudioCodecParameters::new();
++    params
++        .for_codec(CODEC_ID_AAC)
++        .with_sample_rate(44100)
++        .with_channels(Channels::Custom([].into()));
++
++    assert!(AacDecoder::try_new(&params, &AudioDecoderOptions::default()).is_err());
++}
 diff --git a/symphonia-codec-adpcm/src/lib.rs b/symphonia-codec-adpcm/src/lib.rs
-index 64f1f69..69f8e27 100644
+index 64f1f69..5b44f88 100644
 --- a/symphonia-codec-adpcm/src/lib.rs
 +++ b/symphonia-codec-adpcm/src/lib.rs
 @@ -102,6 +102,9 @@ impl AdpcmDecoder {
@@ -28,3 +57,28 @@ index 64f1f69..69f8e27 100644
              if channels.count() > 2 {
                  return unsupported_error("adpcm: up to two channels are supported");
              }
+diff --git a/symphonia-codec-adpcm/tests/zero_channels.rs b/symphonia-codec-adpcm/tests/zero_channels.rs
+new file mode 100644
+index 0000000..0ba9110
+--- /dev/null
++++ b/symphonia-codec-adpcm/tests/zero_channels.rs
+@@ -0,0 +1,19 @@
++use symphonia_codec_adpcm::AdpcmDecoder;
++use symphonia_core::audio::Channels;
++use symphonia_core::codecs::audio::well_known::{CODEC_ID_ADPCM_IMA_QT, CODEC_ID_ADPCM_IMA_WAV};
++use symphonia_core::codecs::audio::{AudioCodecParameters, AudioDecoderOptions};
++
++#[test]
++fn reject_zero_channels() {
++    for codec in [CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_IMA_QT] {
++        let mut params = AudioCodecParameters::new();
++        params
++            .for_codec(codec)
++            .with_sample_rate(44100)
++            .with_channels(Channels::Custom([].into()))
++            .with_max_frames_per_packet(64)
++            .with_frames_per_block(64);
++
++        assert!(AdpcmDecoder::try_new(&params, &AudioDecoderOptions::default()).is_err());
++    }
++}

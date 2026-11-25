@@ -1,0 +1,22 @@
+Cap SDNUMNEWSYMS and SDNUMEXSYMS at 65535, the bound pdfium uses
+(JBIG2_MAX_NEW_SYSMBOLS / JBIG2_MAX_EXPORT_SYSMBOLS). Without it a 32-bit count
+from the stream sizes the symbol bitmap table, which exhausts the wasm32
+guest's memory.
+
+diff --git a/poppler/JBIG2Stream.cc b/poppler/JBIG2Stream.cc
+index ca44729aa..7683692dc 100644
+--- a/poppler/JBIG2Stream.cc
++++ b/poppler/JBIG2Stream.cc
+@@ -1602,6 +1602,12 @@ bool JBIG2Stream::readSymbolDictSeg(unsigned int segNum, const std::vector<unsig
+         error(errSyntaxError, curStr->getPos(), "Unexpected EOF in JBIG2 stream");
+         return false;
+     }
++    // same bound as pdfium (JBIG2_MAX_NEW_SYSMBOLS / JBIG2_MAX_EXPORT_SYSMBOLS): a 32-bit count
++    // from the stream otherwise sizes the bitmap tables at up to 2^32 entries
++    if (numExSyms > 65535 || numNewSyms > 65535) {
++        error(errSyntaxError, curStr->getPos(), "Too many symbols in JBIG2 symbol dictionary");
++        return false;
++    }
+ 
+     // get referenced segments: input symbol dictionaries and code tables
+     numInputSyms = 0;

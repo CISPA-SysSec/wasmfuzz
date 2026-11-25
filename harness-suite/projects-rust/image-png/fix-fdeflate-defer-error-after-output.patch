@@ -22,6 +22,9 @@ maxlen bytes of output. Present at fdeflate HEAD a713d02 too (read()
 lost its end_of_input argument there; the change is the same).
 Test: test_input_chunking_sensitivity_error_after_full_output.
 
+Upstream: open issue image-rs/fdeflate#58 (by 197g, 2025-09-05) reports that errors depend on how input is chunked; fintelia suggests exposing the output produced before the error. No PR yet.
+Drop this patch once #58 is fixed.
+
 diff --git a/src/decompress.rs b/src/decompress.rs
 index baba376..9abc3a8 100644
 --- a/src/decompress.rs

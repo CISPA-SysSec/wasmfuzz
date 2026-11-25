@@ -1,5 +1,8 @@
+Upstream: open PR pdeljanov/Symphonia#567 (by iliasabk, 2026-09-23) fixes the same out-of-bounds trun first-sample accessors (trun.rs); issue #559 reports it.
+Drop this patch once #567 lands.
+
 diff --git a/symphonia-format-isomp4/src/atoms/trun.rs b/symphonia-format-isomp4/src/atoms/trun.rs
-index 8bce4e8..7671c83 100644
+index 8bce4e8..788956e 100644
 --- a/symphonia-format-isomp4/src/atoms/trun.rs
 +++ b/symphonia-format-isomp4/src/atoms/trun.rs
 @@ -49,6 +49,12 @@ impl TrunAtom {
@@ -28,3 +31,49 @@ index 8bce4e8..7671c83 100644
          match self.first_sample_flags {
              Some(flags) => flags & TrunAtom::SAMPLE_SIZE_PRESENT != 0,
              None => false,
+@@ -309,3 +321,45 @@ impl Atom for TrunAtom {
+         })
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use std::io::Cursor;
++
++    use symphonia_core::io::MediaSourceStream;
++
++    use super::TrunAtom;
++    use crate::atoms::AtomIterator;
++
++    /// Reads a trun atom of two samples that has only the first-sample-flags-present flag set, so
++    /// it records no per-sample durations or sizes.
++    fn read_trun(first_sample_flags: u32) -> TrunAtom {
++        let mut atom = Vec::new();
++        atom.extend_from_slice(&20u32.to_be_bytes());
++        atom.extend_from_slice(b"trun");
++        atom.extend_from_slice(&TrunAtom::FIRST_SAMPLE_FLAGS_PRESENT.to_be_bytes());
++        atom.extend_from_slice(&2u32.to_be_bytes());
++        atom.extend_from_slice(&first_sample_flags.to_be_bytes());
++
++        let len = atom.len() as u64;
++        let mss = MediaSourceStream::new(Box::new(Cursor::new(atom)), Default::default());
++        let mut it = AtomIterator::new(mss, Some(len));
++        assert!(matches!(it.next_header(), Ok(Some(_))));
++        let Ok(trun) = it.read_atom::<TrunAtom>() else { panic!("failed to read trun atom") };
++        trun
++    }
++
++    #[test]
++    fn first_sample_fields_without_recorded_values() {
++        // The first sample flags claim an explicit duration and size for the first sample, but the
++        // trun records neither. All samples use the defaults.
++        let trun = read_trun(TrunAtom::FIRST_SAMPLE_FLAGS_PRESENT | TrunAtom::SAMPLE_SIZE_PRESENT);
++
++        assert_eq!(trun.total_duration(10), 20);
++        assert_eq!(trun.total_size(5), 10);
++        assert_eq!(trun.sample_timing(1, 10), (10, 10));
++        assert_eq!(trun.sample_size(0, 5), 5);
++        assert_eq!(trun.sample_offset(1, 5), (5, 5));
++        assert_eq!(trun.ts_sample(15, 10), 1);
++    }
++}

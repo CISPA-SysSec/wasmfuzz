@@ -1,0 +1,206 @@
+Handle XRef::copy() returning nullptr in FontInfoScanner::scan() and
+Page::displaySlice().
+
+XRef::copy() returns nullptr when it cannot allocate the entry table (it already
+logs "unable to allocate {0:d} entries"), but both callers used the result
+unchecked. FontInfoScanner::scan() then passed a null XRef to scanFonts(), and
+XRef::fetch() ran on a null `this` and reconstructed the "xref" from address 0;
+Page::displaySlice() (copyXRef=true, used by the cpp page renderer) handed it to
+replaceXRef() and createGfx(). Under UBSan with a heap cap (LD_PRELOAD shim):
+"FontInfo.cc:184:28: runtime error: member call on null pointer of type 'XRef'".
+On wasm32 the guest hits its memory cap copying a ~16M-entry table built from
+object numbers like 8388609, and the null fetch ends in an indirect call through
+garbage (Abort(IndirectCallTypeMismatch) in XRef::constructXRef).
+
+The qt5/qt6 bindings have two more unchecked XRef::copy() calls (not built here).
+
+Regression test cpp/tests/poppler-xref-copy-failure-test.cpp loads a document
+with a 2M-entry xref table, caps the address space (RLIMIT_AS) so that copying
+the table fails, and scans its fonts (a segfault without the fix). It is
+skipped under AddressSanitizer.
+
+Not fixed upstream as of 9182fd5.
+Upstream: none found (poppler/poppler issues and MRs searched for XRef::copy,
+FontInfoScanner); merged !2327 (2026-08-08, in the pin) made XRef::copy()
+return a unique_ptr and left the callers unchecked.
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 0173a44f..3f065428 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -30,3 +30,8 @@ cpp_add_simpletest(poppler-jbig2-exported-symbols-test poppler-jbig2-exported-sy
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-jbig2-exported-symbols-test COMMAND poppler-jbig2-exported-symbols-test)
+ endif()
++cpp_add_simpletest(poppler-xref-copy-failure-test poppler-xref-copy-failure-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-xref-copy-failure-test COMMAND poppler-xref-copy-failure-test)
++  set_tests_properties(poppler-xref-copy-failure-test PROPERTIES SKIP_RETURN_CODE 77)
++endif()
+diff --git a/cpp/tests/poppler-xref-copy-failure-test.cpp b/cpp/tests/poppler-xref-copy-failure-test.cpp
+new file mode 100644
+index 00000000..8323dd23
+--- /dev/null
++++ b/cpp/tests/poppler-xref-copy-failure-test.cpp
+@@ -0,0 +1,133 @@
++/*
++ * Regression test: XRef::copy() returns nullptr when it cannot allocate the
++ * entry table, but FontInfoScanner::scan() used the result unchecked and ran
++ * XRef::fetch() on a null pointer. (Page::displaySlice() with copyXRef had
++ * the same problem; for this document it renders nothing either way.)
++ *
++ * The page's font dictionary is a direct object, so scanFonts() finds the font
++ * without fetching anything and then calls XRef::fetch() on the copy.
++ *
++ * The document's highest object number is 2000000, so its entry table takes
++ * ~80 MB. After loading it, the test caps the address space (RLIMIT_AS) at
++ * 32 MB more than in use, so that the copies fail. That does not work under
++ * AddressSanitizer: the test is skipped there.
++ */
++
++#include <FontInfo.h>
++#include <GlobalParams.h>
++#include <Object.h>
++#include <PDFDoc.h>
++#include <Stream.h>
++
++#include <cstdio>
++#include <iostream>
++#include <memory>
++#include <string>
++#include <vector>
++
++#if defined(__has_feature)
++#    if __has_feature(address_sanitizer)
++#        define POPPLER_TEST_ASAN 1
++#    endif
++#endif
++#if defined(__SANITIZE_ADDRESS__)
++#    define POPPLER_TEST_ASAN 1
++#endif
++
++#ifdef __linux__
++#    include <sys/resource.h>
++#    include <unistd.h>
++#endif
++
++static const int firstObj = 2000000;
++
++static std::string build_pdf()
++{
++    const std::string content = "BT /F1 12 Tf 10 10 Td (x) Tj ET";
++    const std::vector<std::string> objs = {
++        "<< /Type /Catalog /Pages " + std::to_string(firstObj + 1) + " 0 R >>",
++        "<< /Type /Pages /Kids [" + std::to_string(firstObj + 2) + " 0 R] /Count 1 >>",
++        "<< /Type /Page /Parent " + std::to_string(firstObj + 1) + " 0 R /MediaBox [0 0 20 20] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents "
++                + std::to_string(firstObj + 3) + " 0 R >>",
++        "<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "\nendstream",
++    };
++    std::string pdf = "%PDF-1.7\n";
++    std::vector<size_t> offsets;
++    for (size_t i = 0; i < objs.size(); ++i) {
++        offsets.push_back(pdf.size());
++        pdf += std::to_string(firstObj + i) + " 0 obj\n" + objs[i] + "\nendobj\n";
++    }
++    const size_t xrefOffset = pdf.size();
++    pdf += "xref\n0 1\n0000000000 65535 f \n" + std::to_string(firstObj) + " " + std::to_string(objs.size()) + "\n";
++    for (size_t off : offsets) {
++        char line[21];
++        snprintf(line, sizeof(line), "%010zu 00000 n \n", off);
++        pdf += line;
++    }
++    pdf += "trailer\n<< /Size " + std::to_string(firstObj + objs.size()) + " /Root " + std::to_string(firstObj) + " 0 R >>\nstartxref\n" + std::to_string(xrefOffset) + "\n%%EOF\n";
++    return pdf;
++}
++
++#if defined(__linux__) && !defined(POPPLER_TEST_ASAN)
++static bool cap_address_space()
++{
++    FILE *f = fopen("/proc/self/statm", "r");
++    unsigned long pages = 0;
++    if (!f || fscanf(f, "%lu", &pages) != 1) {
++        if (f) {
++            fclose(f);
++        }
++        return false;
++    }
++    fclose(f);
++    const rlim_t limit = static_cast<rlim_t>(pages) * sysconf(_SC_PAGESIZE) + (32UL << 20);
++    struct rlimit rl;
++    if (getrlimit(RLIMIT_AS, &rl) != 0 || (rl.rlim_max != RLIM_INFINITY && rl.rlim_max < limit)) {
++        return false;
++    }
++    rl.rlim_cur = limit;
++    return setrlimit(RLIMIT_AS, &rl) == 0;
++}
++#endif
++
++int main()
++{
++#if !defined(__linux__)
++    std::cout << "SKIP: needs RLIMIT_AS\n";
++    return 77;
++#elif defined(POPPLER_TEST_ASAN)
++    std::cout << "SKIP: RLIMIT_AS does not work under AddressSanitizer\n";
++    return 77;
++#else
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    const std::string pdf = build_pdf();
++    PDFDoc doc(std::make_unique<MemStream>(pdf.data(), 0, pdf.size(), Object::null()));
++    if (!doc.isOk() || doc.getNumPages() != 1 || doc.getXRef()->getNumObjects() <= firstObj) {
++        std::cerr << "failed to load the test document\n";
++        return 1;
++    }
++    if (!doc.getXRef()->copy()) {
++        std::cerr << "failed to copy the XRef before capping the address space\n";
++        return 1;
++    }
++    if (!cap_address_space()) {
++        std::cout << "SKIP: cannot lower RLIMIT_AS\n";
++        return 77;
++    }
++    if (doc.getXRef()->copy()) {
++        std::cout << "SKIP: the XRef copy did not fail\n";
++        return 77;
++    }
++
++    FontInfoScanner scanner(&doc);
++    const std::vector<FontInfo *> fonts = scanner.scan(1);
++    for (FontInfo *font : fonts) {
++        delete font;
++    }
++
++    std::cout << "PASS\n";
++    return 0;
++#endif
++}
+diff --git a/poppler/FontInfo.cc b/poppler/FontInfo.cc
+index 5fac8bdd..76998c80 100644
+--- a/poppler/FontInfo.cc
++++ b/poppler/FontInfo.cc
+@@ -74,6 +74,9 @@ std::vector<FontInfo *> FontInfoScanner::scan(int nPages)
+         }
+         if (!xrefA) {
+             xrefA = doc->getXRef()->copy();
++            if (!xrefA) {
++                break;
++            }
+         }
+ 
+         if (std::unique_ptr<Dict> resDict = page->getResourceDictCopy(xrefA.get())) {
+diff --git a/poppler/Page.cc b/poppler/Page.cc
+index 1e1f4956..b45f4bf4 100644
+--- a/poppler/Page.cc
++++ b/poppler/Page.cc
+@@ -606,6 +606,9 @@ void Page::displaySlice(OutputDev *out, double hDPI, double vDPI, int rotate, bo
+     std::unique_ptr<XRef> copiedXRefIfNeeded;
+     if (copyXRef) {
+         copiedXRefIfNeeded = xref->copy();
++        if (!copiedXRefIfNeeded) {
++            return;
++        }
+         replaceXRef(copiedXRefIfNeeded.get());
+     }
+     XRef *localXRef = copyXRef ? copiedXRefIfNeeded.get() : xref;

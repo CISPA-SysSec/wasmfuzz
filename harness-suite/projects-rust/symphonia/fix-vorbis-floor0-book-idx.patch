@@ -1,5 +1,11 @@
+Upstream: none found.
+
+A floor 0 book index is read with ilog(floor0_number_of_books) bits. With 16 books that is 5 bits,
+so the index can be 16..31 and indexed past the 16-entry book list. The Vorbis I specification
+makes a packet with an index past the book list undecodable.
+
 diff --git a/symphonia-codec-vorbis/src/floor.rs b/symphonia-codec-vorbis/src/floor.rs
-index 7dee33a..667cc40 100644
+index 3b11b56..f822937 100644
 --- a/symphonia-codec-vorbis/src/floor.rs
 +++ b/symphonia-codec-vorbis/src/floor.rs
 @@ -219,6 +219,10 @@ impl Floor for Floor0 {
@@ -13,3 +19,105 @@ index 7dee33a..667cc40 100644
              // Get the actual codebook index from the floor's codebook list.
              let codebook_idx = self.setup.floor0_book_list[floor_book_idx] as usize;
  
+diff --git a/symphonia-codec-vorbis/tests/floor0_book_index.rs b/symphonia-codec-vorbis/tests/floor0_book_index.rs
+new file mode 100644
+index 0000000..0c8c7a0
+--- /dev/null
++++ b/symphonia-codec-vorbis/tests/floor0_book_index.rs
+@@ -0,0 +1,96 @@
++use symphonia_codec_vorbis::VorbisDecoder;
++use symphonia_core::codecs::audio::well_known::CODEC_ID_VORBIS;
++use symphonia_core::codecs::audio::{AudioCodecParameters, AudioDecoder};
++use symphonia_core::packet::Packet;
++use symphonia_core::units::{Duration, Timestamp};
++
++/// Writes bits least-significant bit first, as Vorbis packets are packed.
++#[derive(Default)]
++struct BitWriter {
++    buf: Vec<u8>,
++    len: usize,
++}
++
++impl BitWriter {
++    fn put(&mut self, value: u32, bits: u32) -> &mut Self {
++        for i in 0..bits {
++            if self.len % 8 == 0 {
++                self.buf.push(0);
++            }
++            if (value >> i) & 1 != 0 {
++                *self.buf.last_mut().unwrap() |= 1 << (self.len % 8);
++            }
++            self.len += 1;
++        }
++        self
++    }
++}
++
++/// Builds the identification and setup headers of a mono stream with 256-sample blocks. The setup
++/// header has a scalar codebook (0) and a VQ codebook (1), both with two entries of one dimension,
++/// the floor written by `write_floor`, and a residue that decodes nothing.
++fn headers(write_floor: impl FnOnce(&mut BitWriter)) -> Vec<u8> {
++    let mut headers = b"\x01vorbis".to_vec();
++    headers.extend_from_slice(&0u32.to_le_bytes()); // Version.
++    headers.push(1); // Channels.
++    headers.extend_from_slice(&44100u32.to_le_bytes());
++    headers.extend_from_slice(&[0; 12]); // Bitrates.
++    headers.extend_from_slice(&[0x88, 1]); // Block sizes and framing flag.
++
++    let mut bs = BitWriter::default();
++    bs.put(1, 8); // Two codebooks.
++    for lookup_type in [0, 1] {
++        bs.put(0x564342, 24).put(1, 16).put(2, 24); // Sync, dimensions, entries.
++        bs.put(0, 2).put(0, 5).put(0, 5); // Not ordered, not sparse, codeword lengths 1.
++        bs.put(lookup_type, 4);
++        if lookup_type == 1 {
++            // Minimum 0, delta 1, one bit per value, not a sequence, values 0 and 1.
++            bs.put(0, 32).put((788 << 21) | 1, 32).put(0, 5).put(0, 1).put(1, 1);
++        }
++    }
++    bs.put(0, 6).put(0, 16); // One time domain transform.
++    bs.put(0, 6); // One floor.
++    write_floor(&mut bs);
++    bs.put(0, 6); // One residue: type 0, empty range, partition size 1, one class, classbook 1.
++    bs.put(0, 16).put(0, 24).put(0, 24).put(0, 24).put(0, 6).put(1, 8).put(0, 4);
++    bs.put(0, 6); // One mapping: type 0, one submap, no coupling, floor 0, residue 0.
++    bs.put(0, 16).put(0, 4).put(0, 24);
++    bs.put(0, 6); // One mode: short block, mapping 0.
++    bs.put(0, 1).put(0, 16).put(0, 16).put(0, 8);
++    bs.put(1, 1); // Framing flag.
++
++    headers.extend_from_slice(b"\x05vorbis");
++    headers.extend_from_slice(&bs.buf);
++    headers
++}
++
++/// Decodes `packet` if the decoder accepts the headers.
++fn decode(headers: Vec<u8>, packet: &BitWriter) {
++    let mut params = AudioCodecParameters::new();
++    params.for_codec(CODEC_ID_VORBIS).with_extra_data(headers.into_boxed_slice());
++
++    if let Ok(mut decoder) = VorbisDecoder::try_new(&params, &Default::default()) {
++        let packet = Packet::new(0, Timestamp::ZERO, Duration::ZERO, packet.buf.clone());
++        let _ = decoder.decode(&packet);
++    }
++}
++
++#[test]
++fn floor0_book_index_past_book_list() {
++    // A floor 0 with 16 books. Its book index is read with 5 bits.
++    let headers = headers(|bs| {
++        bs.put(0, 16); // Floor type 0.
++        bs.put(1, 8).put(8000, 16).put(64, 16); // Order, rate, bark map size.
++        bs.put(6, 6).put(1, 8); // Amplitude bits, amplitude offset.
++        bs.put(15, 4); // 16 books,
++        for _ in 0..16 {
++            bs.put(1, 8); // all codebook 1.
++        }
++    });
++
++    // An audio packet with amplitude 1 and book index 16.
++    let mut packet = BitWriter::default();
++    packet.put(0, 1).put(1, 6).put(16, 5).put(0, 12);
++
++    decode(headers, &packet);
++}

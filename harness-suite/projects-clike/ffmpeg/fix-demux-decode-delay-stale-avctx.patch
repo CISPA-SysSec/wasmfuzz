@@ -1,0 +1,168 @@
+Do not assert on a stale non-H.264 avctx in has_decode_delay_been_guessed().
+
+has_decode_delay_been_guessed() (libavformat/demux.c:788) asserts that the internal avctx is
+H.264, or NONE and closed, once codecpar says H.264. A demuxer can switch codecpar to H.264
+after the avctx was set up for another codec: the Ogg demuxer re-reads an OGM header for a
+new chain link, sets need_context_update, and avformat_find_stream_info() reaches the EOF
+branch (demux.c:3039) before another packet syncs the context. The avctx then still holds
+the old codec, closed. Return early only for an opened decoder of another codec and let the
+closed case fall through to the frame-count heuristic; nothing else reads the avctx there.
+Commit 00b4d67812 relaxed the same assertion for the FLV case (NONE and closed).
+Not fixed upstream as of 50276fac71 (2026-11-23).
+
+Includes libavformat/tests/ogg_ogm_h264.c (fate-ogg-ogm-h264): two Ogg pages reduced from a
+fuzzer input, a Vorbis BOS page and an OGM H.264 video header on a new serial, run through
+avformat_find_stream_info(). Without the fix it fails the assertion.
+
+Upstream: none found; related closed PR FFmpeg/FFmpeg#21215 (code.ffmpeg.org, 2025-12) proposed a soft check, 4bb9b46486 added the assertion instead.
+
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+index 6d72f5fddf..73769ecfa1 100644
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -808,6 +808,7 @@ TESTPROGS-$(CONFIG_MP3_MUXER)            += id3v2enc id3v2chap
+ TESTPROGS-$(CONFIG_AU_MUXER)             += auenc
+ TESTPROGS-$(CONFIG_MPEGTS_DEMUXER)       += mpegts_probe
+ TESTPROGS-$(CONFIG_OGG_MUXER)            += ogg_pages
++TESTPROGS-$(CONFIG_OGG_DEMUXER)          += ogg_ogm_h264
+ 
+ TOOLS     = aviocat                                                     \
+             ismindex                                                    \
+diff --git a/libavformat/demux.c b/libavformat/demux.c
+index c593e7b317..8176ffd42d 100644
+--- a/libavformat/demux.c
++++ b/libavformat/demux.c
+@@ -785,7 +785,12 @@ static int has_decode_delay_been_guessed(AVStream *st)
+     if (st->codecpar->codec_id != AV_CODEC_ID_H264) return 1;
+     if (!sti->info) // if we have left find_stream_info then nb_decoded_frames won't increase anymore for stream copy
+         return 1;
+-    av_assert0(sti->avctx->codec_id == AV_CODEC_ID_H264 || (sti->avctx->codec_id == AV_CODEC_ID_NONE && !avcodec_is_open(sti->avctx)));
++    /* The demuxer can switch codecpar to H.264 after the internal context
++     * was set up for another codec (e.g. a new Ogg link with an OGM header);
++     * the context only follows with the next packet. An opened decoder of
++     * another codec tells nothing about the H.264 reorder delay. */
++    if (sti->avctx->codec_id != AV_CODEC_ID_H264 && avcodec_is_open(sti->avctx))
++        return 1;
+ #if CONFIG_H264_DECODER
+     if (sti->avctx->has_b_frames && avcodec_is_open(sti->avctx) &&
+         avpriv_h264_has_num_reorder_frames(sti->avctx) == sti->avctx->has_b_frames)
+diff --git a/libavformat/tests/ogg_ogm_h264.c b/libavformat/tests/ogg_ogm_h264.c
+new file mode 100644
+index 0000000000..db2dd06104
+--- /dev/null
++++ b/libavformat/tests/ogg_ogm_h264.c
+@@ -0,0 +1,98 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++#include <stdio.h>
++#include <string.h>
++
++#include "libavformat/avformat.h"
++#include "libavutil/mem.h"
++
++/*
++ * Two Ogg pages, reduced from a fuzzer input: a Vorbis BOS page with a
++ * comment header carrying a picture, then a page with an OGM video header
++ * for H.264 on a new serial. avformat_find_stream_info() reaches EOF with
++ * codecpar already switched to H.264 while the internal codec context still
++ * holds the previous codec, closed; has_decode_delay_been_guessed() used to
++ * fail av_assert0() on that.
++ */
++static const uint8_t ogg[] = {
++    0x4f, 0x67, 0x67, 0x53, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc1, 0x14,
++    0x78, 0x22, 0x03, 0x06, 0x63, 0x02, 0x01, 0x61, 0x75, 0x64, 0x69, 0x6f,
++    0x03, 0x76, 0x6f, 0x72, 0x62, 0x69, 0x73, 0x00, 0x00, 0x00, 0x00, 0x01,
++    0x00, 0x00, 0x00, 0x4f, 0x00, 0x00, 0x00, 0x4d, 0x45, 0x54, 0x41, 0x44,
++    0x41, 0x54, 0x41, 0x5f, 0x42, 0x4c, 0x4f, 0x43, 0x4b, 0x5f, 0x50, 0x49,
++    0x43, 0x54, 0x55, 0x52, 0x45, 0x3d, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
++    0x41, 0x41, 0x41, 0x41, 0x6c, 0x70, 0x62, 0x57, 0x46, 0x6e, 0x5a, 0x53,
++    0x39, 0x6e, 0x61, 0x57, 0x59, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
++    0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
++    0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
++    0x46, 0x45, 0x00, 0x74, 0x74, 0x4f, 0x67, 0x67, 0x53, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x10, 0x85, 0x57, 0x1d, 0x01, 0x0d, 0x01, 0x76, 0x69,
++    0x64, 0x65, 0x6f, 0x6f, 0x6f, 0x6f, 0x48, 0x32, 0x36, 0x34,
++};
++
++typedef struct MemIO {
++    const uint8_t *data;
++    int size, pos;
++} MemIO;
++
++static int mem_read(void *opaque, uint8_t *buf, int buf_size)
++{
++    MemIO *m = opaque;
++
++    buf_size = FFMIN(buf_size, m->size - m->pos);
++    if (!buf_size)
++        return AVERROR_EOF;
++    memcpy(buf, m->data + m->pos, buf_size);
++    m->pos += buf_size;
++    return buf_size;
++}
++
++int main(void)
++{
++    MemIO m = { ogg, sizeof(ogg), 0 };
++    AVFormatContext *s = avformat_alloc_context();
++    uint8_t *buf = av_malloc(sizeof(ogg));
++    /* not seekable, so that the demuxer cannot read the file twice */
++    AVIOContext *pb = avio_alloc_context(buf, sizeof(ogg), 0, &m, mem_read, NULL, NULL);
++    AVPacket *pkt = av_packet_alloc();
++    int ret;
++
++    if (!s || !buf || !pb || !pkt) {
++        fprintf(stderr, "allocation failed\n");
++        return 1;
++    }
++    av_log_set_level(AV_LOG_FATAL);
++    s->pb = pb;
++    ret = avformat_open_input(&s, NULL, av_find_input_format("ogg"), NULL);
++    if (ret < 0) {
++        fprintf(stderr, "avformat_open_input() failed: %d\n", ret);
++        return 1;
++    }
++    ret = avformat_find_stream_info(s, NULL);
++    printf("avformat_find_stream_info(): %d, %u streams\n", ret, s->nb_streams);
++    while (av_read_frame(s, pkt) >= 0)
++        av_packet_unref(pkt);
++
++    av_packet_free(&pkt);
++    avformat_close_input(&s);
++    av_freep(&pb->buffer);
++    avio_context_free(&pb);
++    return 0;
++}
+diff --git a/tests/fate/libavformat.mak b/tests/fate/libavformat.mak
+index c92f9e2df8..5d8049b4e9 100644
+--- a/tests/fate/libavformat.mak
++++ b/tests/fate/libavformat.mak
+@@ -121,6 +121,11 @@ FATE_LIBAVFORMAT += fate-seek_utils
+ fate-seek_utils: libavformat/tests/seek_utils$(EXESUF)
+ fate-seek_utils: CMD = run libavformat/tests/seek_utils$(EXESUF)
+ 
++FATE_LIBAVFORMAT-$(CONFIG_OGG_DEMUXER) += fate-ogg-ogm-h264
++fate-ogg-ogm-h264: libavformat/tests/ogg_ogm_h264$(EXESUF)
++fate-ogg-ogm-h264: CMD = run libavformat/tests/ogg_ogm_h264$(EXESUF)
++fate-ogg-ogm-h264: CMP = null
++
+ FATE_LIBAVFORMAT_SAMPLES-$(call ALLYES, AVFORMAT AC3_PARSER AC3_DECODER) += fate-parse-skip-samples
+ fate-parse-skip-samples: libavformat/tests/parse_skip_samples$(EXESUF)
+ fate-parse-skip-samples: CMD = run libavformat/tests/parse_skip_samples$(EXESUF) $(TARGET_SAMPLES)/ac3/millers_crossing_4.0.ac3

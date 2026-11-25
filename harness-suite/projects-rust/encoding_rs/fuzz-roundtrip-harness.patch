@@ -1,11 +1,11 @@
 diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
-index c8b37b8..cda684e 100644
+index dea5313..49d23a3 100644
 --- a/fuzz/Cargo.toml
 +++ b/fuzz/Cargo.toml
-@@ -34,3 +34,7 @@ path = "fuzzers/fuzz_labels.rs"
+@@ -38,3 +38,7 @@ path = "fuzzers/fuzz_mem.rs"
  [[bin]]
- name = "fuzz_mem"
- path = "fuzzers/fuzz_mem.rs"
+ name = "fuzz_small_dst"
+ path = "fuzzers/fuzz_small_dst.rs"
 +
 +[[bin]]
 +name = "fuzz_roundtrip"

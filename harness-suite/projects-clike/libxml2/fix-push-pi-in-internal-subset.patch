@@ -1,0 +1,121 @@
+Subject: [PATCH] parser: Skip PIs when looking up the end of the internal subset
+
+xmlParseLookupInternalSubset skipped quoted strings and comments but not
+processing instructions, so "]>" inside a PI in the internal subset was
+taken as the end of the subset. The push parser then started parsing the
+subset before all of it was available and reported different errors than
+the pull parser (e.g. XML_ERR_DOCUMENT_EMPTY, XML_ERR_DOCTYPE_NOT_FINISHED).
+
+Found with the xml fuzzer ("pull/push parser error mismatch: 0 != 4").
+Regression test testPushPIInIntSubset in testparser.c.
+
+Not fixed upstream as of 21c8223.
+Upstream: none found.
+---
+diff --git a/parser.c b/parser.c
+index ad6c26bd5..f5b1fdda9 100644
+--- a/parser.c
++++ b/parser.c
+@@ -10785,6 +10785,15 @@ xmlParseLookupInternalSubset(xmlParserCtxtPtr ctxt) {
+                 continue;
+             }
+         }
++        else if (state == '?') {
++            if ((*cur == '?') &&
++                (cur[1] == '>')) {
++                state = 0;
++                cur += 2;
++                start = cur;
++                continue;
++            }
++        }
+         else if (state == ']') {
+             if (*cur == '>') {
+                 ctxt->checkIndex = 0;
+@@ -10827,6 +10836,13 @@ xmlParseLookupInternalSubset(xmlParserCtxtPtr ctxt) {
+                 start = cur;
+                 continue;
+             }
++            /* Skip PIs, they can contain "]>" */
++            if (cur[1] == '?') {
++                state = '?';
++                cur += 2;
++                start = cur;
++                continue;
++            }
+         }
+         else if ((*cur == '"') || (*cur == '\'') || (*cur == ']')) {
+             state = *cur;
+@@ -10836,10 +10852,10 @@ xmlParseLookupInternalSubset(xmlParserCtxtPtr ctxt) {
+     }
+ 
+     /*
+-     * Rescan the three last characters to detect "<!--" and "-->"
+-     * split across chunks.
++     * Rescan the three last characters to detect "<!--", "-->", "<?"
++     * and "?>" split across chunks.
+      */
+-    if ((state == 0) || (state == '-')) {
++    if ((state == 0) || (state == '-') || (state == '?')) {
+         if (cur - start < 3)
+             cur = start;
+         else
+diff --git a/testparser.c b/testparser.c
+index 02f5c5f50..e9a73c0ba 100644
+--- a/testparser.c
++++ b/testparser.c
+@@ -728,6 +728,46 @@ testPushCDataEnd(void) {
+ 
+     return err;
+ }
++
++static int
++testPushPIInIntSubset(void) {
++    /*
++     * A PI in the internal subset can contain "]>", which must not be
++     * mistaken for the end of the internal subset. Also split "<?" and
++     * "?>" across chunks.
++     */
++    static const char doc[] =
++        "<!DOCTYPE d [\n<?pi ]> ' \" ?>\n<!ENTITY e 'x'>\n]><d>&e;</d>";
++    int err = 0;
++    size_t len = sizeof(doc) - 1;
++    size_t chunkSize;
++
++    for (chunkSize = 1; chunkSize <= len; chunkSize++) {
++        xmlParserCtxtPtr ctxt;
++        size_t i;
++
++        ctxt = xmlCreatePushParserCtxt(NULL, NULL, NULL, 0, NULL);
++        xmlCtxtSetOptions(ctxt, XML_PARSE_NOERROR);
++
++        for (i = 0; i < len; i += chunkSize) {
++            size_t n = len - i < chunkSize ? len - i : chunkSize;
++
++            xmlParseChunk(ctxt, doc + i, n, 0);
++        }
++        xmlParseChunk(ctxt, NULL, 0, 1);
++
++        if ((ctxt->errNo != XML_ERR_OK) || (!ctxt->wellFormed)) {
++            fprintf(stderr, "testPushPIInIntSubset failed with chunk size "
++                    "%d: %d\n", (int) chunkSize, ctxt->errNo);
++            err = 1;
++        }
++
++        xmlFreeDoc(ctxt->myDoc);
++        xmlFreeParserCtxt(ctxt);
++    }
++
++    return err;
++}
+ #endif /* PUSH */
+ 
+ #ifdef LIBXML_HTML_ENABLED
+@@ -1821,6 +1861,7 @@ main(void) {
+     err |= testHugePush();
+     err |= testHugeEncodedChunk();
+     err |= testPushCDataEnd();
++    err |= testPushPIInIntSubset();
+ #endif
+ #ifdef LIBXML_HTML_ENABLED
+     err |= testHtmlIds();

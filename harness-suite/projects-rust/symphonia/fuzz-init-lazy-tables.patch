@@ -1,0 +1,74 @@
+Subject: [PATCH] fuzz: build the lazy registries and MKV table before the first input
+
+demux_mkv and decode_any built lazy_static tables during the first input of
+every fresh process: the MKV element table (a private lazy_static in
+symphonia-format-mkv src/schema.rs, built on the first element lookup) and,
+in decode_any, the default probe and codec registries. Build them from a
+static constructor instead: get_probe() and get_codecs() are public, and the
+MKV table is built by reading a fixed, empty EBML header (1a 45 df a3 80)
+through MkvReader::try_new (demux_mkv) or the probe (decode_any). Inputs run
+the same code as before; they only no longer pay for the one-time setup.
+No open upstream PR or issue touches these fuzz targets or the lazy tables
+(gh search, 2026-11-21).
+
+diff --git a/symphonia/fuzz/fuzz_targets/decode_any.rs b/symphonia/fuzz/fuzz_targets/decode_any.rs
+index f2d8f8b..64677bc 100644
+--- a/symphonia/fuzz/fuzz_targets/decode_any.rs
++++ b/symphonia/fuzz/fuzz_targets/decode_any.rs
+@@ -5,6 +5,27 @@ use symphonia::core::formats::{FormatOptions, TrackType};
+ use symphonia::core::io::MediaSourceStream;
+ use symphonia::core::meta::MetadataOptions;
+ 
++// The probe and codec registries and the MKV element table are lazy_statics, built on first
++// use. Build them from a static constructor, before the first input: get_probe() and
++// get_codecs() build the registries, and probing a fixed, empty EBML header builds the
++// (private) MKV element table.
++#[used]
++#[unsafe(link_section = ".init_array")]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        let ebml_header = std::io::Cursor::new(vec![0x1a, 0x45, 0xdf, 0xa3, 0x80]);
++        let source = MediaSourceStream::new(Box::new(ebml_header), Default::default());
++        let _ = symphonia::default::get_probe().probe(
++            &Hint::new(),
++            source,
++            FormatOptions::default(),
++            MetadataOptions::default(),
++        );
++        let _ = symphonia::default::get_codecs();
++    }
++    init
++};
++
+ fuzz_target!(|data: &[u8]| {
+     if data.len() > 512 * 1024 {
+         return;
+diff --git a/symphonia/fuzz/fuzz_targets/demux_mkv.rs b/symphonia/fuzz/fuzz_targets/demux_mkv.rs
+index 8a8e16a..2e477fe 100644
+--- a/symphonia/fuzz/fuzz_targets/demux_mkv.rs
++++ b/symphonia/fuzz/fuzz_targets/demux_mkv.rs
+@@ -1,8 +1,24 @@
+ #![no_main]
+ use libfuzzer_sys::fuzz_target;
++use symphonia::core::formats::FormatOptions;
++use symphonia::core::io::MediaSourceStream;
+ use symphonia::default::formats::MkvReader;
+ use symphonia_fuzz::fuzz_demuxer;
+ 
++// The MKV element table is a private lazy_static (symphonia-format-mkv src/schema.rs), built
++// on the first element lookup. Read a fixed, empty EBML header from a static constructor, so
++// it is built before the first input instead of during it.
++#[used]
++#[unsafe(link_section = ".init_array")]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        let ebml_header = std::io::Cursor::new(vec![0x1a, 0x45, 0xdf, 0xa3, 0x80]);
++        let mss = MediaSourceStream::new(Box::new(ebml_header), Default::default());
++        let _ = MkvReader::try_new(mss, FormatOptions::default());
++    }
++    init
++};
++
+ fuzz_target!(|data: &[u8]| {
+     fuzz_demuxer!(data, |mss, fmt: &FormatOptions, _: &MetadataOptions| MkvReader::try_new(
+         mss,

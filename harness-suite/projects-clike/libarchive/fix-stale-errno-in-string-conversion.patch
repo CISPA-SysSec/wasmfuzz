@@ -1,8 +1,35 @@
+Clear errno at the start of the string conversion functions, so that a failed conversion is not
+taken for an allocation failure.
+
+About 80 callers tell the two apart by checking errno == ENOMEM after a conversion fails, but
+several conversions (e.g. UTF-8 to UTF-8 with an invalid byte, the conversions without iconv)
+fail without setting errno. An ENOMEM left over from an earlier, unrelated allocation failure
+then makes archive_entry_pathname_utf8() and the other archive_entry getters call
+__archive_errx() ("No memory") and exit the process, and makes format readers return
+ARCHIVE_FATAL ("Can't allocate memory for Pathname") instead of a warning. In a persistent fuzzer
+process, an input whose 7z header size makes an allocation fail followed by a cpio input with an
+unconvertible name exits the oss-fuzz harnesses that call the pathname getters. Includes
+test_entry_stale_errno.
+Upstream: open PR libarchive/libarchive#3808 (by Kevin-Hyukjin-Kwon, 2026-11-01) fixes the same stale errno by setting errno on every conversion failure path; issue #3804 (by tiendc, 2026-10-31) reports the symptom.
+Drop this patch once #3808 lands.
+
+diff --git a/Makefile.am b/Makefile.am
+index adda9aec..581ec55c 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -460,6 +460,7 @@ libarchive_test_SOURCES= \
+ 	libarchive/test/test_create_child_environment.c \
+ 	libarchive/test/test_empty_write.c \
+ 	libarchive/test/test_entry.c \
++	libarchive/test/test_entry_stale_errno.c \
+ 	libarchive/test/test_entry_strmode.c \
+ 	libarchive/test/test_extattr_freebsd.c \
+ 	libarchive/test/test_filter_count.c \
 diff --git a/libarchive/archive_string.c b/libarchive/archive_string.c
-index d30c0f63..b5d6b130 100644
+index e0994eb0..e272f4f9 100644
 --- a/libarchive/archive_string.c
 +++ b/libarchive/archive_string.c
-@@ -2023,6 +2023,7 @@ archive_strncat_l(struct archive_string *as, const void *_p, size_t n,
+@@ -2046,6 +2046,7 @@ archive_strncat_l(struct archive_string *as, const void *_p, size_t n,
  	const void *s;
  	size_t length = 0;
  	int i, r = 0, r2;
@@ -10,7 +37,7 @@ index d30c0f63..b5d6b130 100644
  
  	if (_p != NULL && n > 0) {
  		if (sc != NULL && (sc->flag & SCONV_FROM_UTF16))
-@@ -3956,6 +3957,7 @@ archive_mstring_get_utf8(struct archive *a, struct archive_mstring *aes,
+@@ -4024,6 +4025,7 @@ archive_mstring_get_utf8(struct archive *a, struct archive_mstring *aes,
  {
  	struct archive_string_conv *sc;
  	int r;
@@ -18,7 +45,7 @@ index d30c0f63..b5d6b130 100644
  
  	/* If we already have a UTF8 form, return that immediately. */
  	if (aes->aes_set & AES_SET_UTF8) {
-@@ -4017,6 +4019,7 @@ archive_mstring_get_mbs(struct archive *a, struct archive_mstring *aes,
+@@ -4085,6 +4087,7 @@ archive_mstring_get_mbs(struct archive *a, struct archive_mstring *aes,
  {
  	struct archive_string_conv *sc;
  	int r, ret = 0;
@@ -26,7 +53,7 @@ index d30c0f63..b5d6b130 100644
  
  	/* If we already have an MBS form, return that immediately. */
  	if (aes->aes_set & AES_SET_MBS) {
-@@ -4063,6 +4066,7 @@ archive_mstring_get_wcs(struct archive *a, struct archive_mstring *aes,
+@@ -4131,6 +4134,7 @@ archive_mstring_get_wcs(struct archive *a, struct archive_mstring *aes,
      const wchar_t **wp)
  {
  	int r, ret = 0;
@@ -34,7 +61,7 @@ index d30c0f63..b5d6b130 100644
  
  	(void)a;/* UNUSED */
  	/* Return WCS form if we already have it. */
-@@ -4122,6 +4126,7 @@ archive_mstring_get_mbs_l(struct archive *a, struct archive_mstring *aes,
+@@ -4190,6 +4194,7 @@ archive_mstring_get_mbs_l(struct archive *a, struct archive_mstring *aes,
      const char **p, size_t *length, struct archive_string_conv *sc)
  {
  	int ret = 0;
@@ -42,7 +69,7 @@ index d30c0f63..b5d6b130 100644
  #if defined(_WIN32) && !defined(__CYGWIN__)
  	int r;
  
-@@ -4249,6 +4254,7 @@ archive_mstring_copy_mbs_len_l(struct archive_mstring *aes,
+@@ -4317,6 +4322,7 @@ archive_mstring_copy_mbs_len_l(struct archive_mstring *aes,
      const char *mbs, size_t len, struct archive_string_conv *sc)
  {
  	int r;
@@ -50,7 +77,7 @@ index d30c0f63..b5d6b130 100644
  
  	if (mbs == NULL) {
  		aes->aes_set = 0;
-@@ -4343,6 +4349,7 @@ archive_mstring_update_utf8(struct archive *a, struct archive_mstring *aes,
+@@ -4411,6 +4417,7 @@ archive_mstring_update_utf8(struct archive *a, struct archive_mstring *aes,
  {
  	struct archive_string_conv *sc;
  	int r;
@@ -58,3 +85,57 @@ index d30c0f63..b5d6b130 100644
  
  	if (utf8 == NULL) {
  		aes->aes_set = 0;
+diff --git a/libarchive/test/CMakeLists.txt b/libarchive/test/CMakeLists.txt
+index 57249cb3..44aac8d3 100644
+--- a/libarchive/test/CMakeLists.txt
++++ b/libarchive/test/CMakeLists.txt
+@@ -83,6 +83,7 @@ IF(ENABLE_TEST)
+     test_create_child_environment.c
+     test_empty_write.c
+     test_entry.c
++    test_entry_stale_errno.c
+     test_entry_strmode.c
+     test_extattr_freebsd.c
+     test_filter_count.c
+diff --git a/libarchive/test/test_entry_stale_errno.c b/libarchive/test/test_entry_stale_errno.c
+new file mode 100644
+index 00000000..470759a3
+--- /dev/null
++++ b/libarchive/test/test_entry_stale_errno.c
+@@ -0,0 +1,36 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Copyright (c) 2026 Florian Bauckholt
++ * All rights reserved.
++ */
++#include "test.h"
++
++#include <errno.h>
++#include <locale.h>
++
++/*
++ * Callers of the string conversion functions tell an allocation failure
++ * from a name that does not convert by checking errno == ENOMEM, but the
++ * conversions can fail without setting errno.  An ENOMEM left over from an
++ * unrelated earlier allocation failure then made archive_entry_pathname_utf8()
++ * call __archive_errx() ("No memory") and exit the process, and made format
++ * readers return ARCHIVE_FATAL ("Can't allocate memory for Pathname") instead
++ * of a warning.
++ */
++DEFINE_TEST(test_entry_stale_errno)
++{
++	struct archive_entry *e;
++
++	if (NULL == setlocale(LC_ALL, "en_US.UTF-8")) {
++		skipping("en_US.UTF-8 locale not available on this system.");
++		return;
++	}
++	assert((e = archive_entry_new()) != NULL);
++	/* Not valid UTF-8, so it does not convert to UTF-8. */
++	archive_entry_copy_pathname(e, "a\xff" "b");
++	errno = ENOMEM;
++	assert(archive_entry_pathname_utf8(e) == NULL);
++	assert(errno != ENOMEM);
++	archive_entry_free(e);
++}

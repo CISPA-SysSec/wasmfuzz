@@ -1,0 +1,38 @@
+C port of upstream 2631bdf ("Support v0 demangling of trait object types with assoc
+const bindings"): print_dyn_trait accepts `K<const>` after `p<ident>`; the C port
+only parsed a type there, so the native_c differential fuzz target failed on any
+symbol with an assoc const binding. The smoke_test case added here fails
+without the demangle.c change.
+
+Upstream: none found; crates/native-c at upstream HEAD (4023665) still lacks it.
+
+diff --git a/crates/native-c/src/demangle.c b/crates/native-c/src/demangle.c
+index 553d6b2..0752599 100644
+--- a/crates/native-c/src/demangle.c
++++ b/crates/native-c/src/demangle.c
+@@ -1505,7 +1505,11 @@ static NODISCARD overflow_status printer_print_dyn_trait(struct printer *printer
+ 
+         PRINT_IDENT(printer, &name);
+         PRINT_STR(printer, " = ");
+-        PRINT(printer_print_type(printer));
++        if (printer_eat(printer, 'K')) {
++            PRINT(printer_print_const(printer, false));
++        } else {
++            PRINT(printer_print_type(printer));
++        }
+     }
+ 
+     if (open) {
+diff --git a/crates/native-c/src/lib.rs b/crates/native-c/src/lib.rs
+index 0c7d69b..82b1a29 100644
+--- a/crates/native-c/src/lib.rs
++++ b/crates/native-c/src/lib.rs
+@@ -80,6 +80,8 @@ fn smoke_test() {
+         ("", "", ""),
+         // just a path
+         ("_RNvC6_123foo3bar", "123foo::bar", "123foo::bar"),
++        // trait object with an assoc const binding
++        ("_RINvC5krate3fooDNtB2_5Traitp1NKj0_EL_E", "krate::foo::<dyn krate::Trait<N = 0usize>>", "krate::foo::<dyn krate::Trait<N = 0>>"),
+         // more complex paths
+         ("_RNCNCNgCs6DXkGYLi8lr_2cc5spawn00B5_", "cc[4d6468d6c9fd4bb3]::spawn::{closure#0}::{closure#0}", "cc::spawn::{closure#0}::{closure#0}"),
+         ("_RINbNbCskIICzLVDPPb_5alloc5alloc8box_freeDINbNiB4_5boxed5FnBoxuEp6OutputuEL_ECs1iopQbuBiw2_3std", "alloc[f15a878b47eb696b]::alloc::box_free::<dyn alloc[f15a878b47eb696b]::boxed::FnBox<(), Output = ()>>", "alloc::alloc::box_free::<dyn alloc::boxed::FnBox<(), Output = ()>>"),

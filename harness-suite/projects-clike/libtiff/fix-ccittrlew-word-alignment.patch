@@ -1,0 +1,258 @@
+diff --git a/libtiff/tif_fax3.c b/libtiff/tif_fax3.c
+index 4a59b7e8..331ce2f0 100644
+--- a/libtiff/tif_fax3.c
++++ b/libtiff/tif_fax3.c
+@@ -1834,10 +1834,19 @@ static int Fax3DecodeRLE(TIFF *tif, uint8_t *buf, tmsize_t occ, uint16_t s)
+         }
+         else if (mode & FAXMODE_WORDALIGN)
+         {
+-            int n = BitsAvail - (BitsAvail & ~15);
++            /*
++             * Byte-align, then skip one byte if the next unread byte is
++             * not 16-bit aligned. That byte may already be in BitAcc.
++             */
++            int n = BitsAvail - (BitsAvail & ~7);
+             ClrBits(n);
+-            if (BitsAvail == 0 && !isAligned(cp, uint16_t))
+-                cp++;
++            if (!isAligned((size_t)cp - (size_t)(BitsAvail >> 3), uint16_t))
++            {
++                if (BitsAvail >= 8)
++                    ClrBits(8);
++                else if (cp < ep)
++                    cp++;
++            }
+         }
+         buf += sp->b.rowbytes;
+         occ -= sp->b.rowbytes;
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index 8b78a915..01bd1082 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -230,6 +230,12 @@ set_target_properties(test_append_to_strip PROPERTIES LINKER_LANGUAGE CXX)
+ target_link_libraries(test_append_to_strip PRIVATE tiff tiff_port)
+ list(APPEND simple_tests test_append_to_strip)
+ 
++add_executable(test_ccitt_rlew ../placeholder.h)
++target_sources(test_ccitt_rlew PRIVATE test_ccitt_rlew.c)
++set_target_properties(test_ccitt_rlew PROPERTIES LINKER_LANGUAGE CXX)
++target_link_libraries(test_ccitt_rlew PRIVATE tiff tiff_port)
++list(APPEND simple_tests test_ccitt_rlew)
++
+ add_executable(test_ifd_loop_detection ../placeholder.h)
+ target_sources(test_ifd_loop_detection PRIVATE test_ifd_loop_detection.c)
+ set_target_properties(test_ifd_loop_detection PROPERTIES LINKER_LANGUAGE CXX)
+diff --git a/test/Makefile.am b/test/Makefile.am
+index 0c08dfd2..a4b39b71 100644
+--- a/test/Makefile.am
++++ b/test/Makefile.am
+@@ -93,7 +93,7 @@ if TIFF_TESTS
+ check_PROGRAMS = \
+ 	ascii_tag long_tag short_tag strip_rw rewrite custom_dir custom_dir_EXIF_231 \
+ 	defer_strile_loading defer_strile_writing test_directory test_IFD_enlargement test_open_options \
+-	test_append_to_strip test_ifd_loop_detection test_RGBAImage test_swab_odd_size testtypes test_signed_tags thunder_decode $(JPEG_DEPENDENT_CHECK_PROG) $(STATIC_CHECK_PROGS)
++	test_append_to_strip test_ccitt_rlew test_ifd_loop_detection test_RGBAImage test_swab_odd_size testtypes test_signed_tags thunder_decode $(JPEG_DEPENDENT_CHECK_PROG) $(STATIC_CHECK_PROGS)
+ endif
+ 
+ # Test scripts to execute
+@@ -303,6 +303,8 @@ test_open_options_SOURCES = test_open_options.c
+ test_open_options_LDADD = $(LIBTIFF)
+ test_append_to_strip_SOURCES = test_append_to_strip.c
+ test_append_to_strip_LDADD = $(LIBTIFF)
++test_ccitt_rlew_SOURCES = test_ccitt_rlew.c
++test_ccitt_rlew_LDADD = $(LIBTIFF)
+ test_ifd_loop_detection_CFLAGS = -DSOURCE_DIR=\"@srcdir@\"
+ test_ifd_loop_detection_SOURCES = test_ifd_loop_detection.c
+ test_ifd_loop_detection_LDADD = $(LIBTIFF)
+diff --git a/test/test_ccitt_rlew.c b/test/test_ccitt_rlew.c
+new file mode 100644
+index 00000000..1e054f04
+--- /dev/null
++++ b/test/test_ccitt_rlew.c
+@@ -0,0 +1,186 @@
++/*
++ * Permission to use, copy, modify, distribute, and sell this software and
++ * its documentation for any purpose is hereby granted without fee, provided
++ * that (i) the above copyright notices and this permission notice appear in
++ * all copies of the software and related documentation, and (ii) the names of
++ * Sam Leffler and Silicon Graphics may not be used in any advertising or
++ * publicity relating to the software without the specific, prior written
++ * permission of Sam Leffler and Silicon Graphics.
++ *
++ * THE SOFTWARE IS PROVIDED "AS-IS" AND WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS, IMPLIED OR OTHERWISE, INCLUDING WITHOUT LIMITATION, ANY
++ * WARRANTY OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
++ *
++ * IN NO EVENT SHALL SAM LEFFLER OR SILICON GRAPHICS BE LIABLE FOR
++ * ANY SPECIAL, INCIDENTAL, INDIRECT OR CONSEQUENTIAL DAMAGES OF ANY KIND,
++ * OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
++ * WHETHER OR NOT ADVISED OF THE POSSIBILITY OF DAMAGE, AND ON ANY THEORY OF
++ * LIABILITY, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
++ * OF THIS SOFTWARE.
++ */
++
++/*
++ * TIFF Library
++ *
++ * Write/read round trip of the CCITT modified Huffman RLE codecs
++ * (COMPRESSION_CCITTRLE and the 16-bit word aligned COMPRESSION_CCITTRLEW).
++ * Fax3DecodeRLE() used to compute the 16-bit row alignment of
++ * COMPRESSION_CCITTRLEW from the bits left in its bit accumulator only, and
++ * so lost sync when a row ended with a whole byte still buffered.
++ */
++
++#include "tif_config.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#ifdef HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++
++#include "tiffio.h"
++
++#define FILENAME "test_ccitt_rlew.tif"
++
++static uint32_t rng_state = 1;
++
++static uint32_t rng(void)
++{
++    rng_state = rng_state * 1103515245U + 12345U;
++    return (rng_state >> 16) & 0x7fff;
++}
++
++static void fill_row(unsigned char *buf, tmsize_t size, int pattern)
++{
++    tmsize_t i;
++    for (i = 0; i < size; i++)
++    {
++        switch (pattern)
++        {
++            case 0:
++                buf[i] = 0;
++                break;
++            case 1:
++                buf[i] = (unsigned char)((rng() % 4 == 0) ? rng() : 0);
++                break;
++            default:
++                buf[i] = (unsigned char)rng();
++                break;
++        }
++    }
++}
++
++static int test(uint16_t compression, uint32_t width, uint32_t height,
++                uint32_t rowsperstrip, const char *readmode)
++{
++    TIFF *tif;
++    tmsize_t scanline_size;
++    unsigned char *ref;
++    unsigned char *buf;
++    uint32_t row;
++    int ret = 0;
++
++    tif = TIFFOpen(FILENAME, "w");
++    if (!tif)
++    {
++        fprintf(stderr, "Cannot create %s\n", FILENAME);
++        return 1;
++    }
++    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
++    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
++    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 1);
++    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
++    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISWHITE);
++    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
++    TIFFSetField(tif, TIFFTAG_COMPRESSION, compression);
++    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, rowsperstrip);
++
++    scanline_size = TIFFScanlineSize(tif);
++    ref = (unsigned char *)malloc((size_t)scanline_size * height);
++    buf = (unsigned char *)malloc((size_t)scanline_size);
++    if (!ref || !buf)
++    {
++        fprintf(stderr, "Out of memory\n");
++        free(ref);
++        free(buf);
++        TIFFClose(tif);
++        return 1;
++    }
++    for (row = 0; row < height; row++)
++    {
++        unsigned char *line = ref + (size_t)row * scanline_size;
++        fill_row(line, scanline_size, (int)(row % 3));
++        /* Pixels beyond the image width are not encoded */
++        if (width % 8)
++            line[scanline_size - 1] &= (unsigned char)(0xff << (8 - width % 8));
++        memcpy(buf, line, (size_t)scanline_size);
++        if (TIFFWriteScanline(tif, buf, row, 0) < 0)
++        {
++            fprintf(stderr, "TIFFWriteScanline() failed at row %u\n", row);
++            ret = 1;
++            break;
++        }
++    }
++    TIFFClose(tif);
++
++    if (ret == 0)
++    {
++        tif = TIFFOpen(FILENAME, readmode);
++        if (!tif)
++        {
++            fprintf(stderr, "Cannot open %s\n", FILENAME);
++            ret = 1;
++        }
++        else
++        {
++            for (row = 0; row < height; row++)
++            {
++                if (TIFFReadScanline(tif, buf, row, 0) < 0 ||
++                    memcmp(buf, ref + (size_t)row * scanline_size,
++                           (size_t)scanline_size) != 0)
++                {
++                    fprintf(stderr,
++                            "compression=%u width=%u height=%u "
++                            "rowsperstrip=%u mode=%s: row %u differs\n",
++                            compression, width, height, rowsperstrip,
++                            readmode, row);
++                    ret = 1;
++                    break;
++                }
++            }
++            TIFFClose(tif);
++        }
++    }
++
++    free(ref);
++    free(buf);
++    unlink(FILENAME);
++    return ret;
++}
++
++int main(void)
++{
++    static const uint16_t compressions[] = {COMPRESSION_CCITTRLE,
++                                            COMPRESSION_CCITTRLEW};
++    static const uint32_t widths[] = {1,  7,  8,  9,   15,
++                                      16, 17, 31, 64, 100, 1728};
++    static const char *const readmodes[] = {"r", "rm"};
++    size_t i, j, k;
++    int ret = 0;
++
++    for (i = 0; i < sizeof(compressions) / sizeof(compressions[0]); i++)
++    {
++        if (!TIFFIsCODECConfigured(compressions[i]))
++            continue;
++        for (j = 0; j < sizeof(widths) / sizeof(widths[0]); j++)
++        {
++            for (k = 0; k < sizeof(readmodes) / sizeof(readmodes[0]); k++)
++            {
++                ret |= test(compressions[i], widths[j], 50, 50, readmodes[k]);
++                ret |= test(compressions[i], widths[j], 50, 7, readmodes[k]);
++            }
++        }
++    }
++    return ret;
++}

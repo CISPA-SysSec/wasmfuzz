@@ -1,0 +1,105 @@
+Subject: [PATCH] entities: Handle malloc failure when copying entity children
+
+xmlCopyEntity ignored a NULL result of xmlStaticCopyNodeList, so a malloc
+failure while copying the children returned a truncated entity without
+reporting the failure. Regression from c9aa3048e ("entities: copy children
+in xmlCopyEntity").
+
+Found with the xinclude fuzzer ("xmlCopyNode: malloc failure not
+reported"). Regression test testCopyEntityOom in testparser.c, which fails
+each allocation of xmlCopyDoc in turn.
+
+Upstream: issue GNOME/libxml2#1123 (by Dariocrespo48, 2026-05-16) reported the same unchecked xmlStaticCopyNodeList result in xmlCopyEntity and was closed on 2026-05-29 without a fix. The bug came in with MR !407 (2026-04-07).
+Open MR GNOME/libxml2!500 (by alittlesir, 2026-11-21) makes the same change, without a test. Drop this patch once it lands.
+HEAD 21c8223 still ignores the NULL.
+
+---
+diff --git a/entities.c b/entities.c
+index 906a4c94..b664e494 100644
+--- a/entities.c
++++ b/entities.c
+@@ -641,6 +641,8 @@ xmlCopyEntity(void *payload, const xmlChar *name ATTRIBUTE_UNUSED) {
+     /* Handle XML_TEXT_NODE children for XML_ENTITY_DECL */
+     if (ent->children != NULL) {
+         cur->children = xmlStaticCopyNodeList(ent->children, cur->doc, (xmlNodePtr)cur);
++        if (cur->children == NULL)
++            goto error;
+         /* Update last pointers */
+         cur->last = cur->children;
+         while (cur->last && cur->last->next) cur->last = cur->last->next;
+diff --git a/testparser.c b/testparser.c
+index 9cc587eb..90c4501a 100644
+--- a/testparser.c
++++ b/testparser.c
+@@ -1944,6 +1944,63 @@ testSchemaCanonValueOom(void) {
+ }
+ #endif /* LIBXML_SCHEMAS_ENABLED */
+ 
++static int
++testCopyEntityOom(void) {
++    /*
++     * Make each allocation of xmlCopyDoc fail in turn. A failure while
++     * copying the children of an entity declaration must make the copy
++     * fail instead of returning a document with a truncated entity.
++     */
++    const char docContent[] =
++        "<!DOCTYPE d [<!ENTITY e 'x'>]>\n"
++        "<d a='&e;'>&e;</d>\n";
++    xmlFreeFunc freeFunc;
++    xmlMallocFunc mallocFunc;
++    xmlReallocFunc reallocFunc;
++    xmlStrdupFunc strdupFunc;
++    xmlEntityPtr ent;
++    xmlDocPtr doc;
++    int err = 0;
++
++    doc = xmlReadMemory(docContent, sizeof(docContent) - 1, NULL, NULL, 0);
++    ent = xmlGetDocEntity(doc, BAD_CAST "e");
++    if ((ent == NULL) || (ent->children == NULL)) {
++        fprintf(stderr, "testCopyEntityOom: entity has no children\n");
++        xmlFreeDoc(doc);
++        return(1);
++    }
++
++    xmlMemGet(&freeFunc, &mallocFunc, &reallocFunc, &strdupFunc);
++
++    for (testFailAllocNum = 1; ; testFailAllocNum++) {
++        xmlDocPtr copy;
++        int failed;
++
++        testFailAllocCount = 0;
++        xmlMemSetup(free, testFailMalloc, testFailRealloc, testFailStrdup);
++        copy = xmlCopyDoc(doc, 1);
++        xmlMemSetup(freeFunc, mallocFunc, reallocFunc, strdupFunc);
++        failed = (testFailAllocCount >= testFailAllocNum);
++
++        if ((failed) && (copy != NULL)) {
++            fprintf(stderr, "testCopyEntityOom: allocation %d failed, "
++                    "but xmlCopyDoc succeeded\n", testFailAllocNum);
++            err = 1;
++        }
++        if ((!failed) && (copy == NULL)) {
++            fprintf(stderr, "testCopyEntityOom: xmlCopyDoc failed\n");
++            err = 1;
++        }
++        xmlFreeDoc(copy);
++        if ((err) || (!failed))
++            break;
++    }
++
++    xmlFreeDoc(doc);
++
++    return(err);
++}
++
+ int
+ main(void) {
+     int err = 0;
+@@ -2018,6 +2075,7 @@ main(void) {
+ #ifdef LIBXML_SCHEMAS_ENABLED
+     err |= testSchemaCanonValueOom();
+ #endif
++    err |= testCopyEntityOom();
+ 
+     return err;
+ }

@@ -1,0 +1,48 @@
+Include <limits.h> in the OpenSSL backend files that use INT_MAX.
+
+b83ecd1 (2025-01-17, PR cisco/libsrtp#743) added INT_MAX checks to aes_gcm_ossl.c,
+aes_icm_ossl.c and hmac_ossl.c without including <limits.h>. OpenSSL's <openssl/evp.h> pulls
+it in; BoringSSL's does not, so against BoringSSL 26584e7a10 all three files fail with "use of
+undeclared identifier 'INT_MAX'", for wasm32-wasip1 and x86_64 glibc alike. Build fix only, no
+behaviour change; the build is the test.
+Not fixed upstream as of 052aa2965e (main, 2026-11-13).
+
+Upstream: none found; closed issue cisco/libsrtp#744 is a different BoringSSL build problem
+(the CMake OpenSSL version check).
+
+diff --git a/crypto/cipher/aes_gcm_ossl.c b/crypto/cipher/aes_gcm_ossl.c
+index 9362a20..943637a 100644
+--- a/crypto/cipher/aes_gcm_ossl.c
++++ b/crypto/cipher/aes_gcm_ossl.c
+@@ -49,6 +49,7 @@
+ #endif
+ 
+ #include <openssl/evp.h>
++#include <limits.h>
+ #include "aes_gcm.h"
+ #include "alloc.h"
+ #include "err.h" /* for srtp_debug */
+diff --git a/crypto/cipher/aes_icm_ossl.c b/crypto/cipher/aes_icm_ossl.c
+index f78c859..6f05a53 100644
+--- a/crypto/cipher/aes_icm_ossl.c
++++ b/crypto/cipher/aes_icm_ossl.c
+@@ -53,6 +53,7 @@
+ #endif
+ 
+ #include <openssl/evp.h>
++#include <limits.h>
+ #include "aes_icm_ext.h"
+ #include "crypto_types.h"
+ #include "err.h" /* for srtp_debug */
+diff --git a/crypto/hash/hmac_ossl.c b/crypto/hash/hmac_ossl.c
+index f9660b9..3af3090 100644
+--- a/crypto/hash/hmac_ossl.c
++++ b/crypto/hash/hmac_ossl.c
+@@ -51,6 +51,7 @@
+ #include "err.h" /* for srtp_debug */
+ #include "auth_test_cases.h"
+ #include <openssl/evp.h>
++#include <limits.h>
+ 
+ #if defined(OPENSSL_VERSION_MAJOR) && (OPENSSL_VERSION_MAJOR >= 3)
+ #define SRTP_OSSL_USE_EVP_MAC

@@ -1,11 +1,20 @@
 Subject: [PATCH] moxcms: check the TRC tag size addition
 
-Open upstream as awxkee/moxcms#197. Only reachable on 32-bit targets, where
-`tag_size + entry` overflows usize.
+Only reachable on 32-bit targets, where `tag_size + entry` overflows usize
+for a TRC tag table entry with a size near 4 GiB. The test added here calls
+read_trc_tag with a usize::MAX size, so it fails without the fix on any host.
 
+Upstream: fixed by awxkee/moxcms#197 (a61db8b, merged 2026-10-10), released in
+moxcms 0.9.2. image (e70e9fe, main HEAD as of 2026-11-21) still requires
+moxcms ^0.8 and does not build against 0.9 (`moxcms::WHITE_POINT_D65` is gone,
+new `MatrixCoefficients` variants), and there is no 0.8.x release with the fix,
+so keep this on the vendored 0.8.1 until image moves to moxcms 0.9.
+
+diff --git a/src/reader.rs b/src/reader.rs
+index 339865e..366b0f7 100644
 --- a/src/reader.rs
 +++ b/src/reader.rs
-@@ -731,9 +731,7 @@
+@@ -731,9 +731,7 @@ impl ColorProfile {
          if tag_size != 0 && tag_size < TAG_SIZE {
              return Ok(None);
          }
@@ -16,3 +25,29 @@ Open upstream as awxkee/moxcms#197. Only reachable on 32-bit targets, where
              slice.len()
          };
          if last_tag_offset > slice.len() {
+@@ -997,3 +995,25 @@ impl ColorProfile {
+         }))
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn trc_tag_size_overflow_is_an_error() {
++        // `tag_size + entry` used to overflow usize; on 32-bit targets a TRC tag
++        // size read from the profile's tag table is enough.
++        let mut slice = vec![0u8; 16];
++        slice[4..8].copy_from_slice(b"curv");
++        let mut read_size = 0;
++        let curve = ColorProfile::read_trc_tag(
++            &slice,
++            4,
++            usize::MAX,
++            &mut read_size,
++            &ParsingOptions::default(),
++        );
++        assert!(curve.is_err());
++    }
++}

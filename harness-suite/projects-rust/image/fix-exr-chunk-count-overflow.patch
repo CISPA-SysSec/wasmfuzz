@@ -1,0 +1,145 @@
+Subject: [PATCH] exr: reject headers whose chunk count overflows
+
+compute_chunk_count multiplies and sums tile counts unchecked. On 32-bit
+targets a large data window with tiny tiles wraps to a small chunk count, so
+the offset table is read with that small count, but
+Header::blocks_increasing_y_order then enumerates the real number of tiles and
+collects them into a Vec (capacity overflow / multi-GiB allocation). Add
+try_compute_chunk_count, which returns an error on overflow, and use it when
+reading and validating headers. compute_chunk_count keeps its signature.
+
+diff --git a/src/meta/header.rs b/src/meta/header.rs
+index 0ded6e0..423e3d6 100644
+--- a/src/meta/header.rs
++++ b/src/meta/header.rs
+@@ -767,7 +767,9 @@ impl Header {
+ 
+         // this is only to check whether someone tampered with our precious values, to
+         // avoid writing an invalid file
+-        if self.chunk_count != compute_chunk_count(self.compression, self.layer_size, self.blocks) {
++        if self.chunk_count
++            != try_compute_chunk_count(self.compression, self.layer_size, self.blocks)?
++        {
+             return Err(Error::invalid("chunk count attribute")); // TODO this may be an expensive check?
+         }
+ 
+@@ -1235,7 +1237,7 @@ impl Header {
+             _ => BlockDescription::ScanLines,
+         };
+ 
+-        let computed_chunk_count = compute_chunk_count(compression, data_window.size, blocks);
++        let computed_chunk_count = try_compute_chunk_count(compression, data_window.size, blocks)?;
+         if chunk_count.is_some() && pedantic && chunk_count != Some(computed_chunk_count) {
+             return Err(Error::invalid("chunk count not matching data size"));
+         }
+diff --git a/src/meta/mod.rs b/src/meta/mod.rs
+index 675ce7c..1477aa7 100644
+--- a/src/meta/mod.rs
++++ b/src/meta/mod.rs
+@@ -331,37 +331,45 @@ pub fn compute_chunk_count(
+     data_size: Vec2<usize>,
+     blocks: BlockDescription,
+ ) -> usize {
++    try_compute_chunk_count(compression, data_size, blocks)
++        .expect("chunk count exceeds maximum integer value")
++}
++
++/// Like `compute_chunk_count`, but returns an error instead of overflowing
++/// when the number of chunks does not fit into a `usize`
++/// (for example, tiny tiles in a large image on a 32-bit target).
++pub fn try_compute_chunk_count(
++    compression: Compression,
++    data_size: Vec2<usize>,
++    blocks: BlockDescription,
++) -> Result<usize> {
++    let overflow = || Error::invalid("chunk count exceeds maximum integer value");
++
+     if let BlockDescription::Tiles(tiles) = blocks {
+         let round = tiles.rounding_mode;
+         let Vec2(tile_width, tile_height) = tiles.tile_size;
++        let level_chunks = |Vec2(level_width, level_height): Vec2<usize>| {
++            compute_block_count(level_width, tile_width)
++                .checked_mul(compute_block_count(level_height, tile_height))
++        };
+ 
+         // TODO cache all these level values??
+         use crate::meta::attribute::LevelMode::*;
+         match tiles.level_mode {
+-            Singular => {
+-                let tiles_x = compute_block_count(data_size.width(), tile_width);
+-                let tiles_y = compute_block_count(data_size.height(), tile_height);
+-                tiles_x * tiles_y
+-            }
++            Singular => level_chunks(data_size).ok_or_else(overflow),
+ 
+-            MipMap => mip_map_levels(round, data_size)
+-                .map(|(_, Vec2(level_width, level_height))| {
+-                    compute_block_count(level_width, tile_width)
+-                        * compute_block_count(level_height, tile_height)
+-                })
+-                .sum(),
++            MipMap => mip_map_levels(round, data_size).try_fold(0_usize, |sum, (_, size)| {
++                level_chunks(size).and_then(|count| sum.checked_add(count)).ok_or_else(overflow)
++            }),
+ 
+-            RipMap => rip_map_levels(round, data_size)
+-                .map(|(_, Vec2(level_width, level_height))| {
+-                    compute_block_count(level_width, tile_width)
+-                        * compute_block_count(level_height, tile_height)
+-                })
+-                .sum(),
++            RipMap => rip_map_levels(round, data_size).try_fold(0_usize, |sum, (_, size)| {
++                level_chunks(size).and_then(|count| sum.checked_add(count)).ok_or_else(overflow)
++            }),
+         }
+     }
+     // scan line blocks never have mip maps
+     else {
+-        compute_block_count(data_size.height(), compression.scan_lines_per_block())
++        Ok(compute_block_count(data_size.height(), compression.scan_lines_per_block()))
+     }
+ }
+ 
+@@ -880,4 +888,42 @@ mod test {
+         assert!(!low_requirements.has_deep_data);
+         assert!(low_requirements.has_multiple_layers);
+     }
++
++    #[test]
++    fn chunk_count_overflow_is_an_error() {
++        use crate::{
++            math::RoundingMode,
++            meta::attribute::{LevelMode, TileDescription},
++        };
++
++        let tiles = |level_mode| {
++            BlockDescription::Tiles(TileDescription {
++                tile_size: Vec2(1, 1),
++                level_mode,
++                rounding_mode: RoundingMode::Down,
++            })
++        };
++
++        // tiny tiles in a large data window overflow the chunk count on 32-bit
++        // targets (here sizes are chosen to overflow on 64-bit targets as well)
++        let cases = [
++            (LevelMode::Singular, Vec2(usize::MAX / 2, 3)),
++            (LevelMode::MipMap, Vec2(u32::MAX as usize, u32::MAX as usize)),
++            (LevelMode::RipMap, Vec2(u32::MAX as usize, u32::MAX as usize)),
++        ];
++
++        for (level_mode, size) in cases {
++            assert!(
++                try_compute_chunk_count(Compression::ZIP1, size, tiles(level_mode)).is_err(),
++                "{:?} chunk count did not overflow",
++                level_mode
++            );
++        }
++
++        assert_eq!(
++            try_compute_chunk_count(Compression::ZIP1, Vec2(5, 3), tiles(LevelMode::Singular))
++                .unwrap(),
++            15
++        );
++    }
+ }

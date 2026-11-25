@@ -1,0 +1,78 @@
+Subject: [PATCH] openpgp/fuzz: parse the fixed certificate before the first input
+
+csf_verify_from_bytes, decrypt_from_bytes and inline_verify_from_bytes keep
+their test certificate (and decrypt_from_bytes its session key) in a
+LazyLock, so the first input of every fresh process that asks for it pays for
+parsing the certificate. Force the LazyLocks from a static constructor, so
+they are filled before the first input. Inputs run the same code as before.
+Related upstream: sequoia-pgp/sequoia!1881 (open) renames these files to
+kebab-case without touching their content; rebase onto the new names if it
+lands.
+
+diff --git a/openpgp/fuzz/fuzz_targets/csf_verify_from_bytes.rs b/openpgp/fuzz/fuzz_targets/csf_verify_from_bytes.rs
+index 48028b7..6710a62 100644
+--- a/openpgp/fuzz/fuzz_targets/csf_verify_from_bytes.rs
++++ b/openpgp/fuzz/fuzz_targets/csf_verify_from_bytes.rs
+@@ -31,6 +31,17 @@ W2hrBY5x0sZ8H7JlAP47mCfCuRVBqyaePuzKbxLJeLe2BpDdc0n2izMVj8t9Cg==
+ ";
+ static CERT: LazyLock<Cert> = LazyLock::new(|| Cert::from_bytes(CERT_BYTES).unwrap());
+ 
++// Parse the certificate from a static constructor, before the first input, instead of
++// during the first input that asks for it.
++#[used]
++#[link_section = ".init_array"]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        LazyLock::force(&CERT);
++    }
++    init
++};
++
+ 
+ fuzz_target!(|data: &[u8]| -> Corpus {
+     const NEEDLE: &[u8] = b"-----BEGIN PGP SIGNED MESSAGE-----";
+diff --git a/openpgp/fuzz/fuzz_targets/decrypt_from_bytes.rs b/openpgp/fuzz/fuzz_targets/decrypt_from_bytes.rs
+index d9b74b0..cb344ac 100644
+--- a/openpgp/fuzz/fuzz_targets/decrypt_from_bytes.rs
++++ b/openpgp/fuzz/fuzz_targets/decrypt_from_bytes.rs
+@@ -36,6 +36,18 @@ W2hrBY5x0sZ8H7JlAP47mCfCuRVBqyaePuzKbxLJeLe2BpDdc0n2izMVj8t9Cg==
+ static CERT: LazyLock<Cert> = LazyLock::new(|| Cert::from_bytes(CERT_BYTES).unwrap());
+ static SK: LazyLock<SessionKey> = LazyLock::new(|| Vec::new().into());
+ 
++// Parse the certificate from a static constructor, before the first input, instead of
++// during the first input that asks for it.
++#[used]
++#[link_section = ".init_array"]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        LazyLock::force(&CERT);
++        LazyLock::force(&SK);
++    }
++    init
++};
++
+ 
+ fuzz_target!(|data: &[u8]| -> Corpus {
+     struct Helper {}
+diff --git a/openpgp/fuzz/fuzz_targets/inline_verify_from_bytes.rs b/openpgp/fuzz/fuzz_targets/inline_verify_from_bytes.rs
+index 9524451..2a3406e 100644
+--- a/openpgp/fuzz/fuzz_targets/inline_verify_from_bytes.rs
++++ b/openpgp/fuzz/fuzz_targets/inline_verify_from_bytes.rs
+@@ -31,6 +31,17 @@ W2hrBY5x0sZ8H7JlAP47mCfCuRVBqyaePuzKbxLJeLe2BpDdc0n2izMVj8t9Cg==
+ ";
+ static CERT: LazyLock<Cert> = LazyLock::new(|| Cert::from_bytes(CERT_BYTES).unwrap());
+ 
++// Parse the certificate from a static constructor, before the first input, instead of
++// during the first input that asks for it.
++#[used]
++#[link_section = ".init_array"]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        LazyLock::force(&CERT);
++    }
++    init
++};
++
+ 
+ fuzz_target!(|data: &[u8]| -> Corpus {
+     struct Helper {}

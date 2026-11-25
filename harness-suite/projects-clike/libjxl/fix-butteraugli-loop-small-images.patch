@@ -1,0 +1,64 @@
+Subject: [PATCH] enc_adaptive_quantization: Skip butteraugli iterations for images smaller than 8x8
+
+At effort >= 8, FindBestQuantization() tunes the quant field with a
+butteraugli comparison loop. ButteraugliComparator returns an all-zero
+diffmap for images smaller than 8 pixels in either dimension, so the loop
+sees no distortion and coarsens the quantization as far as it is allowed:
+for thin images (e.g. 2049x2) effort 8 produced much worse output than
+effort 7, at any distance. Skip the loop for such images.
+
+Found with the streaming fuzzer ("Check(outlier_count == 0)": the
+non-streaming encode, which runs the loop, differs from the streaming one,
+which doesn't, by more than the threshold).
+Reproducer: repro/fix-butteraugli-loop-small-images.bin (streaming_fuzzer
+input).
+Test: JxlTest.LossyThinImageButteraugliIterations.
+---
+diff --git a/lib/jxl/enc_adaptive_quantization.cc b/lib/jxl/enc_adaptive_quantization.cc
+index 71ead0ad..f9f561a7 100644
+--- a/lib/jxl/enc_adaptive_quantization.cc
++++ b/lib/jxl/enc_adaptive_quantization.cc
+@@ -939,6 +939,11 @@ Status FindBestQuantization(const FrameHeader& frame_header,
+     // so in this case we enable it only for very high butteraugli targets.
+     return true;
+   }
++  if (linear.xsize() < 8 || linear.ysize() < 8) {
++    // Butteraugli reports a zero distance for images this small, so the loop
++    // below would only ever lower the quality.
++    return true;
++  }
+   JxlMemoryManager* memory_manager = enc_state->memory_manager();
+   Quantizer& quantizer = enc_state->shared.quantizer;
+   ImageI& raw_quant_field = enc_state->shared.raw_quant_field;
+diff --git a/lib/jxl/jxl_test.cc b/lib/jxl/jxl_test.cc
+index 37bea701..4c35ed36 100644
+--- a/lib/jxl/jxl_test.cc
++++ b/lib/jxl/jxl_test.cc
+@@ -2023,5 +2023,27 @@ TEST(JxlTest, StreamingForcedDotsSamePixels) {
+   EXPECT_TRUE(jxl::test::SamePixels(ppf_out, ppf_out_streaming));
+ }
+ 
++TEST(JxlTest, LossyThinImageButteraugliIterations) {
++  // Butteraugli cannot measure images smaller than 8 pixels in either
++  // dimension, so the butteraugli-guided quantization of effort >= 8 must not
++  // run on them.
++  TestImage image;
++  ASSERT_TRUE(image.SetDimensions(2049, 2));
++  ASSERT_TRUE(image.SetChannels(3));
++  JXL_TEST_ASSIGN_OR_DIE(auto frame, image.AddFrame());
++  frame.RandomFill();
++
++  JXLCompressParams cparams;
++  cparams.distance = 1.0f;
++  PackedPixelFile ppf_out;
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_EFFORT, 7);
++  Roundtrip(image.ppf(), cparams, {}, nullptr, &ppf_out);
++  const float psnr7 = test::ComputePSNR(image.ppf(), ppf_out);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_EFFORT, 8);
++  Roundtrip(image.ppf(), cparams, {}, nullptr, &ppf_out);
++  const float psnr8 = test::ComputePSNR(image.ppf(), ppf_out);
++  EXPECT_GT(psnr8, psnr7 - 1.0f);
++}
++
+ }  // namespace
+ }  // namespace jxl

@@ -1,0 +1,186 @@
+Fill the stsd entries of the stream mov_read_stsd() set up.
+
+Since a6e9b539f7 (2026-11-01) mov_read_stsd() picks the stream with get_curr_st(), which for
+a HEIF item property (ipma -> ipco -> stsd) is the item's stream, and sizes that stream's
+extradata arrays by the entry count. ff_mov_read_stsd_entries() still takes the last stream
+and bumps its stsd_count, so the two disagree; mov_free_stream_context() then frees
+sc->extradata[i] for i up to a stsd_count larger than the array (heap-buffer-overflow at
+mov.c:10924 on close). Use get_curr_st() in ff_mov_read_stsd_entries() too. rtpdec_qt sets
+trak_index/cur_item_id so get_curr_st() still returns its stream.
+Not fixed upstream as of 50276fac71 (2026-11-23).
+
+Includes libavformat/tests/heif_item_stsd.c (fate-heif-item-stsd): a HEIF meta box reduced from
+a fuzzer input, with a two-entry stsd in ipco associated through ipma. Without the fix closing
+the demuxer reads past the extradata arrays; this is reported under AddressSanitizer or
+valgrind, a plain build may pass.
+
+Upstream: none found; regression from a6e9b539f7 (PR FFmpeg/FFmpeg#25671, fixes #24931).
+
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+index 73769ecfa1..867611c241 100644
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -804,6 +804,7 @@ TESTPROGS                                       += $(HTTP_NOBODY_TESTPROG-yes)
+ TESTPROGS-$(CONFIG_NETWORK)              += noproxy
+ TESTPROGS-$(CONFIG_SRTP)                 += srtp
+ TESTPROGS-$(CONFIG_IMF_DEMUXER)          += imf
++TESTPROGS-$(CONFIG_MOV_DEMUXER)          += heif_item_stsd
+ TESTPROGS-$(CONFIG_MP3_MUXER)            += id3v2enc id3v2chap
+ TESTPROGS-$(CONFIG_AU_MUXER)             += auenc
+ TESTPROGS-$(CONFIG_MPEGTS_DEMUXER)       += mpegts_probe
+diff --git a/libavformat/mov.c b/libavformat/mov.c
+index ba9698e73a..8cf2e3eff2 100644
+--- a/libavformat/mov.c
++++ b/libavformat/mov.c
+@@ -3478,7 +3478,10 @@ int ff_mov_read_stsd_entries(MOVContext *c, AVIOContext *pb, int entries)
+     int gama_trc = -1;
+ 
+     av_assert0 (c->fc->nb_streams >= 1);
+-    st = c->fc->streams[c->fc->nb_streams-1];
++    /* the same stream mov_read_stsd() sized the extradata arrays for */
++    st = get_curr_st(c);
++    if (!st)
++        return AVERROR_INVALIDDATA;
+     sc = st->priv_data;
+ 
+     for (pseudo_stream_id = 0;
+diff --git a/libavformat/tests/heif_item_stsd.c b/libavformat/tests/heif_item_stsd.c
+new file mode 100644
+index 0000000000..02c369ab88
+--- /dev/null
++++ b/libavformat/tests/heif_item_stsd.c
+@@ -0,0 +1,118 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++#include <stdio.h>
++#include <string.h>
++
++#include "libavformat/avformat.h"
++#include "libavutil/mem.h"
++
++/*
++ * A HEIF meta box, reduced from a fuzzer input: an item list followed by an
++ * item property container with an stsd box of two entries, associated with
++ * an item through ipma. mov_read_stsd() sizes the per-entry arrays of the
++ * item's stream; ff_mov_read_stsd_entries() must fill and count the entries
++ * of that same stream, or freeing the stream context reads past the arrays
++ * (heap-buffer-overflow, reported under AddressSanitizer or valgrind).
++ */
++static const uint8_t heif[] = {
++    0x00, 0x00, 0x00, 0x10, 0x66, 0x74, 0x79, 0x70, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6d, 0x65, 0x74, 0x61,
++    0x00, 0x00, 0x00, 0x08, 0x68, 0x64, 0x6c, 0x72, 0x00, 0x00, 0x00, 0x64,
++    0x69, 0x69, 0x6e, 0x66, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00,
++    0x00, 0x15, 0x69, 0x6e, 0x66, 0x65, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01,
++    0x00, 0x00, 0x68, 0x76, 0x63, 0x31, 0x00, 0x00, 0x00, 0x00, 0x15, 0x69,
++    0x6e, 0x66, 0x65, 0x02, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x68,
++    0x76, 0x63, 0x31, 0x00, 0x00, 0x00, 0x00, 0x16, 0x69, 0x6e, 0x66, 0x65,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x69, 0x6e, 0x66, 0x65, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x81, 0x69, 0x70, 0x72, 0x70, 0x00, 0x00, 0x00, 0x61,
++    0x69, 0x70, 0x63, 0x6f, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x20, 0x73, 0x74, 0x73, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x6d, 0x6d, 0x6d,
++    0x72, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x18, 0x69, 0x70, 0x6d, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x02, 0x00, 0x01, 0x01, 0x03, 0x00, 0x02, 0x01, 0x03,
++};
++
++typedef struct MemIO {
++    const uint8_t *data;
++    int size, pos;
++} MemIO;
++
++static int mem_read(void *opaque, uint8_t *buf, int buf_size)
++{
++    MemIO *m = opaque;
++
++    buf_size = FFMIN(buf_size, m->size - m->pos);
++    if (!buf_size)
++        return AVERROR_EOF;
++    memcpy(buf, m->data + m->pos, buf_size);
++    m->pos += buf_size;
++    return buf_size;
++}
++
++static int64_t mem_seek(void *opaque, int64_t offset, int whence)
++{
++    MemIO *m = opaque;
++
++    if (whence == AVSEEK_SIZE)
++        return m->size;
++    if (whence == SEEK_CUR)
++        offset += m->pos;
++    else if (whence == SEEK_END)
++        offset += m->size;
++    if (offset < 0 || offset > m->size)
++        return AVERROR(EINVAL);
++    m->pos = offset;
++    return offset;
++}
++
++int main(void)
++{
++    MemIO m = { heif, sizeof(heif), 0 };
++    AVFormatContext *s = avformat_alloc_context();
++    uint8_t *buf = av_malloc(4096);
++    AVIOContext *pb = avio_alloc_context(buf, 4096, 0, &m, mem_read, NULL, mem_seek);
++    AVPacket *pkt = av_packet_alloc();
++    int ret;
++
++    if (!s || !buf || !pb || !pkt) {
++        fprintf(stderr, "allocation failed\n");
++        return 1;
++    }
++    av_log_set_level(AV_LOG_FATAL);
++    s->pb = pb;
++    /* the file is broken, only the cleanup matters */
++    ret = avformat_open_input(&s, NULL, av_find_input_format("mov"), NULL);
++    printf("avformat_open_input(): %d\n", ret);
++    if (ret >= 0) {
++        while (av_read_frame(s, pkt) >= 0)
++            av_packet_unref(pkt);
++        avformat_close_input(&s);
++    }
++
++    av_packet_free(&pkt);
++    av_freep(&pb->buffer);
++    avio_context_free(&pb);
++    return 0;
++}
+diff --git a/tests/fate/libavformat.mak b/tests/fate/libavformat.mak
+index 5d8049b4e9..794d878633 100644
+--- a/tests/fate/libavformat.mak
++++ b/tests/fate/libavformat.mak
+@@ -113,6 +113,11 @@ FATE_LIBAVFORMAT-$(CONFIG_IMF_DEMUXER) += fate-imf
+ fate-imf: libavformat/tests/imf$(EXESUF)
+ fate-imf: CMD = run libavformat/tests/imf$(EXESUF)
+ 
++FATE_LIBAVFORMAT-$(CONFIG_MOV_DEMUXER) += fate-heif-item-stsd
++fate-heif-item-stsd: libavformat/tests/heif_item_stsd$(EXESUF)
++fate-heif-item-stsd: CMD = run libavformat/tests/heif_item_stsd$(EXESUF)
++fate-heif-item-stsd: CMP = null
++
+ FATE_LIBAVFORMAT-$(CONFIG_MPEGTS_DEMUXER) += fate-mpegts-probe-pid
+ fate-mpegts-probe-pid: libavformat/tests/mpegts_probe$(EXESUF)
+ fate-mpegts-probe-pid: CMD = run libavformat/tests/mpegts_probe$(EXESUF)

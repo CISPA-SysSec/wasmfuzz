@@ -1,10 +1,20 @@
+Upstream: none found (GitLab search 2026-11-24; HEAD aed60989 has the same unchecked
+`cursor + amount` in buffered-reader's Dup).
+
+On 32-bit targets buffered_reader::Dup added a packet's four-octet body length (near u32::MAX) to
+its cursor without an overflow check. The wrapped sum made data_consume_hard succeed with a short
+slice, and RawCertParser then panicked slicing it with the unwrapped length ("range end index
+4294967293 out of range for slice of length 9"). Dup now checks the addition (error from
+data_consume_hard, saturating in data/read), and RawCertParser rejects such a packet with a
+MalformedPacket error. Not fixed upstream as of aed60989.
+
 diff --git a/buffered-reader/src/dup.rs b/buffered-reader/src/dup.rs
-index ca361096..a1c781c9 100644
+index adece3e..1a2cc8b 100644
 --- a/buffered-reader/src/dup.rs
 +++ b/buffered-reader/src/dup.rs
-@@ -64,11 +64,26 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Sync + Send> Dup<T, C> {
-     pub fn rewind(&mut self) {
-         self.cursor = 0;
+@@ -73,11 +73,26 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Sync + Send> Dup<T, C> {
+     pub fn into_inner(self) -> T {
+         self.reader
      }
 +
 +    /// Adds `amount` to the cursor, returning an error if the sum
@@ -30,7 +40,7 @@ index ca361096..a1c781c9 100644
          assert!(data.len() >= self.cursor);
          let data = &data[self.cursor..];
  
-@@ -89,21 +104,25 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Send + Sync> BufferedReader<C> for Du
+@@ -98,21 +113,25 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Send + Sync> BufferedReader<C> for Du
      }
  
      fn data(&mut self, amount: usize) -> Result<&[u8], io::Error> {
@@ -60,7 +70,7 @@ index ca361096..a1c781c9 100644
          assert!(data.len() >= self.cursor);
          let data = &data[self.cursor..];
          self.cursor += cmp::min(data.len(), amount);
-@@ -111,10 +130,11 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Send + Sync> BufferedReader<C> for Du
+@@ -120,10 +139,11 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Send + Sync> BufferedReader<C> for Du
      }
  
      fn data_consume_hard(&mut self, amount: usize) -> Result<&[u8], io::Error> {
@@ -75,7 +85,7 @@ index ca361096..a1c781c9 100644
          Ok(data)
      }
  
-@@ -204,4 +224,17 @@ mod test {
+@@ -225,4 +245,17 @@ mod test {
              reader.consume(1);
          }
      }
@@ -94,7 +104,7 @@ index ca361096..a1c781c9 100644
 +    }
  }
 diff --git a/openpgp/src/cert/raw.rs b/openpgp/src/cert/raw.rs
-index f62a0395..f360ded5 100644
+index f62a039..f360ded 100644
 --- a/openpgp/src/cert/raw.rs
 +++ b/openpgp/src/cert/raw.rs
 @@ -896,6 +896,21 @@ impl<'a> Iterator for RawCertParser<'a>

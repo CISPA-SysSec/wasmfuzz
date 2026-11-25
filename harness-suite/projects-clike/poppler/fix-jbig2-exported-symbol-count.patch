@@ -1,0 +1,130 @@
+Reject a JBIG2 symbol dictionary that exports more symbols than its input and
+new symbols together (SDNUMEXSYMS > SDNUMINSYMS + SDNUMNEWSYMS). The count
+sizes JBIG2SymbolDict's bitmap table before the export flags are checked, so a
+bogus 32-bit value allocated up to 2^32 entries.
+
+Regression test cpp/tests/poppler-jbig2-exported-symbols-test.cpp decodes a
+symbol dictionary without symbols that exports 0xffffffff of them and fails
+every operator new above 256 MB (32 GB without the fix).
+limit-jbig2-symbol-count, applied after this patch, also caps SDNUMEXSYMS at
+65535, so once it is applied the test passes without this fix too.
+
+Not fixed upstream as of 9182fd5.
+Upstream: none found (poppler/poppler issues and MRs searched for SDNUMEXSYMS,
+numExSyms, readSymbolDictSeg, JBIG2 symbol dictionary).
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 2b5829b4..0173a44f 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -25,3 +25,8 @@ if(ENABLE_FUZZER)
+   cpp_add_simpletest(page_label_fuzzer ./fuzzing/page_label_fuzzer.cc)
+   cpp_add_simpletest(page_search_fuzzer ./fuzzing/page_search_fuzzer.cc)
+ endif()
++
++cpp_add_simpletest(poppler-jbig2-exported-symbols-test poppler-jbig2-exported-symbols-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-jbig2-exported-symbols-test COMMAND poppler-jbig2-exported-symbols-test)
++endif()
+diff --git a/cpp/tests/poppler-jbig2-exported-symbols-test.cpp b/cpp/tests/poppler-jbig2-exported-symbols-test.cpp
+new file mode 100644
+index 00000000..887bd19c
+--- /dev/null
++++ b/cpp/tests/poppler-jbig2-exported-symbols-test.cpp
+@@ -0,0 +1,80 @@
++/*
++ * Regression test: a JBIG2 symbol dictionary exports a subset of its input
++ * and new symbols, but readSymbolDictSeg() sized the exported symbol table
++ * with SDNUMEXSYMS from the stream before checking it against them. A
++ * dictionary without any symbols that claims 0xffffffff exported symbols
++ * allocated a table of 2^32 - 1 bitmap pointers.
++ * Every operator new larger than 256 MB fails in this test.
++ */
++
++#include <GlobalParams.h>
++#include <JBIG2Stream.h>
++#include <Object.h>
++#include <Stream.h>
++
++#include <cstdio>
++#include <cstdlib>
++#include <iostream>
++#include <memory>
++#include <string>
++
++static const size_t allocLimit = 256u << 20;
++
++void *operator new(size_t size)
++{
++    if (size > allocLimit) {
++        fprintf(stderr, "  FAIL: allocation of %zu bytes\n", size);
++        std::_Exit(1);
++    }
++    if (void *p = std::malloc(size ? size : 1)) {
++        return p;
++    }
++    std::abort();
++}
++
++void operator delete(void *p) noexcept
++{
++    std::free(p);
++}
++
++void operator delete(void *p, size_t) noexcept
++{
++    std::free(p);
++}
++
++static void put32(std::string &s, unsigned int v)
++{
++    for (int shift = 24; shift >= 0; shift -= 8) {
++        s += static_cast<char>((v >> shift) & 0xff);
++    }
++}
++
++// embedded JBIG2 stream (no file header): a Huffman-coded symbol dictionary
++// with no input and no new symbols that exports 0xffffffff symbols
++static std::string build_jbig2()
++{
++    std::string s;
++    put32(s, 0); // segment number
++    s += '\x00'; // segment type: symbol dictionary
++    s += '\x00'; // no referred-to segments
++    s += '\x01'; // page 1
++    put32(s, 10); // data length
++    s += '\x00';
++    s += '\x01'; // flags: SDHUFF
++    put32(s, 0xffffffff); // SDNUMEXSYMS
++    put32(s, 0); // SDNUMNEWSYMS
++    return s;
++}
++
++int main()
++{
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    static const std::string data = build_jbig2();
++    JBIG2Stream str(std::make_unique<MemStream>(data.data(), 0, data.size(), Object::null()), Object::null(), nullptr);
++    (void)str.rewind(); // decodes the segments; failing is fine
++    while (str.getChar() != EOF) { }
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/poppler/JBIG2Stream.cc b/poppler/JBIG2Stream.cc
+index a1c6d28b..ca44729a 100644
+--- a/poppler/JBIG2Stream.cc
++++ b/poppler/JBIG2Stream.cc
+@@ -1631,6 +1631,11 @@ bool JBIG2Stream::readSymbolDictSeg(unsigned int segNum, const std::vector<unsig
+         error(errSyntaxError, curStr->getPos(), "Unexpected EOF in JBIG2 stream");
+         return false;
+     }
++    // exported symbols are a subset of the input and new symbols
++    if (numExSyms > numInputSyms + numNewSyms) {
++        error(errSyntaxError, curStr->getPos(), "Too many exported symbols in JBIG2 symbol dictionary");
++        return false;
++    }
+ 
+     const unsigned int symCodeLen = calculateSymCodeLen(numInputSyms, numNewSyms, huff);
+     if (symCodeLen >= 31) {

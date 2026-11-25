@@ -1,0 +1,103 @@
+Subject: [PATCH] programs/fuzz: initialise PSA once in the X.509 fuzzers
+
+fuzz_x509crl, fuzz_x509csr and fuzz_x509crt called psa_crypto_init() and
+mbedtls_psa_crypto_free() around every input, so each input paid for the
+key-slot setup and the entropy poll + CTR_DRBG seeding (about 160k wasm
+instructions, 47-97 % of the per-input cost). Parsing and the _info()
+printers never draw random numbers, so do the initialisation once in
+LLVMFuzzerInitialize() and keep it. The per-input psa_crypto_init() stays
+as an early-out no-op (and keeps fuzz_onefile.c, which does not call
+LLVMFuzzerInitialize, working); keys imported while parsing are still
+destroyed by mbedtls_x509_*_free(), now while PSA is still up.
+
+Upstream context: Mbed-TLS/mbedtls#10932 (open) moves psa_crypto_init() in
+fuzz_client/fuzz_dtlsclient only; #10857 (open, new harnesses) and #11052 /
+#11056 (open, new tls13_server / psa_crypto fuzzers) do not touch these files.
+
+diff --git a/programs/fuzz/fuzz_x509crl.c b/programs/fuzz/fuzz_x509crl.c
+index 00ad0bb454..d92cf5acd3 100644
+--- a/programs/fuzz/fuzz_x509crl.c
++++ b/programs/fuzz/fuzz_x509crl.c
+@@ -2,6 +2,16 @@
+ #include "mbedtls/x509_crl.h"
+ #include "fuzz_common.h"
+ 
++/* Initialise PSA once per process. Parsing does not draw random numbers, so the
++ * per-input psa_crypto_init() below is then a no-op and the state is not freed. */
++int LLVMFuzzerInitialize(int *argc, char ***argv)
++{
++    (void) argc;
++    (void) argv;
++    (void) psa_crypto_init();
++    return 0;
++}
++
+ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+ {
+ #ifdef MBEDTLS_X509_CRL_PARSE_C
+@@ -25,7 +35,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+ #endif /* !MBEDTLS_X509_REMOVE_INFO */
+ 
+ exit:
+-    mbedtls_psa_crypto_free();
+     mbedtls_x509_crl_free(&crl);
+ #else /* MBEDTLS_X509_CRL_PARSE_C */
+     (void) Data;
+diff --git a/programs/fuzz/fuzz_x509crt.c b/programs/fuzz/fuzz_x509crt.c
+index ad071422f9..6ae32469e5 100644
+--- a/programs/fuzz/fuzz_x509crt.c
++++ b/programs/fuzz/fuzz_x509crt.c
+@@ -2,6 +2,16 @@
+ #include "mbedtls/x509_crt.h"
+ #include "fuzz_common.h"
+ 
++/* Initialise PSA once per process. Parsing does not draw random numbers, so the
++ * per-input psa_crypto_init() below is then a no-op and the state is not freed. */
++int LLVMFuzzerInitialize(int *argc, char ***argv)
++{
++    (void) argc;
++    (void) argv;
++    (void) psa_crypto_init();
++    return 0;
++}
++
+ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+ {
+ #ifdef MBEDTLS_X509_CRT_PARSE_C
+@@ -25,7 +35,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+ #endif /* !MBEDTLS_X509_REMOVE_INFO */
+ 
+ exit:
+-    mbedtls_psa_crypto_free();
+     mbedtls_x509_crt_free(&crt);
+ #else /* MBEDTLS_X509_CRT_PARSE_C */
+     (void) Data;
+diff --git a/programs/fuzz/fuzz_x509csr.c b/programs/fuzz/fuzz_x509csr.c
+index 502673a70d..a70ede2d96 100644
+--- a/programs/fuzz/fuzz_x509csr.c
++++ b/programs/fuzz/fuzz_x509csr.c
+@@ -2,6 +2,16 @@
+ #include "mbedtls/x509_csr.h"
+ #include "fuzz_common.h"
+ 
++/* Initialise PSA once per process. Parsing does not draw random numbers, so the
++ * per-input psa_crypto_init() below is then a no-op and the state is not freed. */
++int LLVMFuzzerInitialize(int *argc, char ***argv)
++{
++    (void) argc;
++    (void) argv;
++    (void) psa_crypto_init();
++    return 0;
++}
++
+ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+ {
+ #ifdef MBEDTLS_X509_CSR_PARSE_C
+@@ -25,7 +35,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+ #endif /* !MBEDTLS_X509_REMOVE_INFO */
+ 
+ exit:
+-    mbedtls_psa_crypto_free();
+     mbedtls_x509_csr_free(&csr);
+ #else /* MBEDTLS_X509_CSR_PARSE_C */
+     (void) Data;

@@ -1,0 +1,172 @@
+JBIG2Bitmap::expand() grows a striped page of unknown height to the bottom
+row of each immediate region, which comes from the stream (up to ~2 GB).
+The constructor soft-fails when its allocation fails, expand() used
+grealloc() and aborted. Fail the same way (data = nullptr; the callers
+check isOk()).
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 084fca915..826844189 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -25,6 +25,11 @@ cpp_add_simpletest(poppler-postscript-length-test poppler-postscript-length-test
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-postscript-length-test COMMAND poppler-postscript-length-test)
+ endif()
++cpp_add_simpletest(poppler-jbig2-expand-test poppler-jbig2-expand-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-jbig2-expand-test COMMAND poppler-jbig2-expand-test)
++  set_tests_properties(poppler-jbig2-expand-test PROPERTIES SKIP_RETURN_CODE 77)
++endif()
+ 
+ if(ENABLE_FUZZER)
+   cpp_add_simpletest(doc_fuzzer ./fuzzing/doc_fuzzer.cc)
+diff --git a/cpp/tests/poppler-jbig2-expand-test.cpp b/cpp/tests/poppler-jbig2-expand-test.cpp
+new file mode 100644
+index 000000000..aea0e1333
+--- /dev/null
++++ b/cpp/tests/poppler-jbig2-expand-test.cpp
+@@ -0,0 +1,122 @@
++/*
++ * Regression test: JBIG2Bitmap::expand() grows the page bitmap of a striped
++ * page with unknown height (0xffffffff) to the end row of each immediate
++ * region. That row comes from the stream, so a single 8x1 region at
++ * y = 0x7ffffff0 asks for a 2 GB page bitmap. The bitmap constructor
++ * soft-fails when such an allocation fails, but expand() used grealloc(),
++ * which aborts the process.
++ *
++ * The test caps the address space (RLIMIT_AS) so that the 2 GB allocation
++ * fails, which does not work under AddressSanitizer: it is skipped there.
++ */
++
++#include <GlobalParams.h>
++#include <JBIG2Stream.h>
++#include <Object.h>
++#include <Stream.h>
++
++#include <cstdio>
++#include <iostream>
++#include <memory>
++#include <string>
++
++#if defined(__has_feature)
++#    if __has_feature(address_sanitizer)
++#        define POPPLER_TEST_ASAN 1
++#    endif
++#endif
++#if defined(__SANITIZE_ADDRESS__)
++#    define POPPLER_TEST_ASAN 1
++#endif
++
++#ifdef __linux__
++#    include <sys/resource.h>
++#    include <unistd.h>
++#endif
++
++static void put32(std::string &s, unsigned int v)
++{
++    for (int shift = 24; shift >= 0; shift -= 8) {
++        s += static_cast<char>((v >> shift) & 0xff);
++    }
++}
++
++// embedded JBIG2 stream (no file header): a striped page of unknown height,
++// then an immediate MMR generic region whose bottom row is 0x7ffffff1
++static std::string build_jbig2()
++{
++    std::string s;
++    // segment 0: page information, page 1, 19 bytes
++    put32(s, 0);
++    s += '\x30';
++    s += '\x00';
++    s += '\x01';
++    put32(s, 19);
++    put32(s, 8); // width
++    put32(s, 0xffffffff); // height: unknown, striped
++    put32(s, 0); // x resolution
++    put32(s, 0); // y resolution
++    s += '\x00'; // flags
++    s += '\x80'; // striping: striped, max stripe size 1
++    s += '\x01';
++    // segment 1: immediate generic region, page 1
++    const std::string mmr(8, '\0');
++    put32(s, 1);
++    s += '\x26';
++    s += '\x00';
++    s += '\x01';
++    put32(s, 18 + mmr.size());
++    put32(s, 8); // width
++    put32(s, 1); // height
++    put32(s, 0); // x
++    put32(s, 0x7ffffff0); // y
++    s += '\x00'; // region segment flags
++    s += '\x01'; // generic region flags: MMR
++    s += mmr;
++    return s;
++}
++
++int main()
++{
++#ifndef __linux__
++    std::cout << "SKIP: needs RLIMIT_AS\n";
++    return 77;
++#elif defined(POPPLER_TEST_ASAN)
++    std::cout << "SKIP: RLIMIT_AS does not work under AddressSanitizer\n";
++    return 77;
++#else
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    // allow 1 GB more address space than in use now
++    long vmPages = 0;
++    if (FILE *f = fopen("/proc/self/statm", "r")) {
++        if (fscanf(f, "%ld", &vmPages) != 1) {
++            vmPages = 0;
++        }
++        fclose(f);
++    }
++    if (vmPages <= 0) {
++        std::cout << "SKIP: cannot read /proc/self/statm\n";
++        return 77;
++    }
++    const rlim_t limit = static_cast<rlim_t>(vmPages) * sysconf(_SC_PAGESIZE) + (1UL << 30);
++    struct rlimit rl;
++    if (getrlimit(RLIMIT_AS, &rl) != 0 || (rl.rlim_max != RLIM_INFINITY && rl.rlim_max < limit)) {
++        std::cout << "SKIP: cannot lower RLIMIT_AS\n";
++        return 77;
++    }
++    rl.rlim_cur = limit;
++    if (setrlimit(RLIMIT_AS, &rl) != 0) {
++        std::cout << "SKIP: cannot lower RLIMIT_AS\n";
++        return 77;
++    }
++
++    static const std::string data = build_jbig2();
++    JBIG2Stream str(std::make_unique<MemStream>(data.data(), 0, data.size(), Object::null()), Object::null(), nullptr);
++    (void)str.rewind(); // decodes the segments; failing is fine, aborting is not
++    while (str.getChar() != EOF) { }
++    std::cout << "PASS\n";
++    return 0;
++#endif
++}
+diff --git a/poppler/JBIG2Stream.cc b/poppler/JBIG2Stream.cc
+index 7683692dc..ebc2c4926 100644
+--- a/poppler/JBIG2Stream.cc
++++ b/poppler/JBIG2Stream.cc
+@@ -771,7 +771,16 @@ void JBIG2Bitmap::expand(int newH, unsigned int pixel)
+         return;
+     }
+     // need to allocate one extra guard byte for use in combine()
+-    data = static_cast<unsigned char *>(grealloc(data, newH * line + 1));
++    // (fail like the constructor does when the allocation fails: the new height
++    // comes from the stream and can ask for ~2 GB)
++    auto *newData = static_cast<unsigned char *>(grealloc(data, newH * line + 1, true));
++    if (!newData) {
++        error(errSyntaxError, -1, "JBIG2 page bitmap too large");
++        gfree(data);
++        data = nullptr;
++        return;
++    }
++    data = newData;
+     if (pixel) {
+         memset(data + h * line, 0xff, (newH - h) * line);
+     } else {

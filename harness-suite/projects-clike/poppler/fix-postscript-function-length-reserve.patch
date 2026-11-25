@@ -1,0 +1,110 @@
+PostScriptFunction reserved its code buffers from the stream dictionary's
+/Length, which comes from the file: /Length 2147483647 reserves 2 GB for the
+code string and 16 GB for the parsed code (std::bad_alloc; abort in the
+32-bit wasm guest) for a few bytes of code. Cap the reservation at the size
+of the underlying stream data.
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 852a7f76a..084fca915 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -21,6 +21,10 @@ cpp_add_simpletest(poppler-movie-poster-test poppler-movie-poster-test.cpp)
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-movie-poster-test COMMAND poppler-movie-poster-test)
+ endif()
++cpp_add_simpletest(poppler-postscript-length-test poppler-postscript-length-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-postscript-length-test COMMAND poppler-postscript-length-test)
++endif()
+ 
+ if(ENABLE_FUZZER)
+   cpp_add_simpletest(doc_fuzzer ./fuzzing/doc_fuzzer.cc)
+diff --git a/poppler/Function.cc b/poppler/Function.cc
+index d3ccf11ec..3fc95b5e8 100644
+--- a/poppler/Function.cc
++++ b/poppler/Function.cc
+@@ -1120,9 +1120,14 @@ PostScriptFunction::PostScriptFunction(Object *funcObj, Dict *dict)
+     }
+ 
+     //----- parse the function
+-    if (Object length = dict->lookup("Length"); length.isInt()) {
+-        codeString.reserve(length.getInt());
+-        code.reserve(length.getInt() / 2); // worst case estimate ignoring comments
++    if (Object length = dict->lookup("Length"); length.isInt() && length.getInt() > 0) {
++        // /Length comes from the file: never reserve more than the file holds
++        size_t reserveLength = length.getInt();
++        if (BaseStream *baseStr = str->getBaseStream(); baseStr && baseStr->getLength() >= 0) {
++            reserveLength = std::min(reserveLength, static_cast<size_t>(baseStr->getLength()));
++        }
++        codeString.reserve(reserveLength);
++        code.reserve(reserveLength / 2); // worst case estimate ignoring comments
+     }
+     if (getToken(str) != "{") {
+         error(errSyntaxError, -1, "Expected '{{' at start of PostScript function");
+diff --git a/cpp/tests/poppler-postscript-length-test.cpp b/cpp/tests/poppler-postscript-length-test.cpp
+new file mode 100644
+index 000000000..73af40082
+--- /dev/null
++++ b/cpp/tests/poppler-postscript-length-test.cpp
+@@ -0,0 +1,61 @@
++/*
++ * Regression test: PostScriptFunction used the stream dictionary's /Length,
++ * which comes straight from the file, to reserve its code buffers. A bogus
++ * /Length 2147483647 made it reserve 2 GB for the code string and 16 GB for
++ * the parsed code (std::bad_alloc, which ends the process) for a 9-byte
++ * function.
++ */
++
++#include <Array.h>
++#include <Dict.h>
++#include <Function.h>
++#include <GlobalParams.h>
++#include <Object.h>
++#include <Stream.h>
++
++#include <climits>
++#include <iostream>
++#include <memory>
++#include <string>
++
++static Object interval(int lo, int hi)
++{
++    auto a = std::make_unique<Array>(static_cast<XRef *>(nullptr));
++    a->add(Object(lo));
++    a->add(Object(hi));
++    return Object(std::move(a));
++}
++
++int main()
++{
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    static const std::string code = "{ 1 add }";
++    auto dict = std::make_unique<Dict>(static_cast<XRef *>(nullptr));
++    dict->add("FunctionType", Object(4));
++    dict->add("Domain", interval(0, 1));
++    dict->add("Range", interval(0, 10));
++    dict->add("Length", Object(INT_MAX));
++    Object funcObj(std::make_unique<MemStream>(code.data(), 0, code.size(), Object(std::move(dict))));
++
++    // before the fix this died of std::bad_alloc (or reserved 2 GB of code string)
++    std::unique_ptr<Function> func = Function::parse(&funcObj);
++    if (!func || !func->isOk() || func->getType() != Function::Type::PostScript) {
++        std::cerr << "  FAIL: the PostScript function did not parse\n";
++        return 1;
++    }
++    const size_t capacity = static_cast<PostScriptFunction *>(func.get())->getCodeString().capacity();
++    if (capacity > 1024 * 1024) {
++        std::cerr << "  FAIL: code string reserved " << capacity << " bytes for a 9-byte function\n";
++        return 1;
++    }
++    double in = 0.5, out = 0;
++    func->transform(&in, &out);
++    if (out != 1.5) {
++        std::cerr << "  FAIL: { 1 add } (0.5) = " << out << "\n";
++        return 1;
++    }
++    std::cout << "PASS\n";
++    return 0;
++}

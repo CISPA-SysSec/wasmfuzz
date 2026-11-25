@@ -1,0 +1,134 @@
+Subject: [PATCH] programs/fuzz: parse the server certificate and key once
+
+fuzz_server parsed srvcert and pkey only for the first input (the
+`initialized` flag), but called mbedtls_x509_crt_init()/mbedtls_pk_init()
+on them at the start and freed them at the end of every input. So every
+input after the first ran a server without a certificate or key: in a
+persistent fuzzer the key exchange signature (psa_sign_hash) was never
+reached, while a fresh process per input reached it. Parse both once in
+LLVMFuzzerInitialize() and keep them for the whole process. PSA now stays
+initialised as well, because the key lives in its key store; the
+per-input psa_crypto_init() is then a no-op. The per-input PSA keys
+(ephemeral, ticket) are still destroyed by mbedtls_ssl_free() and
+mbedtls_ssl_ticket_free(): the volatile key-slot count after each input
+stays at 1 (the server key) over the seed corpus and a fuzzing run.
+
+Upstream context: open PR Mbed-TLS/mbedtls#10857 ("new and expanded
+fuzzing harnesses") fixes the same bug by parsing the certificate and key
+for every input instead; #10932 (open) touches only the client fuzzers.
+Drop or rebase when #10857 lands.
+
+diff --git a/programs/fuzz/fuzz_server.c b/programs/fuzz/fuzz_server.c
+index 6aa6236cee..fd825875b0 100644
+--- a/programs/fuzz/fuzz_server.c
++++ b/programs/fuzz/fuzz_server.c
+@@ -9,7 +9,6 @@
+ 
+ #if defined(MBEDTLS_SSL_SRV_C)
+ const char *pers = "fuzz_server";
+-static int initialized = 0;
+ #if defined(MBEDTLS_X509_CRT_PARSE_C) && defined(MBEDTLS_PEM_PARSE_C)
+ static mbedtls_x509_crt srvcert;
+ static mbedtls_pk_context pkey;
+@@ -25,6 +24,44 @@ const char psk_id[] = "Client_identity";
+ #endif
+ #endif // MBEDTLS_SSL_SRV_C
+ 
++/* Set up the server's certificate and key once per process. They were parsed
++ * only for the first input but re-initialised and freed for every input, so
++ * every later input ran the server without them. PSA stays initialised, since
++ * it holds the key. */
++int LLVMFuzzerInitialize(int *argc, char ***argv)
++{
++    (void) argc;
++    (void) argv;
++#if defined(MBEDTLS_SSL_SRV_C)
++    if (psa_crypto_init() != PSA_SUCCESS) {
++        return 1;
++    }
++
++#if defined(MBEDTLS_X509_CRT_PARSE_C) && defined(MBEDTLS_PEM_PARSE_C)
++    mbedtls_x509_crt_init(&srvcert);
++    mbedtls_pk_init(&pkey);
++    if (mbedtls_x509_crt_parse(&srvcert, (const unsigned char *) mbedtls_test_srv_crt,
++                               mbedtls_test_srv_crt_len) != 0) {
++        return 1;
++    }
++    if (mbedtls_x509_crt_parse(&srvcert, (const unsigned char *) mbedtls_test_cas_pem,
++                               mbedtls_test_cas_pem_len) != 0) {
++        return 1;
++    }
++    if (mbedtls_pk_parse_key(&pkey, (const unsigned char *) mbedtls_test_srv_key,
++                             mbedtls_test_srv_key_len, NULL, 0) != 0) {
++        return 1;
++    }
++#endif
++
++    alpn_list[0] = "HTTP";
++    alpn_list[1] = "fuzzalpn";
++    alpn_list[2] = NULL;
++
++    dummy_init();
++#endif // MBEDTLS_SSL_SRV_C
++    return 0;
++}
+ 
+ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+ {
+@@ -46,10 +83,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+     }
+     options = Data[Size - 1];
+ 
+-#if defined(MBEDTLS_X509_CRT_PARSE_C) && defined(MBEDTLS_PEM_PARSE_C)
+-    mbedtls_x509_crt_init(&srvcert);
+-    mbedtls_pk_init(&pkey);
+-#endif
+     mbedtls_ssl_init(&ssl);
+     mbedtls_ssl_config_init(&conf);
+ #if defined(MBEDTLS_SSL_SESSION_TICKETS) && defined(MBEDTLS_SSL_TICKET_C)
+@@ -60,32 +93,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+         goto exit;
+     }
+ 
+-    if (initialized == 0) {
+-
+-#if defined(MBEDTLS_X509_CRT_PARSE_C) && defined(MBEDTLS_PEM_PARSE_C)
+-        if (mbedtls_x509_crt_parse(&srvcert, (const unsigned char *) mbedtls_test_srv_crt,
+-                                   mbedtls_test_srv_crt_len) != 0) {
+-            return 1;
+-        }
+-        if (mbedtls_x509_crt_parse(&srvcert, (const unsigned char *) mbedtls_test_cas_pem,
+-                                   mbedtls_test_cas_pem_len) != 0) {
+-            return 1;
+-        }
+-        if (mbedtls_pk_parse_key(&pkey, (const unsigned char *) mbedtls_test_srv_key,
+-                                 mbedtls_test_srv_key_len, NULL, 0) != 0) {
+-            return 1;
+-        }
+-#endif
+-
+-        alpn_list[0] = "HTTP";
+-        alpn_list[1] = "fuzzalpn";
+-        alpn_list[2] = NULL;
+-
+-        dummy_init();
+-
+-        initialized = 1;
+-    }
+-
+     if (mbedtls_ssl_config_defaults(&conf,
+                                     MBEDTLS_SSL_IS_SERVER,
+                                     MBEDTLS_SSL_TRANSPORT_STREAM,
+@@ -177,12 +184,7 @@ exit:
+     mbedtls_ssl_ticket_free(&ticket_ctx);
+ #endif /* MBEDTLS_SSL_SESSION_TICKETS && MBEDTLS_SSL_TICKET_C */
+     mbedtls_ssl_config_free(&conf);
+-#if defined(MBEDTLS_X509_CRT_PARSE_C) && defined(MBEDTLS_PEM_PARSE_C)
+-    mbedtls_x509_crt_free(&srvcert);
+-    mbedtls_pk_free(&pkey);
+-#endif /* MBEDTLS_X509_CRT_PARSE_C && MBEDTLS_PEM_PARSE_C */
+     mbedtls_ssl_free(&ssl);
+-    mbedtls_psa_crypto_free();
+ #else /* MBEDTLS_SSL_SRV_C */
+     (void) Data;
+     (void) Size;

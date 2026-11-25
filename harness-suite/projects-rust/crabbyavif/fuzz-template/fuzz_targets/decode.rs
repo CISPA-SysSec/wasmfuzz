@@ -21,6 +21,29 @@ use crabby_avif::capi::types::*;
 use crabby_avif::reformat::rgb;
 use libfuzzer_sys::fuzz_target;
 
+/// dav1d_open() builds dav1d's static tables (wedge masks, intra edge tree, QM tables) through
+/// pthread_once on its first call; a Chromium renderer pays that once per process. Open and close
+/// one decoder from a static constructor: wasmfuzz runs it in `_initialize`, before its snapshot
+/// (natively it runs before main), so the first input of every instance does not pay for it.
+#[used]
+#[link_section = ".init_array"]
+static INIT_DAV1D: extern "C" fn() = {
+    extern "C" fn init_dav1d() {
+        use dav1d_sys::bindings::*;
+        unsafe {
+            let mut settings: Dav1dSettings = std::mem::zeroed();
+            dav1d_default_settings(&mut settings);
+            settings.n_threads = 1;
+            settings.max_frame_delay = 1;
+            let mut context: *mut Dav1dContext = std::ptr::null_mut();
+            if dav1d_open(&mut context, &settings) == 0 {
+                dav1d_close(&mut context);
+            }
+        }
+    }
+    init_dav1d
+};
+
 const IMAGE_SIZE_LIMIT: u32 = 4096 * 4096;
 const IMAGE_DIMENSION_LIMIT: u32 = 16384;
 const MAX_FRAMES: i32 = 16;

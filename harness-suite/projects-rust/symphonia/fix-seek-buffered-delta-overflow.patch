@@ -1,5 +1,8 @@
+Upstream: open issue pdeljanov/Symphonia#582 (by nicolasfalesy, 2026-10-09) reaches the same seek_buffered assert through a negative trun data offset; open PR #610 (by hsdfat, 2026-11-07) rejects that offset before seeking but leaves seek_buffered unchanged.
+Our trigger is a >2 GiB stco delta on 32-bit, so #610 alone does not cover it.
+
 diff --git a/symphonia-core/src/io/media_source_stream.rs b/symphonia-core/src/io/media_source_stream.rs
-index 64c0634..32cfe73 100644
+index 64c0634..09298db 100644
 --- a/symphonia-core/src/io/media_source_stream.rs
 +++ b/symphonia-core/src/io/media_source_stream.rs
 @@ -533,13 +533,15 @@ impl SeekBuffered for MediaSourceStream<'_> {
@@ -22,3 +25,29 @@ index 64c0634..32cfe73 100644
          }
          else {
              0
+@@ -669,6 +671,25 @@ mod tests {
+         assert_eq!(upper, mss.read_byte().unwrap());
+     }
+ 
++    #[test]
++    fn verify_mss_seek_buffered_far() {
++        let data = generate_random_bytes(1024 * 1024);
++
++        let ms = Cursor::new(data);
++        let mut mss = MediaSourceStream::new(Box::new(ms), Default::default());
++
++        mss.ignore_bytes(5122).unwrap();
++
++        let end = mss.pos() + mss.unread_buffer_len() as u64;
++
++        // Seeks further than the buffered data clamp to it, even if the distance exceeds
++        // `isize::MAX` (on 32-bit targets, anything above 2 GiB).
++        assert_eq!(mss.seek_buffered(u64::MAX), end);
++        assert_eq!(mss.seek_buffered(1 << 32), end);
++        assert_eq!(mss.seek_buffered(0), 0);
++        assert_eq!(mss.seek_buffered(1 << 32), end);
++    }
++
+     #[test]
+     fn verify_reading_be() {
+         let data = generate_random_bytes(1024 * 1024);

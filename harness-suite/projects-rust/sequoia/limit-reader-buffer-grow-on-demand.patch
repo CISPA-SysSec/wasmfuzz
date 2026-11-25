@@ -1,0 +1,169 @@
+Subject: [PATCH] openpgp, buffered-reader: Grow the read buffer as data arrives
+
+`armor::Reader::data_helper` (and `buffered_reader::Generic`, which it
+copies) allocated and zeroed `amount + slack` bytes before reading
+anything.  `amount` often comes straight from the input: the
+RawCertParser asks for a packet body of up to 4 GiB from a 33-byte
+armored message.  On 64-bit hosts the lazily zeroed allocation is
+cheap, but on 32-bit hosts (wasm32 here; also i686/armv7) it aborts:
+`vec![0; usize::MAX]` panics with "capacity overflow" after the
+saturating add, `Vec::resize` of a recycled buffer likewise, and
+smaller sizes hit `handle_alloc_error`.  Start with a buffer for the
+usual small requests (buffered + 2 * slack, i.e. unchanged for them)
+and double it, up to the old capacity, while data actually arrives.
+
+Repro: repro/limit-reader-buffer-grow-on-demand.asc
+(rawcert_from_bytes, cert_parser_binary_from_bytes; 32-bit only).
+---
+diff --git a/buffered-reader/src/generic.rs b/buffered-reader/src/generic.rs
+index 794a57c6..076a59cb 100644
+--- a/buffered-reader/src/generic.rs
++++ b/buffered-reader/src/generic.rs
+@@ -133,22 +133,42 @@ impl<T: io::Read + Send + Sync, C: fmt::Debug + Sync + Send> Generic<T, C> {
+             // The caller wants more data than we have readily
+             // available.  Read some more.
+ 
+-            let capacity : usize = amount.saturating_add(
+-                default_buf_size().max(
+-                    self.preferred_chunk_size.saturating_mul(2)));
++            let slack = default_buf_size().max(
++                self.preferred_chunk_size.saturating_mul(2));
++            let capacity : usize = amount.saturating_add(slack);
++
++            // `amount` is often derived from the input (e.g., an
++            // OpenPGP packet length), and may be far larger than
++            // the data that is actually available.  Don't allocate
++            // (and zero) `capacity` bytes up front: start with a
++            // buffer that is large enough for the usual small
++            // requests, and grow it as data actually arrives.
++            let initial = cmp::min(
++                capacity,
++                amount_buffered.saturating_add(slack.saturating_mul(2)));
+ 
+             let mut buffer_new = self.unused_buffer.take()
+                 .map(|mut v| {
+-                    vec_resize(&mut v, capacity);
++                    vec_resize(&mut v, initial);
+                     v
+                 })
+-                .unwrap_or_else(|| vec![0u8; capacity]);
++                .unwrap_or_else(|| vec![0u8; initial]);
+ 
+             let mut amount_read = 0;
+             while amount_buffered + amount_read < amount {
+                 t!("Have {} bytes, need {} bytes",
+                    amount_buffered + amount_read, amount);
+ 
++                if amount_buffered + amount_read == buffer_new.len() {
++                    // The buffer is full, but we need more data.
++                    // `buffer_new.len() < amount < capacity`, so
++                    // this grows the buffer.
++                    let len = cmp::min(
++                        capacity, buffer_new.len().saturating_mul(2));
++                    t!("Growing buffer to {} bytes", len);
++                    vec_resize(&mut buffer_new, len);
++                }
++
+                 if self.eof {
+                     t!("Hit EOF on the underlying reader, don't poll again.");
+                     break;
+@@ -429,4 +449,20 @@ mod test {
+         assert!(br.data_hard(1).is_ok()); // Should be fine then.
+         Ok(())
+     }
++
++    /// A huge request must not allocate a buffer of the requested
++    /// size up front, only as much as there is data.
++    #[test]
++    fn huge_request_does_not_allocate() -> io::Result<()> {
++        let data = vec![0x2au8; 100_000];
++        let mut br = Generic::new(&data[..], None);
++        let amount = u32::MAX as usize;
++        assert!(br.data_hard(amount).is_err());
++        assert_eq!(br.data(amount)?.len(), data.len());
++        assert!(br.buffer.as_ref().map(|b| b.capacity()).unwrap_or(0)
++                < 1 << 24);
++        assert_eq!(br.data_consume_hard(data.len())?, &data[..]);
++        assert!(br.data(1)?.is_empty());
++        Ok(())
++    }
+ }
+diff --git a/openpgp/src/armor.rs b/openpgp/src/armor.rs
+index 6a812623..23e33734 100644
+--- a/openpgp/src/armor.rs
++++ b/openpgp/src/armor.rs
+@@ -1657,22 +1657,42 @@ impl<'a> Reader<'a> {
+             // The caller wants more data than we have readily
+             // available.  Read some more.
+ 
+-            let capacity : usize = amount.saturating_add(
+-                DEFAULT_BUF_SIZE.max(
+-                    self.preferred_chunk_size.saturating_mul(2)));
++            let slack = DEFAULT_BUF_SIZE.max(
++                self.preferred_chunk_size.saturating_mul(2));
++            let capacity : usize = amount.saturating_add(slack);
++
++            // `amount` is often derived from the input (e.g., an
++            // OpenPGP packet length), and may be far larger than
++            // the data that is actually available.  Don't allocate
++            // (and zero) `capacity` bytes up front: start with a
++            // buffer that is large enough for the usual small
++            // requests, and grow it as data actually arrives.
++            let initial = cmp::min(
++                capacity,
++                amount_buffered.saturating_add(slack.saturating_mul(2)));
+ 
+             let mut buffer_new = self.unused_buffer.take()
+                 .map(|mut v| {
+-                    vec_resize(&mut v, capacity);
++                    vec_resize(&mut v, initial);
+                     v
+                 })
+-                .unwrap_or_else(|| vec![0u8; capacity]);
++                .unwrap_or_else(|| vec![0u8; initial]);
+ 
+             let mut amount_read = 0;
+             while amount_buffered + amount_read < amount {
+                 t!("Have {} bytes, need {} bytes",
+                    amount_buffered + amount_read, amount);
+ 
++                if amount_buffered + amount_read == buffer_new.len() {
++                    // The buffer is full, but we need more data.
++                    // `buffer_new.len() < amount < capacity`, so
++                    // this grows the buffer.
++                    let len = cmp::min(
++                        capacity, buffer_new.len().saturating_mul(2));
++                    t!("Growing buffer to {} bytes", len);
++                    vec_resize(&mut buffer_new, len);
++                }
++
+                 if self.eof {
+                     t!("Hit EOF on the underlying reader, don't poll again.");
+                     break;
+@@ -2295,6 +2315,26 @@ mod test {
+         assert_eq!(r.read(&mut buf).unwrap(), 0);
+     }
+ 
++    /// A huge request (e.g., for the body of a packet whose length
++    /// field says 4 GB) must not allocate a buffer of the requested
++    /// size up front.  On 32-bit platforms that aborted the process,
++    /// on 64-bit platforms zeroing the buffer took ages.
++    #[test]
++    fn huge_request_does_not_allocate() {
++        use buffered_reader::BufferedReader;
++
++        let mut r = Reader::from_bytes(crate::tests::file("armor/test-1.asc"),
++                                       None);
++        let amount = u32::MAX as usize;
++        assert!(r.data_hard(amount).is_err());
++        let data = r.data(amount).unwrap();
++        assert!(! data.is_empty());
++        assert!(r.buffer.as_ref().map(|b| b.capacity()).unwrap_or(0)
++                < 1 << 24);
++        assert!(r.unused_buffer.as_ref().map(|b| b.capacity()).unwrap_or(0)
++                < 1 << 24);
++    }
++
+     /// Crash in armor parser due to indexing not aligned with UTF-8
+     /// characters.
+     ///

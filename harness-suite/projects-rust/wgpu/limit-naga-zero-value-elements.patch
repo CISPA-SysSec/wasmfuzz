@@ -1,0 +1,35 @@
+diff --git a/naga/src/proc/constant_evaluator.rs b/naga/src/proc/constant_evaluator.rs
+index b5a9f7643..d3e6c60ea 100644
+--- a/naga/src/proc/constant_evaluator.rs
++++ b/naga/src/proc/constant_evaluator.rs
+@@ -2472,6 +2472,13 @@ impl<'a> ConstantEvaluator<'a> {
+                     };
+                     return Err(ConstantEvaluatorError::TypeTooLarge(err.ty));
+                 }
++                // wasm32 fuzzing guest: a type just under `MAX_TYPE_SIZE` still
++                // expands to a gigabyte of handles (and more once an operator
++                // is applied per element), past the guest's memory cap.
++                const MAX_ZERO_VALUE_ELEMENTS: u32 = 1 << 20;
++                if size.get() > MAX_ZERO_VALUE_ELEMENTS {
++                    return Err(ConstantEvaluatorError::TypeTooLarge(ty));
++                }
+                 let el = self.eval_zero_value_impl(base, span)?;
+                 let expr = Expression::Compose {
+                     ty,
+diff --git a/naga/tests/naga/wgsl_errors.rs b/naga/tests/naga/wgsl_errors.rs
+index 10d844c68..ff31a6eba 100644
+--- a/naga/tests/naga/wgsl_errors.rs
++++ b/naga/tests/naga/wgsl_errors.rs
+@@ -6281,3 +6281,12 @@ fn huge_array_zero_value_is_error_not_oom() {
+         assert!(naga::front::wgsl::parse_str(src).is_err(), "{src}");
+     }
+ }
++
++#[test]
++fn large_array_zero_value_is_limited() {
++    // wasm32 guest limit: a zero value of an array just under the type size
++    // limit would otherwise expand to ~1 GiB of expression handles.
++    let result = naga::front::wgsl::parse_str("var<private> b = array<i32, 0xFffff6b>() * 0;");
++    assert!(result.is_err());
++    naga::front::wgsl::parse_str("var<private> b = array<i32, 1024>();").unwrap();
++}

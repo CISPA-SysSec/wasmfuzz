@@ -76,9 +76,14 @@ PKG_CONFIG="pkg-config --static" cmake -G Ninja \
     ..
 ninja poppler poppler-cpp
 
+# the fuzzers also include poppler-core headers (GlobalParams.h, since a297ef25)
 POPPLER_INCLUDES=(
     -I"$PROJECT/repo/cpp"
     -I"$PROJECT/repo/build/cpp"
+    -I"$PROJECT/repo/poppler"
+    -I"$PROJECT/repo"
+    -I"$PROJECT/repo/build/poppler"
+    -I"$PROJECT/repo/build"
 )
 POPPLER_LIBS=(
     "$PROJECT/repo/build/cpp/libpoppler-cpp.a"

@@ -1,0 +1,410 @@
+Upstream: open PR mozilla/mp4parse-rust#394 (by kinetiknz, 2023-02-08) treats with_capacity counts as hints, the same idea; open PR #396 and issue #395 (by Zaggy1024, 2023-02) cover the create_sample_table() OOM. All stalled since 2023.
+
+diff --git a/mp4parse/src/lib.rs b/mp4parse/src/lib.rs
+index 33dda4c..7f69118 100644
+--- a/mp4parse/src/lib.rs
++++ b/mp4parse/src/lib.rs
+@@ -152,6 +152,49 @@ pub type TryString = fallible_collections::TryVec<u8>;
+ pub type TryHashMap<K, V> = fallible_collections::TryHashMap<K, V>;
+ pub type TryBox<T> = fallible_collections::TryBox<T>;
+ 
++/// Upper bound, in bytes, on the capacity reserved up front from a count or
++/// size field read from the file. Such fields are untrusted: a few bytes of
++/// input can declare billions of entries or a multi-gigabyte box, and
++/// reserving all of it before any entry is read exhausts the address space of
++/// 32-bit targets (e.g. wasm32) even though the data never materializes.
++/// Buffers still grow (fallibly) beyond this as data is actually read.
++const MAX_UNTRUSTED_PREALLOCATION: usize = 1 << 20;
++
++/// Clamp an untrusted element count to a capacity worth reserving up front.
++fn untrusted_capacity<T>(count: usize) -> usize {
++    count.min(MAX_UNTRUSTED_PREALLOCATION / std::mem::size_of::<T>().max(1))
++}
++
++/// `TryVec::with_capacity` for a capacity taken from the file. See
++/// `MAX_UNTRUSTED_PREALLOCATION`.
++fn try_vec_with_untrusted_capacity<T>(
++    count: usize,
++) -> std::result::Result<TryVec<T>, TryReserveError> {
++    TryVec::with_capacity(untrusted_capacity::<T>(count))
++}
++
++/// Read up to `limit` bytes from `src` into `buf`, like
++/// `fallible_collections::try_read_up_to`, but reserve space as data arrives
++/// instead of reserving `limit` (usually a box size from the file) up front.
++fn try_read_up_to<R: Read>(
++    src: &mut R,
++    limit: u64,
++    buf: &mut TryVec<u8>,
++) -> std::io::Result<usize> {
++    let mut total = 0;
++    let mut left = limit;
++    while left > 0 {
++        let step = left.min(buf.len().max(MAX_UNTRUSTED_PREALLOCATION).to_u64());
++        let got = fallible_collections::try_read_up_to(src, step, buf)?;
++        total += got;
++        if got.to_u64() < step {
++            break;
++        }
++        left -= step;
++    }
++    Ok(total)
++}
++
+ // To ensure we don't use stdlib allocating types by accident
+ #[allow(dead_code)]
+ struct Vec;
+@@ -2385,7 +2428,8 @@ impl<T: Read> Read for BMFFBox<'_, T> {
+ 
+ impl<T: Read> TryRead for BMFFBox<'_, T> {
+     fn try_read_to_end(&mut self, buf: &mut TryVec<u8>) -> std::io::Result<usize> {
+-        fallible_collections::try_read_up_to(self, self.bytes_left(), buf)
++        let limit = self.bytes_left();
++        try_read_up_to(self, limit, buf)
+     }
+ }
+ 
+@@ -3084,7 +3128,7 @@ fn read_iinf<T: Read>(
+     } else {
+         be_u32(src)?.to_usize()
+     };
+-    let mut item_infos = TryVec::with_capacity(entry_count)?;
++    let mut item_infos = try_vec_with_untrusted_capacity(entry_count)?;
+ 
+     let mut iter = src.box_iter();
+     while let Some(mut b) = iter.next_box()? {
+@@ -3171,7 +3215,9 @@ fn read_iref<T: Read>(src: &mut BMFFBox<T>) -> Result<TryVec<SingleItemTypeRefer
+         trace!("read_iref parsing {:?} referenceType", b.head.name);
+         let from_item_id = ItemId::read(&mut b, version)?;
+         let reference_count = be_u16(&mut b)?;
+-        item_references.reserve(reference_count.to_usize())?;
++        item_references.reserve(untrusted_capacity::<SingleItemTypeReferenceBox>(
++            reference_count.to_usize(),
++        ))?;
+         for _ in 0..reference_count {
+             let to_item_id = ItemId::read(&mut b, version)?;
+             if from_item_id == to_item_id {
+@@ -3779,7 +3825,7 @@ fn read_ipma<T: Read>(
+     // we can provide a good estimate for how many elements we'll need in this
+     // vector, even though we don't know precisely how many items there will be
+     // properties for.
+-    let mut entries = TryVec::<ItemPropertyAssociationEntry>::with_capacity(
++    let mut entries = try_vec_with_untrusted_capacity::<ItemPropertyAssociationEntry>(
+         total_associations / ItemPropertiesBox::MIN_PROPERTIES,
+     )?;
+ 
+@@ -4385,7 +4431,9 @@ fn read_iloc<T: Read>(src: &mut BMFFBox<T>) -> Result<TryHashMap<ItemId, ItemLoc
+         IlocVersion::Two => iloc.read_u32(32)?,
+     };
+ 
+-    let mut items = TryHashMap::with_capacity(item_count.to_usize())?;
++    let mut items = TryHashMap::with_capacity(
++        untrusted_capacity::<(ItemId, ItemLocationBoxItem)>(item_count.to_usize()),
++    )?;
+ 
+     for _ in 0..item_count {
+         let item_id = ItemId(match version {
+@@ -4432,7 +4480,7 @@ fn read_iloc<T: Read>(src: &mut BMFFBox<T>) -> Result<TryHashMap<ItemId, ItemLoc
+             return Status::IlocBadExtent.into();
+         }
+ 
+-        let mut extents = TryVec::with_capacity(extent_count.to_usize())?;
++        let mut extents = try_vec_with_untrusted_capacity(extent_count.to_usize())?;
+ 
+         for _ in 0..extent_count {
+             // Parsed but currently ignored, see `Extent`
+@@ -4651,11 +4699,10 @@ fn read_pssh<T: Read>(src: &mut BMFFBox<T>) -> Result<ProtectionSystemSpecificHe
+         if version > 0 {
+             const KID_ELEMENT_SIZE: usize = 16;
+             let count = be_u32(pssh)?.to_usize();
+-            kid.reserve(
+-                count
+-                    .checked_mul(KID_ELEMENT_SIZE)
+-                    .ok_or_else(|| Error::from(Status::PsshSizeOverflow))?,
+-            )?;
++            count
++                .checked_mul(KID_ELEMENT_SIZE)
++                .ok_or_else(|| Error::from(Status::PsshSizeOverflow))?;
++            kid.reserve(untrusted_capacity::<ByteData>(count))?;
+             for _ in 0..count {
+                 let item = read_buf(pssh, KID_ELEMENT_SIZE.to_u64())?;
+                 kid.push(item)?;
+@@ -4851,7 +4898,7 @@ fn read_tref<T: Read>(f: &mut BMFFBox<T>) -> Result<TrackReferenceBox> {
+ 
+ fn read_tref_auxl<T: Read>(f: &mut BMFFBox<T>) -> Result<TrackReference> {
+     let num_track_ids = (f.bytes_left() / std::mem::size_of::<u32>().to_u64()).try_into()?;
+-    let mut track_ids = TryVec::with_capacity(num_track_ids)?;
++    let mut track_ids = try_vec_with_untrusted_capacity(num_track_ids)?;
+     for _ in 0..num_track_ids {
+         track_ids.push(be_u32(f)?)?;
+     }
+@@ -4942,7 +4989,7 @@ fn read_ftyp<T: Read>(src: &mut BMFFBox<T>) -> Result<FileTypeBox> {
+     }
+     // Is a brand_count of zero valid?
+     let brand_count = bytes_left / 4;
+-    let mut brands = TryVec::with_capacity(brand_count.try_into()?)?;
++    let mut brands = try_vec_with_untrusted_capacity(brand_count.try_into()?)?;
+     for _ in 0..brand_count {
+         brands.push(be_u32(src)?.into())?;
+     }
+@@ -5045,7 +5092,7 @@ fn read_tkhd<T: Read>(src: &mut BMFFBox<T>) -> Result<TrackHeaderBox> {
+ fn read_elst<T: Read>(src: &mut BMFFBox<T>) -> Result<EditListBox> {
+     let (version, flags) = read_fullbox_extra(src)?;
+     let edit_count = be_u32(src)?;
+-    let mut edits = TryVec::with_capacity(edit_count.to_usize())?;
++    let mut edits = try_vec_with_untrusted_capacity(edit_count.to_usize())?;
+     for _ in 0..edit_count {
+         let (segment_duration, media_time) = match version {
+             1 => {
+@@ -5124,7 +5171,7 @@ fn read_mdhd<T: Read>(src: &mut BMFFBox<T>) -> Result<MediaHeaderBox> {
+ fn read_stco<T: Read>(src: &mut BMFFBox<T>) -> Result<ChunkOffsetBox> {
+     let (_, _) = read_fullbox_extra(src)?;
+     let offset_count = be_u32(src)?;
+-    let mut offsets = TryVec::with_capacity(offset_count.to_usize())?;
++    let mut offsets = try_vec_with_untrusted_capacity(offset_count.to_usize())?;
+     for _ in 0..offset_count {
+         offsets.push(be_u32(src)?.into())?;
+     }
+@@ -5140,7 +5187,7 @@ fn read_stco<T: Read>(src: &mut BMFFBox<T>) -> Result<ChunkOffsetBox> {
+ fn read_co64<T: Read>(src: &mut BMFFBox<T>) -> Result<ChunkOffsetBox> {
+     let (_, _) = read_fullbox_extra(src)?;
+     let offset_count = be_u32(src)?;
+-    let mut offsets = TryVec::with_capacity(offset_count.to_usize())?;
++    let mut offsets = try_vec_with_untrusted_capacity(offset_count.to_usize())?;
+     for _ in 0..offset_count {
+         offsets.push(be_u64(src)?)?;
+     }
+@@ -5156,7 +5203,7 @@ fn read_co64<T: Read>(src: &mut BMFFBox<T>) -> Result<ChunkOffsetBox> {
+ fn read_stss<T: Read>(src: &mut BMFFBox<T>) -> Result<SyncSampleBox> {
+     let (_, _) = read_fullbox_extra(src)?;
+     let sample_count = be_u32(src)?;
+-    let mut samples = TryVec::with_capacity(sample_count.to_usize())?;
++    let mut samples = try_vec_with_untrusted_capacity(sample_count.to_usize())?;
+     for _ in 0..sample_count {
+         samples.push(be_u32(src)?)?;
+     }
+@@ -5172,7 +5219,7 @@ fn read_stss<T: Read>(src: &mut BMFFBox<T>) -> Result<SyncSampleBox> {
+ fn read_stsc<T: Read>(src: &mut BMFFBox<T>) -> Result<SampleToChunkBox> {
+     let (_, _) = read_fullbox_extra(src)?;
+     let sample_count = be_u32(src)?;
+-    let mut samples = TryVec::with_capacity(sample_count.to_usize())?;
++    let mut samples = try_vec_with_untrusted_capacity(sample_count.to_usize())?;
+     for _ in 0..sample_count {
+         let first_chunk = be_u32(src)?;
+         let samples_per_chunk = be_u32(src)?;
+@@ -5207,7 +5254,7 @@ fn read_ctts<T: Read>(
+         return Status::CttsBadSize.into();
+     }
+ 
+-    let mut offsets = TryVec::with_capacity(counts.to_usize())?;
++    let mut offsets = try_vec_with_untrusted_capacity(counts.to_usize())?;
+     for _ in 0..counts {
+         let (sample_count, time_offset) = match version {
+             // According to spec, Version0 shoule be used when version == 0;
+@@ -5246,7 +5293,7 @@ fn read_stsz<T: Read>(src: &mut BMFFBox<T>) -> Result<SampleSizeBox> {
+     let sample_count = be_u32(src)?;
+     let mut sample_sizes = TryVec::new();
+     if sample_size == 0 {
+-        sample_sizes.reserve(sample_count.to_usize())?;
++        sample_sizes.reserve(untrusted_capacity::<u32>(sample_count.to_usize()))?;
+         for _ in 0..sample_count {
+             sample_sizes.push(be_u32(src)?)?;
+         }
+@@ -5267,7 +5314,7 @@ fn read_stsz<T: Read>(src: &mut BMFFBox<T>) -> Result<SampleSizeBox> {
+ fn read_stts<T: Read>(src: &mut BMFFBox<T>) -> Result<TimeToSampleBox> {
+     let (_, _) = read_fullbox_extra(src)?;
+     let sample_count = be_u32(src)?;
+-    let mut samples = TryVec::with_capacity(sample_count.to_usize())?;
++    let mut samples = try_vec_with_untrusted_capacity(sample_count.to_usize())?;
+     for _ in 0..sample_count {
+         let sample_count = be_u32(src)?;
+         let sample_delta = be_u32(src)?;
+@@ -6441,7 +6488,7 @@ fn read_stsd<T: Read>(
+     }
+ 
+     let description_count = be_u32(src)?.to_usize();
+-    let mut descriptions = TryVec::with_capacity(description_count)?;
++    let mut descriptions = try_vec_with_untrusted_capacity(description_count)?;
+ 
+     let mut iter = src.box_iter();
+     while descriptions.len() < description_count {
+@@ -6793,7 +6840,8 @@ fn skip_exact<T: Read>(src: &mut T, bytes: u64) -> Result<()> {
+ 
+ /// Read size bytes into a Vector or return error.
+ fn read_buf<T: Read>(src: &mut T, size: u64) -> Result<TryVec<u8>> {
+-    let buf = src.take(size).read_into_try_vec()?;
++    let mut buf = TryVec::new();
++    try_read_up_to(src, size, &mut buf)?;
+     if buf.len().to_u64() != size {
+         return Status::ReadBufErr.into();
+     }
+diff --git a/mp4parse/tests/untrusted_preallocation.rs b/mp4parse/tests/untrusted_preallocation.rs
+new file mode 100644
+index 0000000..5e53db4
+--- /dev/null
++++ b/mp4parse/tests/untrusted_preallocation.rs
+@@ -0,0 +1,164 @@
++//! Counts and box sizes read from the file must not be reserved up front.
++//!
++//! A few bytes of input declaring a huge count or box size used to make the
++//! parser reserve that much up front, which on 32-bit targets (wasm32) takes
++//! most of the address space and keeps it. This test binary records the
++//! largest allocation requested per thread (and caps the heap at 64 MiB so
++//! that such requests fail instead of committing memory).
++
++// This Source Code Form is subject to the terms of the Mozilla Public
++// License, v. 2.0. If a copy of the MPL was not distributed with this
++// file, You can obtain one at https://mozilla.org/MPL/2.0/.
++
++use mp4parse as mp4;
++use std::alloc::{GlobalAlloc, Layout, System};
++use std::cell::Cell;
++use std::io::Cursor;
++use std::sync::atomic::{AtomicUsize, Ordering};
++
++const HEAP_LIMIT: usize = 64 << 20;
++
++struct CappedAlloc;
++
++static LIVE: AtomicUsize = AtomicUsize::new(0);
++
++thread_local! {
++    static MAX_REQUEST: Cell<usize> = const { Cell::new(0) };
++}
++
++impl CappedAlloc {
++    fn claim(&self, bytes: usize) -> bool {
++        MAX_REQUEST.with(|m| m.set(m.get().max(bytes)));
++        if LIVE.fetch_add(bytes, Ordering::Relaxed) + bytes > HEAP_LIMIT {
++            LIVE.fetch_sub(bytes, Ordering::Relaxed);
++            return false;
++        }
++        true
++    }
++}
++
++unsafe impl GlobalAlloc for CappedAlloc {
++    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++        if !self.claim(layout.size()) {
++            return std::ptr::null_mut();
++        }
++        System.alloc(layout)
++    }
++
++    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
++        System.dealloc(ptr, layout)
++    }
++
++    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
++        if new_size > layout.size() {
++            if !self.claim(new_size - layout.size()) {
++                return std::ptr::null_mut();
++            }
++        } else {
++            LIVE.fetch_sub(layout.size() - new_size, Ordering::Relaxed);
++        }
++        let p = System.realloc(ptr, layout, new_size);
++        if p.is_null() {
++            LIVE.fetch_sub(new_size, Ordering::Relaxed);
++            LIVE.fetch_add(layout.size(), Ordering::Relaxed);
++        }
++        p
++    }
++}
++
++#[global_allocator]
++static ALLOC: CappedAlloc = CappedAlloc;
++
++fn bmff_box(name: &[u8; 4], content: &[u8]) -> Vec<u8> {
++    let mut b = ((content.len() + 8) as u32).to_be_bytes().to_vec();
++    b.extend_from_slice(name);
++    b.extend_from_slice(content);
++    b
++}
++
++fn full_box(name: &[u8; 4], version: u8, content: &[u8]) -> Vec<u8> {
++    let mut c = vec![version, 0, 0, 0];
++    c.extend_from_slice(content);
++    bmff_box(name, &c)
++}
++
++fn hdlr(handler: &[u8; 4]) -> Vec<u8> {
++    let mut c = vec![0; 4]; // pre_defined
++    c.extend_from_slice(handler);
++    c.extend_from_slice(&[0; 12]); // reserved
++    c.push(0); // empty name
++    full_box(b"hdlr", 0, &c)
++}
++
++/// Parse `file` and check no single allocation exceeded 2 MiB (the parser
++/// reserves at most 1 MiB ahead of the data it has read).
++fn assert_no_untrusted_reservation<T>(parse: impl FnOnce() -> mp4::Result<T>) {
++    MAX_REQUEST.with(|m| m.set(0));
++    let r = parse();
++    let max = MAX_REQUEST.with(|m| m.get());
++    assert!(
++        max <= 2 << 20,
++        "parser requested {} bytes up front for an untrusted count or size",
++        max
++    );
++    if let Err(mp4::Error::OutOfMemory) = r {
++        panic!("parser ran out of memory");
++    }
++}
++
++#[test]
++fn stsd_huge_description_count() {
++    // A sample description box declaring 2^28 entries and containing none.
++    let stsd = full_box(b"stsd", 0, &0x1000_0000u32.to_be_bytes());
++    let stbl = bmff_box(b"stbl", &stsd);
++    let minf = bmff_box(b"minf", &stbl);
++    let mdia = bmff_box(b"mdia", &[hdlr(b"vide"), minf].concat());
++    let moov = bmff_box(b"moov", &bmff_box(b"trak", &mdia));
++    let file = [bmff_box(b"ftyp", b"isom\0\0\0\0isom"), moov].concat();
++    assert_no_untrusted_reservation(|| {
++        mp4::read_mp4(&mut Cursor::new(file), mp4::ParseStrictness::Normal)
++    });
++}
++
++#[test]
++fn iinf_huge_entry_count() {
++    // An item info box declaring 2^32-1 entries and containing none.
++    let iinf = full_box(b"iinf", 1, &u32::MAX.to_be_bytes());
++    let meta = full_box(b"meta", 0, &[hdlr(b"pict"), iinf].concat());
++    let file = [bmff_box(b"ftyp", b"avif\0\0\0\0avifmif1"), meta].concat();
++    assert_no_untrusted_reservation(|| {
++        mp4::read_avif(&mut Cursor::new(file), mp4::ParseStrictness::Normal)
++    });
++}
++
++#[test]
++fn pssh_huge_box_size() {
++    // A pssh box whose header declares 512 MiB but which holds only a few bytes.
++    let mut pssh = (512u32 << 20).to_be_bytes().to_vec();
++    pssh.extend_from_slice(b"pssh");
++    pssh.extend_from_slice(&[0; 24]);
++    let mut moov = ((pssh.len() + 8) as u32).to_be_bytes().to_vec();
++    moov.extend_from_slice(b"moov");
++    moov.extend_from_slice(&pssh);
++    let file = [bmff_box(b"ftyp", b"isom\0\0\0\0isom"), moov].concat();
++    assert_no_untrusted_reservation(|| {
++        mp4::read_mp4(&mut Cursor::new(file), mp4::ParseStrictness::Normal)
++    });
++}
++
++#[test]
++fn pssh_huge_kid_count() {
++    // A version 1 pssh box declaring 2^24 key IDs and containing none.
++    let mut c = vec![0; 16]; // system_id
++    c.extend_from_slice(&0x0100_0000u32.to_be_bytes());
++    let pssh = full_box(b"pssh", 1, &c);
++    let file = [
++        bmff_box(b"ftyp", b"isom\0\0\0\0isom"),
++        bmff_box(b"moov", &pssh),
++    ]
++    .concat();
++    assert_no_untrusted_reservation(|| {
++        mp4::read_mp4(&mut Cursor::new(file), mp4::ParseStrictness::Normal)
++    });
++}

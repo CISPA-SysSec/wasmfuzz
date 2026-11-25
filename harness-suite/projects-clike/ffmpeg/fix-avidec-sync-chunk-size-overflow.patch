@@ -1,0 +1,191 @@
+Skip AVI chunks whose size does not fit the int packet size.
+
+avi_sync() (libavformat/avidec.c) bounds a chunk size only by the file size, and that is the
+RIFF size when the I/O size is smaller, so sizes up to 4 GiB pass. packet_size = size + 8 and
+remaining = size are ints: for size > INT_MAX - 8 packet_size goes negative (signed overflow)
+and ni_prepare_read() later fails av_assert0(best_ast->remaining <= best_ast->packet_size)
+(avidec.c:1465) once the demuxer has switched to non-interleaved reading. Whether it gets
+there depends on how the int overflow in pos += packet_size - remaining is compiled: wasm32
+builds reach the assertion, an x86_64 clang -O1 build fails the seek first. Treat such a
+chunk header as no sync point.
+Not fixed upstream as of 50276fac71 (2026-11-23).
+
+Includes libavformat/tests/avi_chunk_size.c (fate-avi-chunk-size): a hand-made AVI with a
+4 GiB RIFF size and a second movi chunk of 0x7ffffffc bytes. Without the fix that chunk comes
+out as a truncated packet; the test expects only the first one.
+
+Upstream: none found.
+
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+index 867611c241..4693e2afb8 100644
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -788,6 +788,7 @@ TESTPROGS = codecstring                                                 \
+             url                                                         \
+             seek_utils
+ TESTPROGS-$(CONFIG_RTPDEC)               += rtpdec
++TESTPROGS-$(CONFIG_AVI_DEMUXER)          += avi_chunk_size
+ TESTPROGS-$(and $(CONFIG_AC3_PARSER),$(CONFIG_AC3_DECODER)) += parse_skip_samples
+ #           async                                                       \
+ 
+diff --git a/libavformat/avidec.c b/libavformat/avidec.c
+index 4b48bb1a08..15d297db31 100644
+--- a/libavformat/avidec.c
++++ b/libavformat/avidec.c
+@@ -1380,6 +1380,10 @@ start_sync:
+                     goto start_sync;
+                 }
+ 
++                /* packet_size and remaining are int */
++                if (size > INT_MAX - 8)
++                    continue;
++
+                 avi->stream_index = n;
+                 ast->packet_size  = size + 8;
+                 ast->remaining    = size;
+diff --git a/libavformat/tests/avi_chunk_size.c b/libavformat/tests/avi_chunk_size.c
+new file mode 100644
+index 0000000000..404f490263
+--- /dev/null
++++ b/libavformat/tests/avi_chunk_size.c
+@@ -0,0 +1,124 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++#include <stdio.h>
++#include <string.h>
++
++#include "libavformat/avformat.h"
++#include "libavutil/mem.h"
++
++/*
++ * An AVI file with a RIFF size of 4 GiB whose second movi chunk claims
++ * 0x7ffffffc bytes. avi_sync() bounds chunk sizes by the RIFF size here, but
++ * packet_size = size + 8 is an int: the chunk must not be taken as a packet
++ * (its size used to overflow and a later non-interleaved read could fail
++ * av_assert0(remaining <= packet_size)).
++ */
++static const uint8_t avi[] = {
++    'R', 'I', 'F', 'F', 0xff, 0xff, 0xff, 0xff, 'A', 'V', 'I', ' ',
++    'L', 'I', 'S', 'T',  192,    0,    0,    0, 'h', 'd', 'r', 'l',
++    /* avih: 25 fps, 2 frames, 1 stream, 16x16 */
++    'a', 'v', 'i', 'h',   56,    0,    0,    0,
++    0x40, 0x9c, 0, 0,   0, 0, 0, 0,   0, 0, 0, 0,   0x10, 0, 0, 0,
++       2,    0, 0, 0,   0, 0, 0, 0,   1, 0, 0, 0,      0, 0, 0, 0,
++      16,    0, 0, 0,  16, 0, 0, 0,   0, 0, 0, 0,      0, 0, 0, 0,
++       0,    0, 0, 0,   0, 0, 0, 0,
++    'L', 'I', 'S', 'T',  116,    0,    0,    0, 's', 't', 'r', 'l',
++    /* strh: video, scale 1, rate 25, 2 frames */
++    's', 't', 'r', 'h',   56,    0,    0,    0, 'v', 'i', 'd', 's', 'a', 'b', 'c', 'd',
++       0, 0, 0, 0,   0, 0, 0, 0,   0, 0, 0, 0,   1, 0, 0, 0,  25, 0, 0, 0,
++       0, 0, 0, 0,   2, 0, 0, 0,   0, 0, 0, 0,   0xff, 0xff, 0xff, 0xff,
++       0, 0, 0, 0,   0, 0, 0, 0,  16, 0, 16, 0,
++    /* strf: BITMAPINFOHEADER, 16x16, 24 bits, codec tag 'abcd' */
++    's', 't', 'r', 'f',   40,    0,    0,    0,
++      40, 0, 0, 0,  16, 0, 0, 0,  16, 0, 0, 0,   1, 0, 24, 0, 'a', 'b', 'c', 'd',
++       0, 0, 0, 0,   0, 0, 0, 0,   0, 0, 0, 0,   0, 0, 0, 0,   0, 0, 0, 0,
++    'L', 'I', 'S', 'T', 0xf0, 0xff, 0xff, 0xff, 'm', 'o', 'v', 'i',
++    '0', '0', 'd', 'c',    4,    0,    0,    0,    1,    2,    3,    4,
++    '0', '0', 'd', 'c', 0xfc, 0xff, 0xff, 0x7f,    5,    6,    7,    8,
++};
++
++typedef struct MemIO {
++    const uint8_t *data;
++    int size, pos;
++} MemIO;
++
++static int mem_read(void *opaque, uint8_t *buf, int buf_size)
++{
++    MemIO *m = opaque;
++
++    buf_size = FFMIN(buf_size, m->size - m->pos);
++    if (!buf_size)
++        return AVERROR_EOF;
++    memcpy(buf, m->data + m->pos, buf_size);
++    m->pos += buf_size;
++    return buf_size;
++}
++
++static int64_t mem_seek(void *opaque, int64_t offset, int whence)
++{
++    MemIO *m = opaque;
++
++    if (whence == AVSEEK_SIZE)
++        return m->size;
++    if (whence == SEEK_CUR)
++        offset += m->pos;
++    else if (whence == SEEK_END)
++        offset += m->size;
++    if (offset < 0 || offset > m->size)
++        return AVERROR(EINVAL);
++    m->pos = offset;
++    return offset;
++}
++
++int main(void)
++{
++    MemIO m = { avi, sizeof(avi), 0 };
++    AVFormatContext *s = avformat_alloc_context();
++    uint8_t *buf = av_malloc(4096);
++    AVIOContext *pb = avio_alloc_context(buf, 4096, 0, &m, mem_read, NULL, mem_seek);
++    AVPacket *pkt = av_packet_alloc();
++    int ret, nb_packets = 0;
++
++    if (!s || !buf || !pb || !pkt) {
++        fprintf(stderr, "allocation failed\n");
++        return 1;
++    }
++    av_log_set_level(AV_LOG_FATAL);
++    s->pb = pb;
++    ret = avformat_open_input(&s, NULL, av_find_input_format("avi"), NULL);
++    if (ret < 0) {
++        fprintf(stderr, "avformat_open_input() failed: %d\n", ret);
++        return 1;
++    }
++    while (av_read_frame(s, pkt) >= 0) {
++        printf("packet at %"PRId64", size %d\n", pkt->pos, pkt->size);
++        nb_packets++;
++        av_packet_unref(pkt);
++    }
++
++    av_packet_free(&pkt);
++    avformat_close_input(&s);
++    av_freep(&pb->buffer);
++    avio_context_free(&pb);
++
++    if (nb_packets != 1) {
++        fprintf(stderr, "%d packets, expected 1\n", nb_packets);
++        return 1;
++    }
++    return 0;
++}
+diff --git a/tests/fate/libavformat.mak b/tests/fate/libavformat.mak
+index 794d878633..edf9c2524e 100644
+--- a/tests/fate/libavformat.mak
++++ b/tests/fate/libavformat.mak
+@@ -22,6 +22,11 @@ FATE_LIBAVFORMAT-$(call ALLYES, AU_MUXER AU_DEMUXER) += fate-auenc
+ fate-auenc: libavformat/tests/auenc$(EXESUF)
+ fate-auenc: CMD = run libavformat/tests/auenc$(EXESUF)
+ 
++FATE_LIBAVFORMAT-$(CONFIG_AVI_DEMUXER) += fate-avi-chunk-size
++fate-avi-chunk-size: libavformat/tests/avi_chunk_size$(EXESUF)
++fate-avi-chunk-size: CMD = run libavformat/tests/avi_chunk_size$(EXESUF)
++fate-avi-chunk-size: CMP = null
++
+ FATE_LIBAVFORMAT += fate-mkdir
+ fate-mkdir: libavformat/tests/mkdir$(EXESUF)
+ fate-mkdir: CMD = run libavformat/tests/mkdir$(EXESUF)

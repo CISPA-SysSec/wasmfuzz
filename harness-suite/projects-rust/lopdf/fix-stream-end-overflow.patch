@@ -1,0 +1,72 @@
+Subject: [PATCH] check the stream end offset for overflow
+
+Only reachable on 32-bit targets: a stream whose indirect /Length can only be
+resolved after loading (it lives in an object stream, or the xref is
+reconstructed) is read by read_stream_content(), where `start + length`
+wraps for a length close to usize::MAX and the slice then panics. The test
+added here fails without the fix on i686 (debug and release) and passes
+either way on 64-bit targets, where /Length is at most i64::MAX.
+
+Upstream: none found.
+
+diff --git a/src/reader.rs b/src/reader.rs
+index f410f43..61a1022 100644
+--- a/src/reader.rs
++++ b/src/reader.rs
+@@ -1194,7 +1194,10 @@ fn read_stream_content(&mut self, object_id: ObjectId) -> Result<()> {
+         }
+ 
+         let length = usize::try_from(length).map_err(|e| Error::NumericCast(e.to_string()))?;
+-        let end = start + length;
++        // start + length wraps on 32-bit targets for a /Length close to u32::MAX
++        let end = start
++            .checked_add(length)
++            .ok_or(Error::InvalidStream("stream extends after document end.".to_string()))?;
+ 
+         if end > self.buffer.len() {
+             return Err(Error::InvalidStream("stream extends after document end.".to_string()));
+diff --git a/tests/stream_length_overflow.rs b/tests/stream_length_overflow.rs
+new file mode 100644
+index 0000000..ad4f181
+--- /dev/null
++++ b/tests/stream_length_overflow.rs
+@@ -0,0 +1,39 @@
++use lopdf::Document;
++
++// A stream whose indirect /Length is only known after loading (here: it lives
++// in an object stream) is read by read_stream_content(), where
++// `start + length` used to overflow on 32-bit targets for a length close to
++// usize::MAX: debug builds panic on the addition, release builds slice with
++// start > end. On 64-bit targets the largest length is i64::MAX, so there the
++// addition cannot overflow and the test passes either way.
++#[test]
++fn deferred_stream_length_near_usize_max_is_rejected() {
++    let length = i64::try_from(usize::MAX).unwrap_or(i64::MAX).to_string();
++    let objstm = format!("4 0 {length}");
++    let mut pdf = b"%PDF-1.5\n".to_vec();
++    let mut offsets = Vec::new();
++    for (number, body) in [
++        (1, "<< /Type /Catalog /Pages 2 0 R >>".to_string()),
++        (2, "<< /Type /Pages /Kids [] /Count 0 >>".to_string()),
++        (3, "<< /Length 4 0 R >>\nstream\nxyz\nendstream".to_string()),
++        (5, format!("<< /Type /ObjStm /N 1 /First 4 /Length {} >>\nstream\n{objstm}\nendstream", objstm.len())),
++    ] {
++        offsets.push((number, pdf.len()));
++        pdf.extend_from_slice(format!("{number} 0 obj\n{body}\nendobj\n").as_bytes());
++    }
++    let startxref = pdf.len();
++    // no xref entry for object 4, which only exists inside the object stream
++    pdf.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
++    for (number, offset) in &offsets {
++        if *number == 5 {
++            pdf.extend_from_slice(b"5 1\n");
++        }
++        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
++    }
++    pdf.extend_from_slice(format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{startxref}\n%%EOF\n").as_bytes());
++
++    let doc = Document::load_mem(&pdf).unwrap();
++    assert_eq!(doc.get_object((4, 0)).and_then(|o| o.as_i64()).ok(), length.parse().ok());
++    let stream = doc.get_object((3, 0)).and_then(|o| o.as_stream()).unwrap();
++    assert!(stream.content.is_empty());
++}

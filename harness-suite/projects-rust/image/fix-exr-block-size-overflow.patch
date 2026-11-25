@@ -1,0 +1,80 @@
+Subject: [PATCH] exr: check the uncompressed block byte size for overflow
+
+decompress_image_section_from_le computes the expected byte size of a block as
+`width * height * bytes_per_pixel`. On 32-bit targets this wraps for large
+blocks (for example a 536870913x4 tile), and the decompressors then size their
+buffers from the wrapped value but iterate over the real block dimensions:
+B44 indexes out of bounds (b44/mod.rs:269, :461), DWA slices past its output
+(channel_layout.rs:209), and the pixel readers fail later. With enough channels
+the product also overflows on 64-bit targets. Compute it checked, and reject
+sizes above isize::MAX, which no allocation could hold.
+
+diff --git a/src/compression/mod.rs b/src/compression/mod.rs
+index 9d9abe8..737c775 100644
+--- a/src/compression/mod.rs
++++ b/src/compression/mod.rs
+@@ -289,7 +289,16 @@ impl Compression {
+             assert!(self.supports_deep_data());
+         }
+ 
+-        let expected_byte_size = pixel_section.size.area() * header.channels.bytes_per_pixel; // FIXME this needs to account for subsampling anywhere
++        // FIXME this needs to account for subsampling anywhere
++        // Checked: on 32-bit targets `area * bytes_per_pixel` of a large block wraps
++        // around, and the decompressors then index far outside their buffers.
++        let expected_byte_size = pixel_section
++            .size
++            .width()
++            .checked_mul(pixel_section.size.height())
++            .and_then(|area| area.checked_mul(header.channels.bytes_per_pixel))
++            .filter(|&size| size <= isize::MAX as usize)
++            .ok_or_else(|| Error::invalid("block byte size too large"))?;
+ 
+         // note: always true where self == Uncompressed
+         if compressed_le.len() == expected_byte_size {
+@@ -856,4 +865,46 @@ mod test {
+ 
+         assert_eq!(current_endian, current_endian_decoded, "endianness conversion failed");
+     }
++
++    #[test]
++    fn decompress_rejects_overflowing_block_byte_size() {
++        use crate::{
++            math::{RoundingMode, Vec2},
++            meta::{
++                attribute::{LevelMode, LineOrder, TileDescription},
++                header::Header,
++                BlockDescription,
++            },
++        };
++
++        // the largest tile that the header validation accepts,
++        // with enough channels that `area * bytes_per_pixel` exceeds even 64 bits
++        let size = (i32::MAX / 2 - 1) as usize;
++        let channels = (0..32)
++            .map(|index| ChannelDescription::named(format!("C{index}").as_str(), SampleType::F32))
++            .collect();
++
++        let tiles = TileDescription {
++            tile_size: Vec2(size, size),
++            level_mode: LevelMode::Singular,
++            rounding_mode: RoundingMode::Down,
++        };
++
++        let header = Header::new("overflow".into(), Vec2(size, size), channels).with_encoding(
++            Compression::B44,
++            BlockDescription::Tiles(tiles),
++            LineOrder::Increasing,
++        );
++
++        for compression in [Compression::B44, Compression::PIZ, Compression::ZIP1] {
++            let result = compression.decompress_image_section_from_le(
++                &header,
++                vec![0; 64],
++                IntegerBounds::from_dimensions(Vec2(size, size)),
++                false,
++            );
++
++            assert!(result.is_err(), "{:?} accepted an overflowing block size", compression);
++        }
++    }
+ }

@@ -1,3 +1,20 @@
+Subject: [PATCH] tiff: return errors instead of asserting on chunk sizes
+
+Image::expand_chunk asserted that the output buffer holds the chunk
+(`TODO: Should these return errors instead?`). The assertion fires for a
+tiled TIFF with PlanarConfiguration=2 whose plane grid has edge tiles:
+get_padding() takes the global chunk index, so the edge tiles of planes after
+the first get the full tile height. image's TIFF decoder calls
+read_image_to_buffer, which decodes all planes, so a 24x24 RGB8 file with
+16x16 separate-plane tiles panics there. Turn the assertions into errors, with
+checked arithmetic for the required size, and reject rows larger than the
+intermediate buffer limit. The test added here fails without the fix.
+
+Upstream: still present at image-rs/image-tiff HEAD (3302936). The tiling
+bug is image-rs/image-tiff#403 (open); its fix PR #412 was closed unmerged.
+
+diff --git a/src/decoder/image.rs b/src/decoder/image.rs
+index 5330328..0abf088 100644
 --- a/src/decoder/image.rs
 +++ b/src/decoder/image.rs
 @@ -911,12 +911,41 @@ impl Image {
@@ -45,3 +62,74 @@
  
          let is_all_bits = samples == data_samples;
          let is_output_chunk_rows = layout.row_stride == chunk_row_bytes;
+diff --git a/src/decoder/mod.rs b/src/decoder/mod.rs
+index 12009f3..23643bf 100644
+--- a/src/decoder/mod.rs
++++ b/src/decoder/mod.rs
+@@ -1970,4 +1970,66 @@ mod tests {
+             assert_eq!(&by_bytes[..3], &[8, 8, 8]);
+         }
+     }
++
++    /// 24x24 RGB8, 16x16 tiles, PlanarConfiguration=2, uncompressed. The edge tiles of
++    /// planes after the first are given their full tile height (image-rs/image-tiff#403),
++    /// which no longer fits the output buffer.
++    fn tiled_planar_tiff() -> Vec<u8> {
++        const W: u32 = 24;
++        const T: u32 = 16;
++        const TILES: u32 = 2 * 2 * 3;
++        let entries: u32 = 11;
++        let bps_off = 8 + 2 + entries * 12 + 4;
++        let offsets_off = bps_off + 6;
++        let counts_off = offsets_off + 4 * TILES;
++        let data_off = counts_off + 4 * TILES;
++
++        let mut out = b"II*\0".to_vec();
++        out.extend_from_slice(&8u32.to_le_bytes());
++        out.extend_from_slice(&(entries as u16).to_le_bytes());
++        let short = |out: &mut Vec<u8>, tag: u16, value: u16| {
++            out.extend_from_slice(&tag.to_le_bytes());
++            out.extend_from_slice(&3u16.to_le_bytes());
++            out.extend_from_slice(&1u32.to_le_bytes());
++            out.extend_from_slice(&value.to_le_bytes());
++            out.extend_from_slice(&[0, 0]);
++        };
++        let long = |out: &mut Vec<u8>, tag: u16, typ: u16, count: u32, offset: u32| {
++            out.extend_from_slice(&tag.to_le_bytes());
++            out.extend_from_slice(&typ.to_le_bytes());
++            out.extend_from_slice(&count.to_le_bytes());
++            out.extend_from_slice(&offset.to_le_bytes());
++        };
++        short(&mut out, 256, W as u16); // ImageWidth
++        short(&mut out, 257, W as u16); // ImageLength
++        long(&mut out, 258, 3, 3, bps_off); // BitsPerSample
++        short(&mut out, 259, 1); // Compression: none
++        short(&mut out, 262, 2); // Photometric: RGB
++        short(&mut out, 277, 3); // SamplesPerPixel
++        short(&mut out, 284, 2); // PlanarConfiguration: separate
++        short(&mut out, 322, T as u16); // TileWidth
++        short(&mut out, 323, T as u16); // TileLength
++        long(&mut out, 324, 4, TILES, offsets_off); // TileOffsets
++        long(&mut out, 325, 4, TILES, counts_off); // TileByteCounts
++        out.extend_from_slice(&0u32.to_le_bytes());
++        for _ in 0..3 {
++            out.extend_from_slice(&8u16.to_le_bytes());
++        }
++        for i in 0..TILES {
++            out.extend_from_slice(&(data_off + i * T * T).to_le_bytes());
++        }
++        for _ in 0..TILES {
++            out.extend_from_slice(&(T * T).to_le_bytes());
++        }
++        out.resize((data_off + TILES * T * T) as usize, 0x55);
++        out
++    }
++
++    #[test]
++    fn tiled_planar_edge_tile_does_not_panic() {
++        let mut decoder = Decoder::new(std::io::Cursor::new(tiled_planar_tiff())).unwrap();
++        let mut buffer = super::DecodingResult::U8(vec![]);
++        // Must return (all planes or an error) instead of panicking in expand_chunk.
++        let _ = decoder.read_image_to_buffer(&mut buffer);
++    }
+ }

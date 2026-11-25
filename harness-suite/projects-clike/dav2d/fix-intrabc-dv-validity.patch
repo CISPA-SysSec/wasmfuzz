@@ -1,0 +1,198 @@
+Reject intrabc dvs that start outside the tile or overlap the unreconstructed area.
+
+The dv clipping in recon_b() is disabled (#if 0), so any decoded dv was used. A dv whose
+source block overlaps the current block (e.g. a 16x8 block with dv (-15, 0) px) made the
+bilinear copy memcpy() between overlapping rows (ASan memcpy-param-overlap in put_c,
+mc_tmpl.c:56), and dvs into the not yet reconstructed area read uninitialized pixels. Add
+the necessary conditions of AVM's av2_is_dv_valid(): the source must start inside the tile,
+and it must not reach into the bottom-right quadrant from the block's top-left corner (local
+and global intrabc ranges both exclude it, interpolation borders included). AVM fails the
+frame with "Invalid intrabc dv"; return an error. Adds tests/test_intrabc_dv_validity.c.
+Not fixed upstream as of 74bfb0ac.
+
+Upstream: open MR videolan/dav2d!1017 (by rbultje, 2026-11-06; still open 2026-11-24) re-enables an intrabc dv validity check modelled on AVM's av2_dv_is_valid(); it is still marked TODO for CTC testing. Drop this patch once !1017 lands.
+
+diff --git a/src/decode.c b/src/decode.c
+index 86238056..5c6703f8 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -1107,6 +1107,22 @@ static int recon_b(Dav2dTaskContext *const t, DB_ONLY(const int depth)
+         b->mv[0].x = (src_left - t->bx * 4) * 8;
+         b->mv[0].y = (src_top  - t->by * 4) * 8;
+ #endif
++        // AVM av2_is_dv_valid() / av2_is_dv_in_local_range(): the source block
++        // must start inside the current tile and must not reach into the
++        // bottom-right quadrant from the current block's top-left corner (the
++        // not yet reconstructed area, which includes the block itself); the
++        // reference decoder errors out with "Invalid intrabc dv" otherwise
++        {
++            const int r_border = !!(b->mv[0].x & 7) /* IBC_RIGHT_INTERP_BORDER */;
++            const int b_border = !!(b->mv[0].y & 7) /* IBC_BOTTOM_INTERP_BORDER */;
++            if (t->by * 4 * 8 + b->mv[0].y < ts->tiling.row_start * 4 * 8 ||
++                t->bx * 4 * 8 + b->mv[0].x < ts->tiling.col_start * 4 * 8 ||
++                ((b->mv[0].x >> 3) + bw4 * 4 + r_border > 0 &&
++                 (b->mv[0].y >> 3) + bh4 * 4 + b_border > 0))
++            {
++                return -1;
++            }
++        }
+ 
+         DEBUG_BLOCK_printf("%*sfinal 2dmv: y=%d,x=%d\n",
+                            depth, "", b->mv[0].y, b->mv[0].x);
+diff --git a/tests/meson.build b/tests/meson.build
+index f6359fe7..c0fb562e 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -135,6 +135,16 @@ foreach header : dav2d_api_headers
+ endforeach
+ 
+ 
++test_intrabc_dv_validity = executable('test_intrabc_dv_validity',
++    'test_intrabc_dv_validity.c',
++    include_directories: dav2d_inc_dirs,
++    link_with: libdav2d,
++    dependencies: [thread_dependency],
++    build_by_default: true,
++)
++test('test_intrabc_dv_validity', test_intrabc_dv_validity, suite: 'dav2d',
++     env: ['ASAN_OPTIONS=detect_leaks=0'])
++
+ # fuzzing binaries
+ subdir('libfuzzer')
+ 
+diff --git a/tests/test_intrabc_dv_validity.c b/tests/test_intrabc_dv_validity.c
+new file mode 100644
+index 00000000..91b3b2b1
+--- /dev/null
++++ b/tests/test_intrabc_dv_validity.c
+@@ -0,0 +1,130 @@
++/*
++ * Copyright © 2026, VideoLAN and dav2d authors
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice, this
++ *    list of conditions and the following disclaimer.
++ *
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ *    this list of conditions and the following disclaimer in the documentation
++ *    and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
++ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++
++#include <errno.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++
++#include <dav2d/dav2d.h>
++
++/*
++ * Intra frame with allow_intrabc: a 16x8 intrabc block at x=304 resolves to
++ * dv (-15, 0) px, so its source overlaps the block itself (not yet
++ * reconstructed). AVM rejects such dvs (av2_is_dv_valid(): 'Invalid intrabc
++ * dv'); dav2d's dv check was disabled, so the bilinear copy memcpy()ed
++ * between overlapping rows (ASan memcpy-param-overlap in put_c) and other
++ * such dvs read unreconstructed pixels.
++ */
++static const uint8_t k_input0[] = {
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x82, 0x0a,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x04, 0x88,
++    0x49, 0x15, 0x93, 0x80, 0x3c, 0x6f, 0xc8, 0x00, 0x0c, 0x3e, 0xd9, 0x03,
++    0xcd, 0x00, 0x5f, 0x19, 0x98, 0x00, 0x00, 0x2d, 0x0d, 0x00, 0x12, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x10,
++    0xe0, 0x00, 0x00, 0x1f, 0xff, 0x00, 0x00, 0x61, 0x00, 0x01, 0x61, 0x62,
++    0x80, 0x00, 0x00, 0x0c,
++};
++
++static unsigned r32le(const uint8_t *const p) {
++    return ((unsigned)p[3] << 24) | (p[2] << 16) | (p[1] << 8) | p[0];
++}
++
++/* Decode an IVF stream the way tests/libfuzzer/dav2d_fuzzer.c does. */
++static int decode_ivf(const uint8_t *const data, const size_t size) {
++    Dav2dSettings settings = { 0 };
++    Dav2dContext *ctx = NULL;
++    Dav2dPicture pic;
++    const uint8_t *ptr = data + 32;
++    int have_seq_hdr = 0, err;
++
++    dav2d_default_settings(&settings);
++    settings.max_frame_delay = settings.n_threads = 1;
++    settings.frame_size_limit = 4096 * 4096;
++    if (dav2d_open(&ctx, &settings) < 0)
++        return 1;
++
++    while (ptr <= data + size - 12) {
++        Dav2dData buf;
++        uint8_t *p;
++        const size_t frame_size = r32le(ptr);
++        ptr += 12;
++        if (frame_size > size || ptr > data + size - frame_size)
++            break;
++        if (!frame_size)
++            continue;
++        if (!have_seq_hdr) {
++            Dav2dSequenceHeader seq;
++            if (dav2d_parse_sequence_header(&seq, ptr, frame_size)) {
++                ptr += frame_size;
++                continue;
++            }
++            have_seq_hdr = 1;
++        }
++        if (!(p = dav2d_data_create(&buf, frame_size)))
++            break;
++        memcpy(p, ptr, frame_size);
++        ptr += frame_size;
++        do {
++            if ((err = dav2d_send_data(ctx, &buf)) < 0 && err != DAV2D_ERR(EAGAIN))
++                break;
++            for (;;) {
++                memset(&pic, 0, sizeof(pic));
++                err = dav2d_get_picture(ctx, &pic);
++                if (err == 0)
++                    dav2d_picture_unref(&pic);
++                else if (err == DAV2D_ERR(EAGAIN))
++                    break;
++                else
++                    goto next_frame;
++            }
++        } while (buf.sz > 0);
++    next_frame:
++        if (buf.sz > 0)
++            dav2d_data_unref(&buf);
++    }
++    dav2d_send_data(ctx, NULL);
++    for (int n = 0; n < 64; n++) {
++        memset(&pic, 0, sizeof(pic));
++        if ((err = dav2d_get_picture(ctx, &pic)) == 0)
++            dav2d_picture_unref(&pic);
++        else if (err == DAV2D_EOF)
++            break;
++    }
++    dav2d_close(&ctx);
++    return 0;
++}
++
++int main(void) {
++    /* Reaching the end without a crash is success; decode errors are OK. */
++    if (decode_ivf(k_input0, sizeof(k_input0))) return 1;
++    return 0;
++}

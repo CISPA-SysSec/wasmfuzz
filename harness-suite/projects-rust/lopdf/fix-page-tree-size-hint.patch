@@ -1,8 +1,19 @@
+Subject: [PATCH] cap the page tree iterator's size hint at the object count
+
+PageTreeIter::size_hint() adds up the /Count of the pending /Pages kids, and
+get_pages() collects through a Vec (BTreeMap::from_iter) that preallocates
+from it. A /Pages kid with /Count 1000000000000 after a first page makes that
+a 16 TB allocation (ASan: allocation-size-too-big; out of memory on wasm), so
+cap the hint at the number of objects, which also bounds the iteration. The
+test added here fails without the fix.
+
+Upstream: none found.
+
 diff --git a/src/document.rs b/src/document.rs
-index f25e59a..55b679a 100644
+index 48bb168..ff3ec02 100644
 --- a/src/document.rs
 +++ b/src/document.rs
-@@ -880,6 +880,10 @@ fn size_hint(&self) -> (usize, Option<usize>) {
+@@ -1125,6 +1125,10 @@ fn size_hint(&self) -> (usize, Option<usize>) {
              })
              .sum();
  
@@ -13,3 +24,46 @@ index f25e59a..55b679a 100644
          (nb_pages, Some(nb_pages))
      }
  }
+diff --git a/tests/page_tree_size_hint.rs b/tests/page_tree_size_hint.rs
+new file mode 100644
+index 0000000..bcde673
+--- /dev/null
++++ b/tests/page_tree_size_hint.rs
+@@ -0,0 +1,37 @@
++use lopdf::{Document, Object, dictionary};
++
++// The page iterator's size hint adds up the /Count of pending /Pages kids, and
++// get_pages() collects through a Vec that preallocates from it. A /Count far
++// beyond the number of objects in the file must not become a huge allocation.
++#[test]
++fn hostile_count_is_capped_in_size_hint() {
++    let mut doc = Document::with_version("1.5");
++    let root_id = doc.new_object_id();
++    let inner_id = doc.new_object_id();
++    let page1 = doc.add_object(dictionary! { "Type" => "Page", "Parent" => root_id });
++    let page2 = doc.add_object(dictionary! { "Type" => "Page", "Parent" => inner_id });
++    doc.objects.insert(
++        inner_id,
++        Object::Dictionary(dictionary! {
++            "Type" => "Pages",
++            "Kids" => vec![page2.into()],
++            "Count" => 1_000_000_000_000i64,
++        }),
++    );
++    doc.objects.insert(
++        root_id,
++        Object::Dictionary(dictionary! {
++            "Type" => "Pages",
++            "Kids" => vec![page1.into(), inner_id.into()],
++            "Count" => 2,
++        }),
++    );
++    let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => root_id });
++    doc.trailer.set("Root", catalog_id);
++
++    let mut pages = doc.page_iter();
++    assert_eq!(pages.next(), Some(page1));
++    assert!(pages.size_hint().0 <= doc.objects.len());
++
++    assert_eq!(doc.get_pages().into_values().collect::<Vec<_>>(), vec![page1, page2]);
++}

@@ -1,0 +1,98 @@
+Subject: [PATCH] parser: Grow input buffer before the content spec of an element decl
+
+The pull parser reads memory input in chunks. After a long element name in an
+<!ELEMENT> declaration followed by a single blank, SKIP_BLANKS_PE doesn't grow
+the buffer (xmlSkipBlankChars only grows after more than four blanks), so the
+"EMPTY" or "ANY" keyword can straddle the end of the buffered input and
+CMP5/NXT fail. The pull parser then reported "'EMPTY', 'ANY' or '(' expected"
+and XML_ERR_INT_SUBSET_NOT_FINISHED for a well-formed document that the push
+parser accepts. GROW before checking the content spec. Same class of bug as
+fix-parse-external-id-grow.patch (xmlParseExternalID); the other keyword
+checks after names in the DTD were tested with the same name lengths and
+are not affected.
+
+Found with the xml fuzzer ("pull/push parser error mismatch: 118 != 0").
+Regression test testElementDeclAtBufferEnd in testparser.c.
+
+Not fixed upstream as of 21c8223.
+Upstream: none found.
+---
+diff --git a/parser.c b/parser.c
+index 21af70b..c77f4e0 100644
+--- a/parser.c
++++ b/parser.c
+@@ -6705,6 +6705,11 @@ xmlParseElementDecl(xmlParserCtxt *ctxt) {
+ 	    xmlFatalErrMsg(ctxt, XML_ERR_SPACE_REQUIRED,
+ 			   "Space required after the element name\n");
+ 	}
++        /*
++         * The keyword can straddle the end of the buffered input, for
++         * example after a long name followed by a single blank.
++         */
++        GROW;
+ 	if (CMP5(CUR_PTR, 'E', 'M', 'P', 'T', 'Y')) {
+ 	    SKIP(5);
+ 	    /*
+diff --git a/testparser.c b/testparser.c
+index f69db49..9aefe63 100644
+--- a/testparser.c
++++ b/testparser.c
+@@ -619,6 +619,50 @@ testExternalIDAtBufferEnd(void) {
+     return err;
+ }
+ 
++static int
++testElementDeclAtBufferEnd(void) {
++    /*
++     * Memory input is read in chunks. Make the EMPTY/ANY keyword after
++     * a long element name straddle the end of the buffered input.
++     */
++    static const char *const tails[] = {
++        " EMPTY>]><d/>",
++        " ANY>]><d/>",
++    };
++    char buf[5000];
++    size_t i;
++    int nameLen;
++    int err = 0;
++
++    for (i = 0; i < sizeof(tails) / sizeof(tails[0]); i++) {
++        for (nameLen = 3900; nameLen < 4100; nameLen++) {
++            xmlParserCtxtPtr ctxt;
++            xmlDocPtr doc;
++            int len;
++
++            memcpy(buf, "<!DOCTYPE d [<!ELEMENT ", 23);
++            memset(buf + 23, 'e', nameLen);
++            len = 23 + nameLen;
++            len += snprintf(buf + len, sizeof(buf) - len, "%s", tails[i]);
++
++            ctxt = xmlNewParserCtxt();
++            doc = xmlCtxtReadMemory(ctxt, buf, len, NULL, NULL,
++                                    XML_PARSE_NOERROR);
++            if ((doc == NULL) || (ctxt->errNo != XML_ERR_OK)) {
++                fprintf(stderr, "testElementDeclAtBufferEnd failed with "
++                        "name length %d: %d\n", nameLen, ctxt->errNo);
++                err = 1;
++            }
++            xmlFreeDoc(doc);
++            xmlFreeParserCtxt(ctxt);
++            if (err)
++                return err;
++        }
++    }
++
++    return err;
++}
++
+ static int
+ testSaveNullEncDoc(const char *xml, const char *expect) {
+     xmlDocPtr doc;
+@@ -1992,6 +2036,7 @@ main(void) {
+     err |= testParseInNodeContextEntityParent();
+     err |= testNoBlanks();
+     err |= testExternalIDAtBufferEnd();
++    err |= testElementDeclAtBufferEnd();
+     err |= testSaveNullEnc();
+     err |= testDocDumpFormatMemoryEnc();
+ #endif

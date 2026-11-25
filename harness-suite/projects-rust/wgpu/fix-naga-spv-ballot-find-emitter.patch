@@ -1,0 +1,94 @@
+naga: spv-in: finish the emitter after the ballot-find argument lookup
+
+Found by the naga `spv_parser` fuzz target: `called Option::unwrap() on a
+None value` at `proc/emitter.rs:24` (`Emitter::finish`).
+
+The OpGroupNonUniformBallotFindLSB/MSB arm in `next_block` finished the
+block's emitter before it looked up the argument. When the argument was
+defined in another `Body` (here: in a loop header, used in the loop's merge
+block), `get_expr_handle` spills it through a local and calls
+`emitter.finish` itself, on the emitter that was no longer running. The
+arm now looks up the argument first and finishes the emitter afterwards,
+like the other subgroup arms do since gfx-rs/wgpu#9957.
+
+Regression test in `naga/src/front/spv/mod.rs` (a valid module: the ballot
+argument comes from the loop header; it now parses and validates).
+
+Not fixed upstream as of 38bb981 (the arm came with gfx-rs/wgpu#9966).
+Upstream: none found; gfx-rs/wgpu#8389 / #9957 fixed the same pattern in
+the subgroup reduce/scan/ballot arms.
+
+diff --git a/naga/src/front/spv/mod.rs b/naga/src/front/spv/mod.rs
+index b4ddd30..9a4b16a 100644
+--- a/naga/src/front/spv/mod.rs
++++ b/naga/src/front/spv/mod.rs
+@@ -3369,4 +3369,48 @@ mod test {
+             "expected operand-count error, got {result:?}"
+         );
+     }
++
++    #[test]
++    fn ballot_find_lsb_argument_from_loop_header() {
++        // The argument is defined in the loop header and used in the merge
++        // block, i.e. in a different `Body`, so `get_expr_handle` spills it
++        // through a local. That used to finish an emitter that had already
++        // been finished (`Option::unwrap()` on `None` in `Emitter::finish`).
++        let words = vec![
++            0x0723_0203, 0x0001_0300, 0, 16, 0, // header, SPIR-V 1.3, bound 16
++            0x0002_0011, 1, // OpCapability Shader
++            0x0002_0011, 64, // OpCapability GroupNonUniformBallot
++            0x0003_000e, 0, 1, // OpMemoryModel Logical GLSL450
++            0x0002_0013, 1, // %1 = OpTypeVoid
++            0x0003_0021, 2, 1, // %2 = OpTypeFunction %1
++            0x0004_0015, 3, 32, 0, // %3 = OpTypeInt 32 0
++            0x0004_0017, 4, 3, 4, // %4 = OpTypeVector %3 4
++            0x0004_002b, 3, 5, 0, // %5 = OpConstant %3 0
++            0x0004_002b, 3, 6, 3, // %6 = OpConstant %3 3 (Subgroup)
++            0x0002_0014, 7, // %7 = OpTypeBool
++            0x0003_0029, 7, 8, // %8 = OpConstantTrue %7
++            0x0005_0036, 1, 9, 0, 2, // %9 = OpFunction %1 None %2
++            0x0002_00f8, 10, // %10 = OpLabel
++            0x0002_00f9, 11, // OpBranch %11
++            0x0002_00f8, 11, // %11 = OpLabel (loop header)
++            0x0007_0050, 4, 12, 5, 5, 5, 5, // %12 = OpCompositeConstruct %4 %5 %5 %5 %5
++            0x0004_00f6, 13, 14, 0, // OpLoopMerge %13 %14 None
++            0x0002_00f9, 14, // OpBranch %14
++            0x0002_00f8, 14, // %14 = OpLabel (continue target)
++            0x0004_00fa, 8, 13, 11, // OpBranchConditional %8 %13 %11
++            0x0002_00f8, 13, // %13 = OpLabel (merge block)
++            0x0005_0157, 3, 15, 6, 12, // %15 = OpGroupNonUniformBallotFindLSB %3 %6 %12
++            0x0001_00fd, // OpReturn
++            0x0001_0038, // OpFunctionEnd
++        ];
++        let module = super::Frontend::new(words.into_iter(), &Default::default())
++            .parse()
++            .unwrap();
++        crate::valid::Validator::new(
++            crate::valid::ValidationFlags::all(),
++            crate::valid::Capabilities::all(),
++        )
++        .validate(&module)
++        .unwrap();
++    }
+ }
+diff --git a/naga/src/front/spv/next_block.rs b/naga/src/front/spv/next_block.rs
+index 7b71f02..7457ac4 100644
+--- a/naga/src/front/spv/next_block.rs
++++ b/naga/src/front/spv/next_block.rs
+@@ -2845,7 +2845,6 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                 }
+                 Op::GroupNonUniformBallotFindLSB | Op::GroupNonUniformBallotFindMSB => {
+                     inst.expect(5)?;
+-                    block.extend(emitter.finish(ctx.expressions));
+                     let result_type_id = self.next()?;
+                     let result_id = self.next()?;
+                     let exec_scope_id = self.next()?;
+@@ -2854,6 +2853,8 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                     let argument_lookup = self.lookup_expression.lookup(argument_id)?;
+                     let argument_handle = get_expr_handle!(argument_id, argument_lookup);
+ 
++                    block.extend(emitter.finish(ctx.expressions));
++
+                     let exec_scope_const = self.lookup_constant.lookup(exec_scope_id)?;
+                     let _exec_scope = resolve_constant(ctx.gctx(), &exec_scope_const.inner)
+                         .filter(|exec_scope| *exec_scope == spirv::Scope::Subgroup as u32)

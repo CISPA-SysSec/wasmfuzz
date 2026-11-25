@@ -1,3 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/trifectatechfoundation/libbzip2-rs "$PROJECT/repo" 10281317b8c406fec10d9deccc6af100a31941a7
-# git -C "$PROJECT/repo" apply "$PROJECT/fuzz-handle-outbuff-full.patch"
+git clone-rev.sh https://github.com/trifectatechfoundation/libbzip2-rs "$PROJECT/repo" 9551dd3e672aca5f8c148b0be5fbdd6603b19d87

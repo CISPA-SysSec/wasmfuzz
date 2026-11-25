@@ -1,0 +1,209 @@
+diff --git a/src/type42/t42objs.c b/src/type42/t42objs.c
+index a01c3129d..f2a9dd286 100644
+--- a/src/type42/t42objs.c
++++ b/src/type42/t42objs.c
+@@ -660,6 +660,9 @@
+ 
+     FT_TRACE1(( "T42_GlyphSlot_Load: glyph index %u\n", glyph_index ));
+ 
++    if ( glyph_index >= (FT_UInt)t42face->root.num_glyphs )
++      return FT_THROW( Invalid_Argument );
++
+     /* map T42 glyph index to embedded TTF's glyph index */
+     glyph_index = (FT_UInt)ft_strtol(
+                     (const char *)t42face->type1.charstrings[glyph_index],
+diff --git a/tests/meson.build b/tests/meson.build
+index c6ea91f0c..c72f02243 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -99,4 +99,14 @@ if harfbuzz_opt == 'YES' or harfbuzz_opt == 'dynamic'
+   )
+ endif
+ 
++test_t42_glyph_index = executable('t42-glyph-index',
++  files([ 't42-glyph-index/main.c' ]),
++  dependencies: freetype_dep,
++)
++
++test('t42-glyph-index',
++  test_t42_glyph_index,
++  env: test_env,
++  suite: 'regression')
++
+ # EOF
+diff --git a/tests/t42-glyph-index/main.c b/tests/t42-glyph-index/main.c
+new file mode 100644
+index 000000000..d096eef44
+--- /dev/null
++++ b/tests/t42-glyph-index/main.c
+@@ -0,0 +1,170 @@
++/*
++ * Load glyph indices past the end of a Type 42 font's `CharStrings`
++ * dictionary.  `T42_GlyphSlot_Load` used to read the glyph's charstring
++ * entry without checking the index, so this read past the end of the
++ * `charstrings` array.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <freetype/freetype.h>
++#include <ft2build.h>
++
++
++static const char  t42_head[] =
++  "%!PS-TrueTypeFont-1.0\n"
++  "10 dict begin\n"
++  "/FontName /T42Test def\n"
++  "/FontType 42 def\n"
++  "/PaintType 0 def\n"
++  "/FontMatrix [1 0 0 1 0 0] def\n"
++  "/FontBBox [0 0 0 0] def\n"
++  "/Encoding StandardEncoding def\n"
++  "/CharStrings 1 dict dup begin\n"
++  "/.notdef 0 def\n"
++  "end readonly def\n"
++  "/sfnts [<";
++
++static const char  t42_tail[] =
++  ">] def\n"
++  "FontName currentdict end definefont pop\n";
++
++
++int
++main( void )
++{
++  FT_Library  library;
++  FT_Face     face = NULL;
++  FT_Error    error;
++
++  const char*  testdata_dir = getenv( "FREETYPE_TESTS_DATA_DIR" );
++  char         filepath[FILENAME_MAX];
++  FILE*        file;
++  long         ttf_size;
++  unsigned char*  ttf  = NULL;
++  char*           t42  = NULL;
++  size_t          t42_size;
++  char*           p;
++  long            i;
++  long            n, num_tables;
++  int             ret = 0;
++
++  const FT_UInt  bad_indices[] = { 1, 2, 1000 };
++
++
++  snprintf( filepath, sizeof ( filepath ), "%s/%s",
++            testdata_dir ? testdata_dir : "../tests/data",
++            "varc-static-gvar.ttf" );
++
++  file = fopen( filepath, "rb" );
++  if ( !file )
++  {
++    fprintf( stderr, "Could not open file: %s\n", filepath );
++    return 1;
++  }
++  fseek( file, 0, SEEK_END );
++  ttf_size = ftell( file );
++  fseek( file, 0, SEEK_SET );
++  ttf = malloc( (size_t)ttf_size );
++  if ( !ttf || fread( ttf, 1, (size_t)ttf_size, file ) != (size_t)ttf_size )
++  {
++    fprintf( stderr, "Could not read file: %s\n", filepath );
++    fclose( file );
++    return 1;
++  }
++  fclose( file );
++
++  if ( ttf_size < 12 )
++    return 1;
++  num_tables = ( ttf[4] << 8 ) | ttf[5];
++  if ( ttf_size < 12 + 16 * num_tables )
++    return 1;
++
++  /* wrap the TrueType font as the `sfnts' array of a Type 42 font, */
++  /* starting a new string at each table as the Type 42 spec asks   */
++  t42_size = strlen( t42_head ) + 2 * (size_t)ttf_size +
++             2 * (size_t)num_tables + strlen( t42_tail );
++  t42      = malloc( t42_size + 1 );
++  if ( !t42 )
++    return 1;
++
++  p = t42;
++  memcpy( p, t42_head, strlen( t42_head ) );
++  p += strlen( t42_head );
++  for ( i = 0; i < ttf_size; i++ )
++  {
++    for ( n = 0; n < num_tables; n++ )
++    {
++      const unsigned char*  rec = ttf + 12 + 16 * n + 8;
++
++
++      if ( i > 0                                    &&
++           i == ( ( (long)rec[0] << 24 ) | ( rec[1] << 16 ) |
++                  ( rec[2] << 8 ) | rec[3] ) )
++      {
++        *p++ = '>';
++        *p++ = '<';
++        break;
++      }
++    }
++
++    snprintf( p, 3, "%02X", ttf[i] );
++    p += 2;
++  }
++  memcpy( p, t42_tail, strlen( t42_tail ) + 1 );
++  t42_size = strlen( t42 );
++
++  FT_Init_FreeType( &library );
++
++  error = FT_New_Memory_Face( library, (const FT_Byte*)t42,
++                              (FT_Long)t42_size, 0, &face );
++  if ( error )
++  {
++    fprintf( stderr, "Could not open Type 42 font: error %d\n", error );
++    ret = 1;
++    goto Exit;
++  }
++
++  if ( face->num_glyphs != 1 )
++  {
++    fprintf( stderr, "Expected 1 glyph, got %ld\n", face->num_glyphs );
++    ret = 1;
++    goto Exit;
++  }
++
++  error = FT_Set_Pixel_Sizes( face, 0, 16 );
++  if ( error )
++  {
++    fprintf( stderr, "FT_Set_Pixel_Sizes failed: error %d\n", error );
++    ret = 1;
++    goto Exit;
++  }
++
++  error = FT_Load_Glyph( face, 0, FT_LOAD_DEFAULT );
++  if ( error )
++  {
++    fprintf( stderr, "Loading glyph 0 failed: error %d\n", error );
++    ret = 1;
++  }
++
++  for ( i = 0; i < (long)( sizeof ( bad_indices ) / sizeof ( *bad_indices ) ); i++ )
++  {
++    error = FT_Load_Glyph( face, bad_indices[i], FT_LOAD_DEFAULT );
++    if ( FT_ERROR_BASE( error ) != FT_Err_Invalid_Argument )
++    {
++      fprintf( stderr, "Loading glyph %u: expected Invalid_Argument, got %d\n",
++               bad_indices[i], error );
++      ret = 1;
++    }
++  }
++
++Exit:
++  FT_Done_FreeType( library );
++  free( t42 );
++  free( ttf );
++  return ret;
++}
++
++/* EOF */

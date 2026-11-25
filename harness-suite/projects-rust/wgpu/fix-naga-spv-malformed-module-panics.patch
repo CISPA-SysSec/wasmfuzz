@@ -1,0 +1,1572 @@
+naga: spv-in: return errors instead of panicking on malformed modules
+
+Found by the naga `spv_parser` fuzz target. Every site below panicked on a
+module that the fuzzer produced; the minimized inputs are in
+`naga/tests/naga/spirv_malformed.rs` (and as fuzz-target inputs in the
+suite's repro/ directory).
+
+- `get_expr_handle` returns a `Result`: spilling an expression whose result
+  type id is not a type indexed `lookup_type` and panicked.
+- `parse`: a call to an id that was never defined as a function unwrapped
+  `lookup_function`.
+- unary/binary/comparison ops, `OpSMod`, `OpBitField{Insert,SExtract,UExtract}`
+  on non-numeric operand types unwrapped `scalar_kind()`; switch selectors of
+  non-integer type hit `unimplemented!`; all return the new
+  `Error::InvalidOperandType`.
+- `OpCompositeConstruct` with no constituents indexed `components[0]`.
+- `OpCompositeInsert` with an index past the end of the composite.
+- `OpSwitch` on an undefined selector id; `OpGroupNonUniformQuadSwap` with a
+  direction other than 0..=2 (`unreachable!`).
+- `OpPhi`: undefined source ids, predecessor labels that are not blocks of
+  the function, and invalid types of spilled sources.
+- `OpBranchConditional` to a label that already has a body asserted (debug
+  builds only); now an `InvalidEdgeClassification` error.
+- image sampling/fetch/write with coordinates that are not a numeric scalar or
+  vector (`unreachable!`).
+- image fetch/write with integer coordinates on arrayed (or garbage-extended)
+  images expected an integer coordinate vector type that only exists if the
+  module happens to declare it; the type is now inserted. This also affects
+  valid modules.
+- comparison sampling from a binding array of sampled images: binding arrays
+  are tracked for comparison sampling but `patch_comparison_type` only
+  handled images and samplers (`unreachable!`). It now flips the element
+  type. This also affects valid modules.
+- `OpSampledImage` whose sampler is a global that is not tracked as a sampler
+  unwrapped `handle_sampling`.
+- atomics: `Access` on non-arrays, `AccessIndex` on non-structs/arrays or past
+  the last struct member, and atomics on a whole struct global
+  (`unreachable!` in `atomic_upgrade`) are errors now.
+- `process_entry_point`: culling unused built-ins of an output struct called
+  `UniqueArena::replace` with a type that already existed in the arena
+  (assertion); keep the original type in that case.
+---
+diff --git a/naga/src/front/atomic_upgrade.rs b/naga/src/front/atomic_upgrade.rs
+index 549fcf6..c99fce7 100644
+--- a/naga/src/front/atomic_upgrade.rs
++++ b/naga/src/front/atomic_upgrade.rs
+@@ -187,9 +187,11 @@ impl UpgradeState<'_> {
+             },
+             TypeInner::Struct { ref members, span } => {
+                 // If no field or subfield of this struct was ever accessed
+-                // atomically, no change is needed. We should never have arrived here.
++                // atomically, the atomic operation was applied to the struct
++                // itself (e.g. a pointer to a whole struct global), which is
++                // not something we can upgrade.
+                 let Some(fields) = upgrades.fields.get(&ty) else {
+-                    unreachable!("global or field incorrectly flagged as atomically accessed");
++                    return Err(Error::Unsupported);
+                 };
+ 
+                 let mut new_members = members.clone();
+diff --git a/naga/src/front/spv/error.rs b/naga/src/front/spv/error.rs
+index fdcb35e..48f8644 100644
+--- a/naga/src/front/spv/error.rs
++++ b/naga/src/front/spv/error.rs
+@@ -119,6 +119,8 @@ pub enum Error {
+     InvalidAsType(Handle<crate::Type>),
+     #[error("invalid vector type {0:?}")]
+     InvalidVectorType(Handle<crate::Type>),
++    #[error("invalid operand type {0:?}, expected a scalar or vector")]
++    InvalidOperandType(Handle<crate::Type>),
+     #[error("inconsistent comparison sampling {0:?}")]
+     InconsistentComparisonSampling(Handle<crate::GlobalVariable>),
+     #[error("wrong function result type %{0}")]
+diff --git a/naga/src/front/spv/function.rs b/naga/src/front/spv/function.rs
+index 1be53e0..1eb8942 100644
+--- a/naga/src/front/spv/function.rs
++++ b/naga/src/front/spv/function.rs
+@@ -211,8 +211,11 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+             // At the end of each of `phi`'s predecessor blocks, store the corresponding
+             // source value in the phi's local variable.
+             for &(source, predecessor) in phi.expressions.iter() {
+-                let source_lexp = &self.lookup_expression[&source];
+-                let predecessor_body_idx = block_ctx.body_for_label[&predecessor];
++                let source_lexp = self.lookup_expression.lookup(source)?;
++                let predecessor_body_idx = *block_ctx
++                    .body_for_label
++                    .get(&predecessor)
++                    .ok_or(Error::InvalidId(predecessor))?;
+                 // If the expression is a global/argument it will have a 0 block
+                 // id so we must use a default value instead of panicking
+                 let source_body_idx = block_ctx
+@@ -241,7 +244,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                     // In the block that defines `source`, spill it to a fresh local
+                     // variable, to ensure we can still use it at the end of the
+                     // predecessor.
+-                    let ty = self.lookup_type[&source_lexp.type_id].handle;
++                    let ty = self.lookup_type.lookup(source_lexp.type_id)?.handle;
+                     let local = block_ctx.local_arena.append(
+                         crate::LocalVariable {
+                             name: None,
+@@ -266,7 +269,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                     block_ctx
+                         .blocks
+                         .get_mut(&predecessor)
+-                        .unwrap()
++                        .ok_or(Error::InvalidId(predecessor))?
+                         .push(crate::Statement::Emit(range), crate::Span::default());
+ 
+                     // At the end of the block that defines it, spill the source
+@@ -274,7 +277,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                     block_ctx
+                         .blocks
+                         .get_mut(&source_lexp.block_id)
+-                        .unwrap()
++                        .ok_or(Error::InvalidId(source))?
+                         .push(
+                             crate::Statement::Store {
+                                 pointer,
+@@ -288,13 +291,17 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+ 
+                 // At the end of the phi predecessor block, store the source
+                 // value in the phi's value.
+-                block_ctx.blocks.get_mut(&predecessor).unwrap().push(
+-                    crate::Statement::Store {
+-                        pointer: phi_pointer,
+-                        value,
+-                    },
+-                    crate::Span::default(),
+-                )
++                block_ctx
++                    .blocks
++                    .get_mut(&predecessor)
++                    .ok_or(Error::InvalidId(predecessor))?
++                    .push(
++                        crate::Statement::Store {
++                            pointer: phi_pointer,
++                            value,
++                        },
++                        crate::Span::default(),
++                    )
+             }
+         }
+ 
+@@ -431,16 +438,20 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                             }
+                         }
+                         if let Some(new_members) = new_members {
+-                            module.types.replace(
+-                                result.ty,
+-                                crate::Type {
+-                                    name: ty.name.clone(),
+-                                    inner: crate::TypeInner::Struct {
+-                                        members: new_members,
+-                                        span,
+-                                    },
++                            let new_ty = crate::Type {
++                                name: ty.name.clone(),
++                                inner: crate::TypeInner::Struct {
++                                    members: new_members,
++                                    span,
+                                 },
+-                            );
++                            };
++                            // `UniqueArena::replace` requires the new type to
++                            // be absent from the arena. If an identical struct
++                            // without these built-ins already exists, keep the
++                            // original type instead of panicking.
++                            if module.types.get(&new_ty).is_none() {
++                                module.types.replace(result.ty, new_ty);
++                            }
+                         }
+                     }
+                 }
+diff --git a/naga/src/front/spv/image.rs b/naga/src/front/spv/image.rs
+index 13c1254..b296f3d 100644
+--- a/naga/src/front/spv/image.rs
++++ b/naga/src/front/spv/image.rs
+@@ -69,28 +69,37 @@ fn extract_image_coordinates(
+     base: Handle<crate::Expression>,
+     coordinate_ty: Handle<crate::Type>,
+     ctx: &mut super::BlockContext,
+-) -> (Handle<crate::Expression>, Option<Handle<crate::Expression>>) {
++) -> Result<(Handle<crate::Expression>, Option<Handle<crate::Expression>>), Error> {
+     let (given_size, kind) = match ctx.module.types[coordinate_ty].inner {
+         crate::TypeInner::Scalar(Scalar { kind, .. }) => (None, kind),
+         crate::TypeInner::Vector {
+             size,
+             scalar: Scalar { kind, .. },
+         } => (Some(size), kind),
+-        ref other => unreachable!("Unexpected texture coordinate {:?}", other),
++        _ => return Err(Error::InvalidOperandType(coordinate_ty)),
+     };
++    if !matches!(
++        kind,
++        crate::ScalarKind::Float | crate::ScalarKind::Sint | crate::ScalarKind::Uint
++    ) {
++        return Err(Error::InvalidOperandType(coordinate_ty));
++    }
+ 
+     let required_size = image_dim.required_coordinate_size();
++    // `parse_type_image` only sets up the float coordinate type; integer
++    // coordinates (image fetches and writes) may need a vector type that the
++    // module never declared.
+     let required_ty = required_size.map(|size| {
+-        ctx.module
+-            .types
+-            .get(&crate::Type {
++        ctx.module.types.insert(
++            crate::Type {
+                 name: None,
+                 inner: crate::TypeInner::Vector {
+                     size,
+                     scalar: Scalar { kind, width: 4 },
+                 },
+-            })
+-            .expect("Required coordinate type should have been set up by `parse_type_image`!")
++            },
++            crate::Span::default(),
++        )
+     });
+     let extra_expr = crate::Expression::AccessIndex {
+         base,
+@@ -99,7 +108,7 @@ fn extract_image_coordinates(
+ 
+     let base_span = ctx.expressions.get_span(base);
+ 
+-    match extra_coordinate {
++    Ok(match extra_coordinate {
+         ExtraCoordinate::ArrayLayer => {
+             let extracted = match required_size {
+                 None => ctx
+@@ -188,7 +197,7 @@ fn extract_image_coordinates(
+             };
+             (ctx.expressions.append(cut_expr, base_span), None)
+         }
+-    }
++    })
+ }
+ 
+ pub(super) fn patch_comparison_type(
+@@ -204,9 +213,25 @@ pub(super) fn patch_comparison_type(
+     }
+ 
+     log::debug!("Flipping comparison for {var:?}");
+-    let original_ty = &arena[var.ty];
+-    let original_ty_span = arena.get_span(var.ty);
+-    let ty_inner = match original_ty.inner {
++    match comparison_type(var.ty, arena) {
++        Some(ty) => {
++            var.ty = ty;
++            true
++        }
++        None => false,
++    }
++}
++
++/// Return the comparison counterpart of the image or sampler type `ty`.
++///
++/// Binding arrays of images or samplers are tracked for comparison sampling
++/// too (see `can_comparison_sample`), so they are flipped element-wise.
++fn comparison_type(
++    ty: Handle<crate::Type>,
++    arena: &mut UniqueArena<crate::Type>,
++) -> Option<Handle<crate::Type>> {
++    let original_ty_span = arena.get_span(ty);
++    let ty_inner = match arena[ty].inner {
+         crate::TypeInner::Image {
+             class: crate::ImageClass::Sampled { multi, .. },
+             dim,
+@@ -217,18 +242,24 @@ pub(super) fn patch_comparison_type(
+             arrayed,
+         },
+         crate::TypeInner::Sampler { .. } => crate::TypeInner::Sampler { comparison: true },
+-        ref other => unreachable!("Unexpected type for comparison mutation: {:?}", other),
++        crate::TypeInner::BindingArray { base, size } => crate::TypeInner::BindingArray {
++            base: comparison_type(base, arena)?,
++            size,
++        },
++        ref other => {
++            log::error!("Unexpected type for comparison mutation: {other:?}");
++            return None;
++        }
+     };
+ 
+-    let name = original_ty.name.clone();
+-    var.ty = arena.insert(
++    let name = arena[ty].name.clone();
++    Some(arena.insert(
+         crate::Type {
+             name,
+             inner: ty_inner,
+         },
+         original_ty_span,
+-    );
+-    true
++    ))
+ }
+ 
+ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+@@ -291,7 +322,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+ 
+         let coord_lexp = self.lookup_expression.lookup(coordinate_id)?;
+         let coord_handle =
+-            self.get_expr_handle(coordinate_id, coord_lexp, ctx, emitter, block, body_idx);
++            self.get_expr_handle(coordinate_id, coord_lexp, ctx, emitter, block, body_idx)?;
+         let coord_type_handle = self.lookup_type.lookup(coord_lexp.type_id)?.handle;
+         let (coordinate, array_index) = match ctx.module.types[image_ty].inner {
+             crate::TypeInner::Image {
+@@ -308,12 +339,12 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                 coord_handle,
+                 coord_type_handle,
+                 ctx,
+-            ),
++            )?,
+             _ => return Err(Error::InvalidImage(image_ty)),
+         };
+ 
+         let value_lexp = self.lookup_expression.lookup(value_id)?;
+-        let value = self.get_expr_handle(value_id, value_lexp, ctx, emitter, block, body_idx);
++        let value = self.get_expr_handle(value_id, value_lexp, ctx, emitter, block, body_idx)?;
+         let value_type = self.lookup_type.lookup(value_lexp.type_id)?.handle;
+ 
+         // In hlsl etc, the write value may not be the vector 4.
+@@ -393,7 +424,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                     let lod_expr = self.next()?;
+                     let lod_lexp = self.lookup_expression.lookup(lod_expr)?;
+                     let lod_handle =
+-                        self.get_expr_handle(lod_expr, lod_lexp, ctx, emitter, block, body_idx);
++                        self.get_expr_handle(lod_expr, lod_lexp, ctx, emitter, block, body_idx)?;
+                     level = Some(lod_handle);
+                     words_left -= 1;
+                 }
+@@ -421,7 +452,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+ 
+         let coord_lexp = self.lookup_expression.lookup(coordinate_id)?;
+         let coord_handle =
+-            self.get_expr_handle(coordinate_id, coord_lexp, ctx, emitter, block, body_idx);
++            self.get_expr_handle(coordinate_id, coord_lexp, ctx, emitter, block, body_idx)?;
+         let coord_type_handle = self.lookup_type.lookup(coord_lexp.type_id)?.handle;
+         let (coordinate, array_index, is_depth) = match ctx.module.types[image_ty].inner {
+             crate::TypeInner::Image {
+@@ -439,7 +470,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                     coord_handle,
+                     coord_type_handle,
+                     ctx,
+-                );
++                )?;
+                 (coord, array_index, class.is_depth())
+             }
+             _ => return Err(Error::InvalidImage(image_ty)),
+@@ -524,7 +555,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                     let bias_expr = self.next()?;
+                     let bias_lexp = self.lookup_expression.lookup(bias_expr)?;
+                     let bias_handle =
+-                        self.get_expr_handle(bias_expr, bias_lexp, ctx, emitter, block, body_idx);
++                        self.get_expr_handle(bias_expr, bias_lexp, ctx, emitter, block, body_idx)?;
+                     level = crate::SampleLevel::Bias(bias_handle);
+                     words_left -= 1;
+                 }
+@@ -532,7 +563,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                     let lod_expr = self.next()?;
+                     let lod_lexp = self.lookup_expression.lookup(lod_expr)?;
+                     let lod_handle =
+-                        self.get_expr_handle(lod_expr, lod_lexp, ctx, emitter, block, body_idx);
++                        self.get_expr_handle(lod_expr, lod_lexp, ctx, emitter, block, body_idx)?;
+ 
+                     let is_depth_image = {
+                         let image_lexp = self.lookup_sampled_image.lookup(sampled_image_id)?;
+@@ -574,7 +605,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                         emitter,
+                         block,
+                         body_idx,
+-                    );
++                    )?;
+                     let grad_y_expr = self.next()?;
+                     let grad_y_lexp = self.lookup_expression.lookup(grad_y_expr)?;
+                     let grad_y_handle = self.get_expr_handle(
+@@ -584,7 +615,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                         emitter,
+                         block,
+                         body_idx,
+-                    );
++                    )?;
+                     level = if options.compare {
+                         log::debug!(
+                             "Assuming gradients {grad_x_handle:?} and {grad_y_handle:?} are not greater than 1"
+@@ -608,7 +639,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                         emitter,
+                         block,
+                         body_idx,
+-                    );
++                    )?;
+                     offset = Some(offset_handle);
+                     words_left -= 1;
+                 }
+@@ -626,7 +657,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+         let si_lexp = self.lookup_sampled_image.lookup(sampled_image_id)?;
+         let coord_lexp = self.lookup_expression.lookup(coordinate_id)?;
+         let coord_handle =
+-            self.get_expr_handle(coordinate_id, coord_lexp, ctx, emitter, block, body_idx);
++            self.get_expr_handle(coordinate_id, coord_lexp, ctx, emitter, block, body_idx)?;
+         let coord_type_handle = self.lookup_type.lookup(coord_lexp.type_id)?.handle;
+ 
+         let gather = match (options.gather, component_id) {
+@@ -721,7 +752,9 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+ 
+         match ctx.expressions[si_lexp.sampler] {
+             crate::Expression::GlobalVariable(handle) => {
+-                *self.handle_sampling.get_mut(&handle).unwrap() |= sampling_bit;
++                if let Some(flags) = self.handle_sampling.get_mut(&handle) {
++                    *flags |= sampling_bit;
++                }
+             }
+ 
+             crate::Expression::FunctionArgument(i) => {
+@@ -730,7 +763,9 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+ 
+             crate::Expression::Access { base, .. } => match ctx.expressions[base] {
+                 crate::Expression::GlobalVariable(handle) => {
+-                    *self.handle_sampling.get_mut(&handle).unwrap() |= sampling_bit;
++                    if let Some(flags) = self.handle_sampling.get_mut(&handle) {
++                        *flags |= sampling_bit;
++                    }
+                 }
+ 
+                 ref other => return Err(Error::InvalidGlobalVar(other.clone())),
+@@ -758,13 +793,13 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+                         coord_handle,
+                         coord_type_handle,
+                         ctx,
+-                    ),
++                    )?,
+                     {
+                         match dref_id {
+                             Some(id) => {
+-                                let expr_lexp = self.lookup_expression.lookup(id)?;
+-                                let mut expr = self
+-                                    .get_expr_handle(id, expr_lexp, ctx, emitter, block, body_idx);
++                                let lexp = self.lookup_expression.lookup(id)?;
++                                let mut expr =
++                                    self.get_expr_handle(id, lexp, ctx, emitter, block, body_idx)?;
+ 
+                                 if options.project {
+                                     let required_size = dim.required_coordinate_size();
+@@ -843,7 +878,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
+         let level = if at_level {
+             let level_id = self.next()?;
+             let level_lexp = self.lookup_expression.lookup(level_id)?;
+-            Some(self.get_expr_handle(level_id, level_lexp, ctx, emitter, block, body_idx))
++            Some(self.get_expr_handle(level_id, level_lexp, ctx, emitter, block, body_idx)?)
+         } else {
+             None
+         };
+diff --git a/naga/src/front/spv/mod.rs b/naga/src/front/spv/mod.rs
+index 635bc7d..ad3114f 100644
+--- a/naga/src/front/spv/mod.rs
++++ b/naga/src/front/spv/mod.rs
+@@ -938,7 +938,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         emitter: &mut crate::proc::Emitter,
+         block: &mut crate::Block,
+         body_idx: BodyIndex,
+-    ) -> Handle<crate::Expression> {
++    ) -> Result<Handle<crate::Expression>, Error> {
+         // What `Body` was `id` defined in?
+         let expr_body_idx = ctx
+             .body_for_label
+@@ -953,11 +953,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         // will be a subscope of the body that was passed so we can still reuse
+         // the handle and not issue a load/store.
+         if is_parent(body_idx, expr_body_idx, ctx) {
+-            lookup.handle
++            Ok(lookup.handle)
+         } else {
+             // Add a temporary variable of the same type which will be used to
+             // store the original expression and used in the current block
+-            let ty = self.lookup_type[&lookup.type_id].handle;
++            let ty = self.lookup_type.lookup(lookup.type_id)?.handle;
+             let local = ctx.local_arena.append(
+                 crate::LocalVariable {
+                     name: None,
+@@ -990,7 +990,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                 expressions: vec![(id, lookup.block_id)],
+             });
+ 
+-            expr
++            Ok(expr)
+         }
+     }
+ 
+@@ -1009,7 +1009,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let p_id = self.next()?;
+ 
+         let p_lexp = self.lookup_expression.lookup(p_id)?;
+-        let handle = self.get_expr_handle(p_id, p_lexp, ctx, emitter, block, body_idx);
++        let handle = self.get_expr_handle(p_id, p_lexp, ctx, emitter, block, body_idx)?;
+ 
+         let expr = crate::Expression::Unary { op, expr: handle };
+         self.lookup_expression.insert(
+@@ -1039,9 +1039,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let p2_id = self.next()?;
+ 
+         let p1_lexp = self.lookup_expression.lookup(p1_id)?;
+-        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx);
++        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx)?;
+         let p2_lexp = self.lookup_expression.lookup(p2_id)?;
+-        let right = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx);
++        let right = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx)?;
+ 
+         let expr = crate::Expression::Binary { op, left, right };
+         self.lookup_expression.insert(
+@@ -1073,13 +1073,13 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let span = self.span_from_with_op(start);
+ 
+         let p1_lexp = self.lookup_expression.lookup(p1_id)?;
+-        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx);
++        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx)?;
+ 
+         let result_lookup_ty = self.lookup_type.lookup(result_type_id)?;
+         let target = ctx.module.types[result_lookup_ty.handle]
+             .inner
+             .scalar()
+-            .unwrap();
++            .ok_or(Error::InvalidOperandType(result_lookup_ty.handle))?;
+ 
+         let expr = crate::Expression::Unary {
+             op,
+@@ -1127,9 +1127,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let span = self.span_from_with_op(start);
+ 
+         let p1_lexp = self.lookup_expression.lookup(p1_id)?;
+-        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx);
++        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx)?;
+         let p2_lexp = self.lookup_expression.lookup(p2_id)?;
+-        let right = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx);
++        let right = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx)?;
+ 
+         let expected_type_id = match anchor {
+             SignAnchor::Result => result_type_id,
+@@ -1139,7 +1139,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let target = ctx.module.types[expected_lookup_ty.handle]
+             .inner
+             .scalar()
+-            .unwrap();
++            .ok_or(Error::InvalidOperandType(expected_lookup_ty.handle))?;
+ 
+         let expr = crate::Expression::Binary {
+             op,
+@@ -1195,19 +1195,19 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let span = self.span_from_with_op(start);
+ 
+         let p1_lexp = self.lookup_expression.lookup(p1_id)?;
+-        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx);
++        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx)?;
+         let p1_lookup_ty = self.lookup_type.lookup(p1_lexp.type_id)?;
+         let p1_scalar = ctx.module.types[p1_lookup_ty.handle]
+             .inner
+             .scalar()
+-            .unwrap();
++            .ok_or(Error::InvalidOperandType(p1_lookup_ty.handle))?;
+         let p2_lexp = self.lookup_expression.lookup(p2_id)?;
+-        let right = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx);
++        let right = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx)?;
+         let p2_lookup_ty = self.lookup_type.lookup(p2_lexp.type_id)?;
+         let p2_scalar = ctx.module.types[p2_lookup_ty.handle]
+             .inner
+             .scalar()
+-            .unwrap();
++            .ok_or(Error::InvalidOperandType(p2_lookup_ty.handle))?;
+ 
+         let expr = crate::Expression::Binary {
+             op,
+@@ -1261,15 +1261,15 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let span = self.span_from_with_op(start);
+ 
+         let p1_lexp = self.lookup_expression.lookup(p1_id)?;
+-        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx);
++        let left = self.get_expr_handle(p1_id, p1_lexp, ctx, emitter, block, body_idx)?;
+         let p2_lexp = self.lookup_expression.lookup(p2_id)?;
+-        let p2_handle = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx);
++        let p2_handle = self.get_expr_handle(p2_id, p2_lexp, ctx, emitter, block, body_idx)?;
+         // convert the shift to Uint
+         let p2_lookup_ty = self.lookup_type.lookup(p2_lexp.type_id)?;
+         let p2_scalar = ctx.module.types[p2_lookup_ty.handle]
+             .inner
+             .scalar()
+-            .unwrap();
++            .ok_or(Error::InvalidOperandType(p2_lookup_ty.handle))?;
+         let right = ctx.expressions.append(
+             crate::Expression::As {
+                 expr: p2_handle,
+@@ -1308,7 +1308,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let arg_id = self.next()?;
+ 
+         let arg_lexp = self.lookup_expression.lookup(arg_id)?;
+-        let arg_handle = self.get_expr_handle(arg_id, arg_lexp, ctx, emitter, block, body_idx);
++        let arg_handle = self.get_expr_handle(arg_id, arg_lexp, ctx, emitter, block, body_idx)?;
+ 
+         let expr = crate::Expression::Derivative {
+             axis,
+@@ -1379,6 +1379,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+             }
+             _ => return Err(Error::InvalidAccessType(root_type_id)),
+         };
++        if selection as usize >= count {
++            return Err(Error::InvalidAccessIndex(selection));
++        }
+ 
+         let mut components = Vec::with_capacity(count);
+         for index in 0..count as u32 {
+@@ -1436,7 +1439,8 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+         let p_lexp_ty_id;
+         {
+             let lexp = self.lookup_expression.lookup(pointer_id)?;
+-            p_lexp_handle = self.get_expr_handle(pointer_id, lexp, ctx, emitter, block, body_idx);
++            p_lexp_handle =
++                self.get_expr_handle(pointer_id, lexp, ctx, emitter, block, body_idx)?;
+             p_lexp_ty_id = lexp.type_id;
+         };
+ 
+@@ -1816,7 +1820,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                     // skip all the fake IDs registered for the entry points
+                     continue;
+                 }
+-                let lookup = self.lookup_function.get_mut(&fun_id).unwrap();
++                // A call to an id that was never defined as a function.
++                let lookup = self
++                    .lookup_function
++                    .get_mut(&fun_id)
++                    .ok_or(Error::InvalidId(fun_id))?;
+                 // take out the function from the old array
+                 let fun = mem::take(&mut functions[lookup.handle]);
+                 // add it to the newly formed arena, and adjust the lookup
+@@ -3186,8 +3194,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+             crate::Expression::Access { base, index } => {
+                 log::debug!("\t\t  access {handle:?} {index:?}");
+                 let ty = self.record_atomic_access(ctx, base)?;
++                // Atomic operations on Access expressions only work for arrays.
+                 let crate::TypeInner::Array { base, .. } = ctx.module.types[ty].inner else {
+-                    unreachable!("Atomic operations on Access expressions only work for arrays");
++                    return Err(Error::AtomicUpgradeError(
++                        crate::front::atomic_upgrade::Error::Unsupported,
++                    ));
+                 };
+                 Ok(base)
+             }
+@@ -3196,14 +3207,17 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                 let ty = self.record_atomic_access(ctx, base)?;
+                 match ctx.module.types[ty].inner {
+                     crate::TypeInner::Struct { ref members, .. } => {
+-                        let index = index as usize;
+-                        self.upgrade_atomics.insert_field(ty, index);
+-                        Ok(members[index].ty)
+-                    }
+-                    crate::TypeInner::Array { base, .. } => {
+-                        Ok(base)
++                        let member = members
++                            .get(index as usize)
++                            .ok_or(Error::InvalidAccessIndex(index))?;
++                        self.upgrade_atomics.insert_field(ty, index as usize);
++                        Ok(member.ty)
+                     }
+-                    _ => unreachable!("Atomic operations on AccessIndex expressions only work for structs and arrays"),
++                    crate::TypeInner::Array { base, .. } => Ok(base),
++                    // Atomic operations on AccessIndex expressions only work for structs and arrays.
++                    _ => Err(Error::AtomicUpgradeError(
++                        crate::front::atomic_upgrade::Error::Unsupported,
++                    )),
+                 }
+             }
+             crate::Expression::GlobalVariable(h) => {
+diff --git a/naga/src/front/spv/next_block.rs b/naga/src/front/spv/next_block.rs
+index eac508d..8cd1ba8 100644
+--- a/naga/src/front/spv/next_block.rs
++++ b/naga/src/front/spv/next_block.rs
+@@ -70,7 +70,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+ 
+         macro_rules! get_expr_handle {
+             ($id:expr, $lexp:expr) => {
+-                self.get_expr_handle($id, $lexp, ctx, &mut emitter, &mut block, body_idx)
++                self.get_expr_handle($id, $lexp, ctx, &mut emitter, &mut block, body_idx)?
+             };
+         }
+         macro_rules! parse_expr_op {
+@@ -709,14 +709,16 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                         components.push(handle);
+                     }
+                     let ty = self.lookup_type.lookup(result_type_id)?.handle;
+-                    let first = components[0];
+                     let expr = match ctx.module.types[ty].inner {
+                         // this is an optimization to detect the splat
+                         crate::TypeInner::Vector { size, .. }
+                             if components.len() == size as usize
+-                                && components[1..].iter().all(|&c| c == first) =>
++                                && components[1..].iter().all(|&c| c == components[0]) =>
+                         {
+-                            crate::Expression::Splat { size, value: first }
++                            crate::Expression::Splat {
++                                size,
++                                value: components[0],
++                            }
+                         }
+                         _ => crate::Expression::Compose { ty, components },
+                     };
+@@ -877,7 +879,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                         &mut emitter,
+                         &mut block,
+                         body_idx,
+-                    );
++                    )?;
+                     let p2_lexp = self.lookup_expression.lookup(p2_id)?;
+                     let right = self.get_expr_handle(
+                         p2_id,
+@@ -886,11 +888,13 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                         &mut emitter,
+                         &mut block,
+                         body_idx,
+-                    );
++                    )?;
+ 
+                     let result_ty = self.lookup_type.lookup(result_type_id)?;
+                     let inner = &ctx.module.types[result_ty.handle].inner;
+-                    let kind = inner.scalar_kind().unwrap();
++                    let kind = inner
++                        .scalar_kind()
++                        .ok_or(Error::InvalidOperandType(result_ty.handle))?;
+                     let size = inner.size(ctx.gctx()) as u8;
+ 
+                     let left_cast = ctx.expressions.append(
+@@ -984,7 +988,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                         &mut emitter,
+                         &mut block,
+                         body_idx,
+-                    );
++                    )?;
+                     let p2_lexp = self.lookup_expression.lookup(p2_id)?;
+                     let right = self.get_expr_handle(
+                         p2_id,
+@@ -993,7 +997,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                         &mut emitter,
+                         &mut block,
+                         body_idx,
+-                    );
++                    )?;
+ 
+                     let div = ctx.expressions.append(
+                         crate::Expression::Binary {
+@@ -1123,11 +1127,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                     let offset_kind = ctx.module.types[offset_lookup_ty.handle]
+                         .inner
+                         .scalar_kind()
+-                        .unwrap();
++                        .ok_or(Error::InvalidOperandType(offset_lookup_ty.handle))?;
+                     let count_kind = ctx.module.types[count_lookup_ty.handle]
+                         .inner
+                         .scalar_kind()
+-                        .unwrap();
++                        .ok_or(Error::InvalidOperandType(count_lookup_ty.handle))?;
+ 
+                     let offset_cast_handle = if offset_kind != crate::ScalarKind::Uint {
+                         ctx.expressions.append(
+@@ -1189,11 +1193,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                     let offset_kind = ctx.module.types[offset_lookup_ty.handle]
+                         .inner
+                         .scalar_kind()
+-                        .unwrap();
++                        .ok_or(Error::InvalidOperandType(offset_lookup_ty.handle))?;
+                     let count_kind = ctx.module.types[count_lookup_ty.handle]
+                         .inner
+                         .scalar_kind()
+-                        .unwrap();
++                        .ok_or(Error::InvalidOperandType(count_lookup_ty.handle))?;
+ 
+                     let offset_cast_handle = if offset_kind != crate::ScalarKind::Uint {
+                         ctx.expressions.append(
+@@ -2093,7 +2097,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                                 false => accept,
+                             },
+                         );
+-                        debug_assert!(prev.is_none());
++                        // Only merge and continue blocks can be reached from
++                        // more than one branch.
++                        if prev.is_some() {
++                            return Err(Error::InvalidEdgeClassification);
++                        }
+                     }
+ 
+                     if same_target {
+@@ -2110,7 +2118,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                         merger(&mut reject_block, &info)
+                     } else {
+                         let prev = ctx.body_for_label.insert(false_target.label_id, reject);
+-                        debug_assert!(prev.is_none());
++                        if prev.is_some() {
++                            return Err(Error::InvalidEdgeClassification);
++                        }
+                     }
+ 
+                     ctx.bodies.push(reject_block);
+@@ -2140,7 +2150,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                     ctx.bodies.push(Body::with_parent(body_idx));
+                     ctx.body_for_label.entry(default_id).or_insert(default);
+ 
+-                    let selector_lexp = &self.lookup_expression[&selector];
++                    let selector_lexp = self.lookup_expression.lookup(selector)?;
+                     let selector_lty = self.lookup_type.lookup(selector_lexp.type_id)?;
+                     let selector_handle = get_expr_handle!(selector, selector_lexp);
+                     let selector = match ctx.module.types[selector_lty.handle].inner {
+@@ -2161,7 +2171,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                             kind: crate::ScalarKind::Sint,
+                             width: _,
+                         }) => selector_handle,
+-                        ref other => unimplemented!("Unexpected selector {:?}", other),
++                        _ => return Err(Error::InvalidOperandType(selector_lty.handle)),
+                     };
+ 
+                     // Clear past switch cases to prevent them from entering this one
+@@ -2803,7 +2813,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+                         0 => crate::Direction::X,
+                         1 => crate::Direction::Y,
+                         2 => crate::Direction::Diagonal,
+-                        _ => unreachable!(),
++                        _ => return Err(Error::InvalidOperand),
+                     };
+ 
+                     let result_type = self.lookup_type.lookup(result_type_id)?;
+diff --git a/naga/tests/naga/main.rs b/naga/tests/naga/main.rs
+index 7253e3c..284b953 100644
+--- a/naga/tests/naga/main.rs
++++ b/naga/tests/naga/main.rs
+@@ -2,6 +2,7 @@ mod example_wgsl;
+ mod snapshots;
+ mod spirv_capabilities;
+ mod spirv_debug_info;
++mod spirv_malformed;
+ mod spirv_roundtrip;
+ mod validation;
+ mod wgsl_errors;
+diff --git a/naga/tests/naga/spirv_malformed.rs b/naga/tests/naga/spirv_malformed.rs
+new file mode 100644
+index 0000000..4378e1b
+--- /dev/null
++++ b/naga/tests/naga/spirv_malformed.rs
+@@ -0,0 +1,729 @@
++//! Malformed SPIR-V modules that used to panic the SPIR-V frontend.
++//!
++//! The modules were found by the `spv_parser` fuzz target and minimized. The
++//! frontend must reject (or, where the module is merely unusual, accept) them
++//! with a `Result` instead of panicking.
++
++use naga::front::spv;
++
++fn parse(words: &[u32]) -> Result<naga::Module, spv::Error> {
++    spv::Frontend::new(words.iter().cloned(), &spv::Options::default()).parse()
++}
++
++/// Each case is a minimized module; the comments name the instructions.
++/// Ids are left as the fuzzer produced them.
++#[rustfmt::skip]
++const MALFORMED: &[(&str, &[u32])] = &[
++    (
++        "function_call_to_undefined_function",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 3, 3, // OpTypeFunction
++            0x00020014, 3, // OpTypeBool
++            0x00050036, 3, 0, 0, 3, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00040039, 0, 0, 1, // OpFunctionCall
++            0x000100ff, // OpUnreachable
++            0x00010038, // OpFunctionEnd
++        ],
++    ),
++    (
++        "unary_op_on_struct",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001e, 1633771873, // OpTypeStruct
++            0x00030021, 1633771873, 1633771873, // OpTypeFunction
++            0x00050036, 1633771873, 0, 0, 1633771873, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030001, 1633771873, 0, // OpUndef
++            0x0004007f, 1633771873, 0, 0, // OpFNegate
++        ],
++    ),
++    (
++        "binary_op_on_sampler",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001a, 1633771873, // OpTypeSampler
++            0x00030021, 1633771873, 1633771873, // OpTypeFunction
++            0x00050036, 1633771873, 0, 0, 1633771873, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030001, 1633771873, 1633771873, // OpUndef
++            0x00050080, 1633771873, 0, 1633771873, 1633771873, // OpIAdd
++        ],
++    ),
++    (
++        "comparison_on_sampler",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001a, 202984079, // OpTypeSampler
++            0x00030021, 3942138607, 202984079, // OpTypeFunction
++            0x00050036, 202984079, 0, 0, 3942138607, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030001, 202984079, 3942138607, // OpUndef
++            0x000500ad, 0, 0, 3942138607, 0, // OpSGreaterThan
++        ],
++    ),
++    (
++        "comparison_with_pointer_operand",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 33, 2147483647, // OpTypeFunction
++            0x00040015, 65407, 0, 0, // OpTypeInt
++            0x00040020, 2147483647, 1, 65407, // OpTypePointer
++            0x0004003b, 2147483647, 2147483647, 0, // OpVariable
++            0x00040015, 33, 0, 0, // OpTypeInt
++            0x00050036, 2147483647, 0, 0, 33, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x000900e6, 33, 119734787, 2147483647, 0, 0, 0, 2147483647, 2147483647, // OpAtomicCompareExchange
++            0x000500b3, 0, 0, 119734787, 2147483647, // OpSLessThanEqual
++        ],
++    ),
++    (
++        "smod_on_sampler",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 65535, 4294967295, // OpTypeFunction
++            0x0002001a, 4294967295, // OpTypeSampler
++            0x00050036, 4294967295, 0, 0, 65535, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030001, 4294967295, 65535, // OpUndef
++            0x0005008b, 4294967295, 0, 65535, 65535, // OpSMod
++        ],
++    ),
++    (
++        "bitfield_insert_on_sampler",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 4, 4, // OpTypeFunction
++            0x0002001a, 4, // OpTypeSampler
++            0x00050036, 4, 0, 0, 4, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030001, 4, 4, // OpUndef
++            0x000700c9, 0, 0, 4, 4, 4, 4, // OpBitFieldInsert
++        ],
++    ),
++    (
++        "bitfield_insert_with_sampler_count",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00040015, 3, 32, 0, // OpTypeInt
++            0x0004002b, 3, 3, 0, // OpConstant
++            0x00020014, 0, // OpTypeBool
++            0x00030021, 0, 0, // OpTypeFunction
++            0x00030030, 0, 0, // OpSpecConstantTrue
++            0x0002001a, 0, // OpTypeSampler
++            0x00050036, 0, 0, 0, 0, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x000700c9, 0, 0, 0, 0, 3, 0, // OpBitFieldInsert
++        ],
++    ),
++    (
++        "bitfield_extract_on_sampler",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001a, 0, // OpTypeSampler
++            0x00030021, 11, 0, // OpTypeFunction
++            0x00050036, 0, 0, 0, 11, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030001, 0, 11, // OpUndef
++            0x000600cb, 0, 0, 11, 11, 11, // OpBitFieldUExtract
++        ],
++    ),
++    (
++        "bitfield_extract_with_non_scalar_count",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 1, 1, // OpTypeFunction
++            0x0002001a, 4294967295, // OpTypeSampler
++            0x00020014, 1, // OpTypeBool
++            0x00050036, 1, 0, 0, 1, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030001, 1, 1, // OpUndef
++            0x00040051, 4294967295, 32767, 1, // OpCompositeExtract
++            0x000600ca, 0, 0, 1, 1, 32767, // OpBitFieldSExtract
++        ],
++    ),
++    (
++        "composite_construct_without_components",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001e, 1633771873, // OpTypeStruct
++            0x00030021, 1633771873, 1633771873, // OpTypeFunction
++            0x00050036, 1633771873, 0, 0, 1633771873, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030050, 1633771873, 0, // OpCompositeConstruct
++        ],
++    ),
++    (
++        "switch_on_undefined_selector",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001a, 3759156736, // OpTypeSampler
++            0x00030021, 16779008, 3759156736, // OpTypeFunction
++            0x00050036, 3759156736, 0, 0, 16779008, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x616100fb, 0, 0, // OpSwitch
++        ],
++    ),
++    (
++        "switch_on_struct_selector",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001e, 2489396564, // OpTypeStruct
++            0x00030021, 2489396564, 2489396564, // OpTypeFunction
++            0x00050036, 2489396564, 0, 0, 2489396564, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00030001, 2489396564, 128, // OpUndef
++            0x616100fb, 128, 0, // OpSwitch
++        ],
++    ),
++    (
++        "quad_swap_with_invalid_direction",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 1, 4294967271, // OpTypeFunction
++            0x00040015, 4294967271, 36, 0, // OpTypeInt
++            0x0004002b, 4294967271, 4294967271, 3, // OpConstant
++            0x00050036, 4294967271, 0, 0, 1, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x0006016e, 0, 0, 4294967271, 4294967271, 4294967271, // OpGroupNonUniformQuadSwap
++        ],
++    ),
++    (
++        "phi_with_undefined_source",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 256, 256, // OpTypeFunction
++            0x0002001a, 256, // OpTypeSampler
++            0x00050036, 256, 0, 0, 256, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x000500f5, 256, 0, 1, 0, // OpPhi
++            0x000100ff, // OpUnreachable
++            0x00010038, // OpFunctionEnd
++        ],
++    ),
++    (
++        "phi_with_undefined_predecessor",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 256, 256, // OpTypeFunction
++            0x0002001a, 256, // OpTypeSampler
++            0x00050036, 256, 0, 0, 256, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x000500f5, 256, 0, 0, 1, // OpPhi
++            0x000100ff, // OpUnreachable
++            0x00010038, // OpFunctionEnd
++        ],
++    ),
++    (
++        "phi_source_with_invalid_type",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 8292, 1, // OpTypeFunction
++            0x00040015, 0, 32, 0, // OpTypeInt
++            0x00020014, 1, // OpTypeBool
++            0x0004002b, 0, 0, 0, // OpConstant
++            0x00050036, 1, 0, 0, 8292, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00040051, 8292, 0, 0, // OpCompositeExtract
++            0x000500f6, 1, 0, 0, 0, // OpLoopMerge
++            0x000200f9, 0, // OpBranch
++            0x000200f8, 0, // OpLabel
++            0x000500f5, 0, 1, 0, 1, // OpPhi
++            0x000100ff, // OpUnreachable
++            0x00010038, // OpFunctionEnd
++        ],
++    ),
++    (
++        "phi_spill_with_unknown_predecessor_block",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001a, 0, // OpTypeSampler
++            0x00030021, 16, 0, // OpTypeFunction
++            0x00050036, 0, 0, 0, 16, // OpFunction
++            0x000200f8, 4272325483, // OpLabel
++            0x000500f5, 0, 0, 0, 0, // OpPhi
++            0x000500fa, 0, 0, 4272325483, 0, // OpBranchConditional
++            0x00010038, // OpFunctionEnd
++        ],
++    ),
++    (
++        "phi_spill_with_unknown_source_block",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030021, 3, 3, // OpTypeFunction
++            0x00020014, 3, // OpTypeBool
++            0x0003002a, 3, 3, // OpConstantFalse
++            0x00050036, 3, 0, 0, 3, // OpFunction
++            0x000200f8, 1, // OpLabel
++            0x000200f9, 0, // OpBranch
++            0x000200f8, 1, // OpLabel
++            0x000500f5, 3, 0, 3, 1, // OpPhi
++            0x000400fa, 0, 1, 0, // OpBranchConditional
++            0x00010038, // OpFunctionEnd
++        ],
++    ),
++    (
++        "phi_with_unknown_predecessor_block",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00040015, 23159137, 0, 0, // OpTypeInt
++            0x00030021, 23159137, 23159137, // OpTypeFunction
++            0x00030001, 23159137, 23159137, // OpUndef
++            0x00050036, 23159137, 0, 0, 23159137, // OpFunction
++            0x000200f8, 1, // OpLabel
++            0x000300fb, 23159137, 0, // OpSwitch
++            0x00010038, // OpFunctionEnd
++        ],
++    ),
++    (
++        "image_write_with_image_coordinates",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00020014, 304123874, // OpTypeBool
++            0x00090019, 304123874, 304123874, 0, 0, 0, 0, 0, 0, // OpTypeImage
++            0x0004003b, 304123874, 14, 0, // OpVariable
++            0x00030021, 14, 304123874, // OpTypeFunction
++            0x00050036, 304123874, 0, 0, 14, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00040063, 14, 14, 0, // OpImageWrite
++        ],
++    ),
++    (
++        "image_read_with_bool_coordinates",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00020014, 14, // OpTypeBool
++            0x00090019, 304123874, 14, 1, 0, 0, 0, 0, 0, // OpTypeImage
++            0x0004003b, 304123874, 14, 0, // OpVariable
++            0x00020014, 304123874, // OpTypeBool
++            0x00030021, 14, 14, // OpTypeFunction
++            0x00050036, 14, 0, 0, 14, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00050062, 0, 0, 14, 14, // OpImageRead
++        ],
++    ),
++    (
++        "sampled_image_with_non_sampler_global",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00040015, 0, 0, 0, // OpTypeInt
++            0x00030021, 3, 0, // OpTypeFunction
++            0x0004003b, 0, 0, 0, // OpVariable
++            0x00050036, 0, 0, 0, 3, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00050056, 0, 0, 0, 0, // OpSampledImage
++            0x0006005e, 0, 0, 0, 0, 0, // OpImageSampleProjDrefExplicitLod
++        ],
++    ),
++    (
++        "sampled_image_with_untracked_sampler_element",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030016, 1, 0, // OpTypeFloat
++            0x00090019, 0, 1, 0, 0, 0, 1, 0, 0, // OpTypeImage
++            0x0004003b, 0, 1000000, 0, // OpVariable
++            0x0004003b, 0, 87, 0, // OpVariable
++            0x00030021, 3, 0, // OpTypeFunction
++            0x0003001b, 0, 0, // OpTypeSampledImage
++            0x00050036, 0, 0, 0, 3, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00050041, 0, 22, 1000000, 1000000, // OpAccessChain
++            0x00050056, 0, 0, 1000000, 22, // OpSampledImage
++            0x00060061, 0, 0, 0, 87, 0, // OpImageDrefGather
++        ],
++    ),
++    (
++        "atomic_on_whole_struct_global",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x0002001e, 1633771873, // OpTypeStruct
++            0x0004003b, 1633771873, 1633771873, 0, // OpVariable
++            0x00030021, 3541551068, 1633771873, // OpTypeFunction
++            0x00050036, 1633771873, 0, 0, 3541551068, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x000500e4, 1633771873, 0, 0, 1633771873, // OpAtomicStore
++            0x000100ff, // OpUnreachable
++            0x00010038, // OpFunctionEnd
++        ],
++    ),
++    (
++        "atomic_access_on_non_array",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00030016, 0, 0, // OpTypeFloat
++            0x0003001b, 0, 0, // OpTypeSampledImage
++            0x0004003b, 0, 0, 0, // OpVariable
++            0x00030021, 26, 0, // OpTypeFunction
++            0x00050036, 0, 0, 0, 26, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00050041, 0, 0, 0, 0, // OpAccessChain
++            0x000600e3, 0, 0, 0, 0, 0, // OpAtomicLoad
++        ],
++    ),
++    (
++        "atomic_access_index_out_of_struct_bounds",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00040015,
++            0x00000012, 0x00000023, 0x00000000, 0xb4fc0032, 0x00000012, 0x00000010,
++            0x00000000, 0x0002001e, 0xffffffff, 0x00040020, 0x0000000d, 0x00000001,
++            0xffffffff, 0x0004003b, 0x0000000d, 0x8000000e, 0x00000000, 0x00040017,
++            0x00000000, 0x00000012, 0x00000002, 0x00040018, 0x00000010, 0x00000000,
++            0x00000003, 0xaa61002b, 0x00000012, 0x00000000, 0x00000000, 0x00030021,
++            0x00000000, 0x00000000, 0x00030033, 0x00000000, 0x00000000, 0x00040020,
++            0xffffffff, 0x00000000, 0x00000010, 0x00050036, 0x00000000, 0x00000000,
++            0x00000000, 0x00000000, 0x000200f8, 0x00000000, 0x00050041, 0x00000000,
++            0x0000000f, 0x8000000e, 0x00000010, 0x000500e4, 0x0000000f, 0x00000000,
++            0x00000000, 0x00000000,
++        ],
++    ),
++    (
++        "atomic_access_index_on_matrix",
++        &[
++            0x07230203, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // header
++            0x00020013, 2, // OpTypeVoid
++            0x00040015, 3, 32, 0, // OpTypeInt
++            0x00030016, 11, 0, // OpTypeFloat
++            0x00040017, 8, 11, 3, // OpTypeVector
++            0x00040018, 4294967294, 8, 3, // OpTypeMatrix
++            0x00040020, 11, 1, 4294967294, // OpTypePointer
++            0x0004003b, 11, 12, 0, // OpVariable
++            0x00030021, 13, 2, // OpTypeFunction
++            0x0004002b, 3, 3, 0, // OpConstant
++            0x00040020, 17, 1, 3, // OpTypePointer
++            0x00050036, 2, 0, 0, 13, // OpFunction
++            0x000200f8, 0, // OpLabel
++            0x00050041, 17, 18, 12, 3, // OpAccessChain
++            0x000700ea, 0, 0, 18, 0, 0, 3, // OpAtomicIAdd
++        ],
++    ),
++];
++
++#[test]
++fn malformed_modules_do_not_panic() {
++    for &(name, words) in MALFORMED {
++        let result = std::panic::catch_unwind(|| parse(words));
++        match result {
++            Ok(Ok(_)) => panic!("{name}: unexpectedly parsed"),
++            Ok(Err(_)) => {}
++            Err(_) => panic!("{name}: the frontend panicked"),
++        }
++    }
++}
++
++const HEADER: [u32; 5] = [0x0723_0203, 0x0001_0000, 0, 100, 0];
++
++/// Append one instruction, computing its word count.
++fn inst(words: &mut Vec<u32>, opcode: u16, operands: &[u32]) {
++    words.push(((operands.len() as u32 + 1) << 16) | u32::from(opcode));
++    words.extend_from_slice(operands);
++}
++
++// Opcodes, see the SPIR-V specification.
++const OP_CAPABILITY: u16 = 17;
++const OP_MEMORY_MODEL: u16 = 14;
++const OP_ENTRY_POINT: u16 = 15;
++const OP_EXECUTION_MODE: u16 = 16;
++const OP_DECORATE: u16 = 71;
++const OP_MEMBER_DECORATE: u16 = 72;
++const OP_TYPE_VOID: u16 = 19;
++const OP_TYPE_INT: u16 = 21;
++const OP_TYPE_FLOAT: u16 = 22;
++const OP_TYPE_VECTOR: u16 = 23;
++const OP_TYPE_IMAGE: u16 = 25;
++const OP_TYPE_SAMPLER: u16 = 26;
++const OP_TYPE_SAMPLED_IMAGE: u16 = 27;
++const OP_TYPE_ARRAY: u16 = 28;
++const OP_TYPE_STRUCT: u16 = 30;
++const OP_TYPE_POINTER: u16 = 32;
++const OP_TYPE_FUNCTION: u16 = 33;
++const OP_CONSTANT: u16 = 43;
++const OP_CONSTANT_COMPOSITE: u16 = 44;
++const OP_CONSTANT_NULL: u16 = 46;
++const OP_FUNCTION: u16 = 54;
++const OP_FUNCTION_END: u16 = 56;
++const OP_VARIABLE: u16 = 59;
++const OP_LOAD: u16 = 61;
++const OP_ACCESS_CHAIN: u16 = 65;
++const OP_COMPOSITE_INSERT: u16 = 82;
++const OP_TYPE_BOOL: u16 = 20;
++const OP_CONSTANT_TRUE: u16 = 41;
++const OP_FUNCTION_CALL: u16 = 57;
++const OP_LOGICAL_NOT: u16 = 168;
++const OP_SELECTION_MERGE: u16 = 247;
++const OP_BRANCH: u16 = 249;
++const OP_BRANCH_CONDITIONAL: u16 = 250;
++const OP_SAMPLED_IMAGE: u16 = 86;
++const OP_IMAGE_SAMPLE_DREF_IMPLICIT_LOD: u16 = 89;
++const OP_IMAGE_FETCH: u16 = 95;
++const OP_LABEL: u16 = 248;
++const OP_RETURN: u16 = 253;
++
++const STORAGE_CLASS_UNIFORM_CONSTANT: u32 = 0;
++const STORAGE_CLASS_OUTPUT: u32 = 3;
++const DECORATION_BUILT_IN: u32 = 11;
++const DECORATION_BINDING: u32 = 33;
++const DECORATION_DESCRIPTOR_SET: u32 = 34;
++const BUILT_IN_POSITION: u32 = 0;
++/// `"main"`, nul-terminated and padded.
++const MAIN: [u32; 2] = [0x6e69_616d, 0];
++
++/// The start of a module with a single entry point `%main`.
++fn module_start(execution_model: u32, main: u32, interface: &[u32]) -> Vec<u32> {
++    let mut w = HEADER.to_vec();
++    inst(&mut w, OP_CAPABILITY, &[1]); // Shader
++    inst(&mut w, OP_MEMORY_MODEL, &[0, 1]); // Logical GLSL450
++    let mut entry_point = vec![execution_model, main];
++    entry_point.extend_from_slice(&MAIN);
++    entry_point.extend_from_slice(interface);
++    inst(&mut w, OP_ENTRY_POINT, &entry_point);
++    w
++}
++
++/// `OpImageFetch` from an arrayed image with integer coordinates, in a module
++/// that never declares the 2-component integer vector the frontend needs for
++/// the coordinates without the array layer.
++#[test]
++fn image_fetch_arrayed_with_integer_coordinates() {
++    let (void, float, int, v3int, v4float, image, ptr_image, var_image) = (1, 2, 3, 4, 5, 6, 7, 8);
++    let (c0, coords, fn_void, main, label, loaded, texel) = (9, 10, 11, 12, 13, 14, 15);
++    let mut w = module_start(5, main, &[]); // GLCompute
++    inst(&mut w, OP_EXECUTION_MODE, &[main, 17, 1, 1, 1]); // LocalSize 1 1 1
++    inst(
++        &mut w,
++        OP_DECORATE,
++        &[var_image, DECORATION_DESCRIPTOR_SET, 0],
++    );
++    inst(&mut w, OP_DECORATE, &[var_image, DECORATION_BINDING, 0]);
++    inst(&mut w, OP_TYPE_VOID, &[void]);
++    inst(&mut w, OP_TYPE_FLOAT, &[float, 32]);
++    inst(&mut w, OP_TYPE_INT, &[int, 32, 1]);
++    inst(&mut w, OP_TYPE_VECTOR, &[v3int, int, 3]);
++    inst(&mut w, OP_TYPE_VECTOR, &[v4float, float, 4]);
++    // 2D, not depth, arrayed, single-sampled, sampled, unknown format
++    inst(&mut w, OP_TYPE_IMAGE, &[image, float, 1, 0, 1, 0, 1, 0]);
++    inst(
++        &mut w,
++        OP_TYPE_POINTER,
++        &[ptr_image, STORAGE_CLASS_UNIFORM_CONSTANT, image],
++    );
++    inst(
++        &mut w,
++        OP_VARIABLE,
++        &[ptr_image, var_image, STORAGE_CLASS_UNIFORM_CONSTANT],
++    );
++    inst(&mut w, OP_CONSTANT, &[int, c0, 0]);
++    inst(&mut w, OP_CONSTANT_COMPOSITE, &[v3int, coords, c0, c0, c0]);
++    inst(&mut w, OP_TYPE_FUNCTION, &[fn_void, void]);
++    inst(&mut w, OP_FUNCTION, &[void, main, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[label]);
++    inst(&mut w, OP_LOAD, &[image, loaded, var_image]);
++    inst(
++        &mut w,
++        OP_IMAGE_FETCH,
++        &[v4float, texel, loaded, coords, 2, c0],
++    ); // Lod
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++
++    let module = parse(&w).unwrap();
++    naga::valid::Validator::new(
++        naga::valid::ValidationFlags::all(),
++        naga::valid::Capabilities::all(),
++    )
++    .validate(&module)
++    .unwrap();
++}
++
++/// Depth-comparison sampling from an element of an array of sampled images.
++/// The frontend tracks binding arrays for comparison sampling, so it must
++/// also be able to flip their element type to a depth image.
++#[test]
++fn comparison_sampling_from_binding_array() {
++    let (void, float, v2float, uint, image, c4, array, ptr_array) = (1, 2, 3, 4, 5, 6, 7, 8);
++    let (textures, sampler_ty, ptr_sampler, sampler, sampled_image_ty) = (9, 10, 11, 12, 13);
++    let (ptr_image, c0, f0, uv, fn_void, main, label) = (14, 15, 16, 17, 18, 19, 20);
++    let (element, loaded, loaded_sampler, combined, result) = (21, 22, 23, 24, 25);
++    let mut w = module_start(4, main, &[]); // Fragment
++    inst(&mut w, OP_EXECUTION_MODE, &[main, 7]); // OriginUpperLeft
++    inst(
++        &mut w,
++        OP_DECORATE,
++        &[textures, DECORATION_DESCRIPTOR_SET, 0],
++    );
++    inst(&mut w, OP_DECORATE, &[textures, DECORATION_BINDING, 0]);
++    inst(
++        &mut w,
++        OP_DECORATE,
++        &[sampler, DECORATION_DESCRIPTOR_SET, 0],
++    );
++    inst(&mut w, OP_DECORATE, &[sampler, DECORATION_BINDING, 1]);
++    inst(&mut w, OP_TYPE_VOID, &[void]);
++    inst(&mut w, OP_TYPE_FLOAT, &[float, 32]);
++    inst(&mut w, OP_TYPE_VECTOR, &[v2float, float, 2]);
++    inst(&mut w, OP_TYPE_INT, &[uint, 32, 0]);
++    // 2D, not depth, not arrayed, single-sampled, sampled, unknown format
++    inst(&mut w, OP_TYPE_IMAGE, &[image, float, 1, 0, 0, 0, 1, 0]);
++    inst(&mut w, OP_CONSTANT, &[uint, c4, 4]);
++    inst(&mut w, OP_TYPE_ARRAY, &[array, image, c4]);
++    inst(
++        &mut w,
++        OP_TYPE_POINTER,
++        &[ptr_array, STORAGE_CLASS_UNIFORM_CONSTANT, array],
++    );
++    inst(
++        &mut w,
++        OP_VARIABLE,
++        &[ptr_array, textures, STORAGE_CLASS_UNIFORM_CONSTANT],
++    );
++    inst(&mut w, OP_TYPE_SAMPLER, &[sampler_ty]);
++    inst(
++        &mut w,
++        OP_TYPE_POINTER,
++        &[ptr_sampler, STORAGE_CLASS_UNIFORM_CONSTANT, sampler_ty],
++    );
++    inst(
++        &mut w,
++        OP_VARIABLE,
++        &[ptr_sampler, sampler, STORAGE_CLASS_UNIFORM_CONSTANT],
++    );
++    inst(&mut w, OP_TYPE_SAMPLED_IMAGE, &[sampled_image_ty, image]);
++    inst(
++        &mut w,
++        OP_TYPE_POINTER,
++        &[ptr_image, STORAGE_CLASS_UNIFORM_CONSTANT, image],
++    );
++    inst(&mut w, OP_CONSTANT, &[uint, c0, 0]);
++    inst(&mut w, OP_CONSTANT, &[float, f0, 0]);
++    inst(&mut w, OP_CONSTANT_COMPOSITE, &[v2float, uv, f0, f0]);
++    inst(&mut w, OP_TYPE_FUNCTION, &[fn_void, void]);
++    inst(&mut w, OP_FUNCTION, &[void, main, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[label]);
++    inst(&mut w, OP_ACCESS_CHAIN, &[ptr_image, element, textures, c0]);
++    inst(&mut w, OP_LOAD, &[image, loaded, element]);
++    inst(&mut w, OP_LOAD, &[sampler_ty, loaded_sampler, sampler]);
++    inst(
++        &mut w,
++        OP_SAMPLED_IMAGE,
++        &[sampled_image_ty, combined, loaded, loaded_sampler],
++    );
++    inst(
++        &mut w,
++        OP_IMAGE_SAMPLE_DREF_IMPLICIT_LOD,
++        &[float, result, combined, uv, f0],
++    );
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++
++    let module = parse(&w).unwrap();
++    let (_, textures) = module
++        .global_variables
++        .iter()
++        .find(|(_, var)| var.binding.as_ref().is_some_and(|b| b.binding == 0))
++        .unwrap();
++    let naga::TypeInner::BindingArray { base, .. } = module.types[textures.ty].inner else {
++        panic!("expected a binding array");
++    };
++    assert!(matches!(
++        module.types[base].inner,
++        naga::TypeInner::Image {
++            class: naga::ImageClass::Depth { multi: false },
++            ..
++        }
++    ));
++}
++
++/// A vertex output struct whose unused built-in members get culled, in a
++/// module that also declares the same struct without the built-ins.
++#[test]
++fn culled_per_vertex_struct_matches_existing_struct() {
++    let (void, float, v4float, per_vertex, plain, ptr_out, out) = (1, 2, 3, 4, 5, 6, 7);
++    let (fn_void, main, label) = (8, 9, 10);
++    let mut w = module_start(0, main, &[out]); // Vertex
++    inst(
++        &mut w,
++        OP_MEMBER_DECORATE,
++        &[per_vertex, 0, DECORATION_BUILT_IN, BUILT_IN_POSITION],
++    );
++    inst(&mut w, OP_TYPE_VOID, &[void]);
++    inst(&mut w, OP_TYPE_FLOAT, &[float, 32]);
++    inst(&mut w, OP_TYPE_VECTOR, &[v4float, float, 4]);
++    inst(&mut w, OP_TYPE_STRUCT, &[per_vertex, v4float]);
++    inst(&mut w, OP_TYPE_STRUCT, &[plain, v4float]);
++    inst(
++        &mut w,
++        OP_TYPE_POINTER,
++        &[ptr_out, STORAGE_CLASS_OUTPUT, per_vertex],
++    );
++    inst(&mut w, OP_VARIABLE, &[ptr_out, out, STORAGE_CLASS_OUTPUT]);
++    inst(&mut w, OP_TYPE_FUNCTION, &[fn_void, void]);
++    inst(&mut w, OP_FUNCTION, &[void, main, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[label]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++
++    parse(&w).unwrap();
++}
++
++/// `OpCompositeInsert` with an index past the end of the composite.
++#[test]
++fn composite_insert_index_out_of_bounds() {
++    let (void, float, v2float, null, f0, fn_void, main, label, result) =
++        (1, 2, 3, 4, 5, 6, 7, 8, 9);
++    let mut w = module_start(5, main, &[]); // GLCompute
++    inst(&mut w, OP_EXECUTION_MODE, &[main, 17, 1, 1, 1]); // LocalSize 1 1 1
++    inst(&mut w, OP_TYPE_VOID, &[void]);
++    inst(&mut w, OP_TYPE_FLOAT, &[float, 32]);
++    inst(&mut w, OP_TYPE_VECTOR, &[v2float, float, 2]);
++    inst(&mut w, OP_CONSTANT_NULL, &[v2float, null]);
++    inst(&mut w, OP_CONSTANT, &[float, f0, 0]);
++    inst(&mut w, OP_TYPE_FUNCTION, &[fn_void, void]);
++    inst(&mut w, OP_FUNCTION, &[void, main, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[label]);
++    inst(&mut w, OP_COMPOSITE_INSERT, &[v2float, result, f0, null, 5]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++
++    let result = parse(&w);
++    assert!(
++        matches!(result, Err(spv::Error::InvalidAccessIndex(5))),
++        "{result:?}"
++    );
++}
++
++/// A call result whose result type is not a type, used outside the block
++/// that defines it, so that the frontend has to spill it to a local variable
++/// of that type.
++#[test]
++fn spill_of_call_result_with_undefined_type() {
++    let (void, bool_ty, fn_void, true_, callee, callee_label) = (1, 2, 3, 4, 5, 6);
++    let (main, entry, call, then, merge, not) = (7, 8, 9, 10, 11, 12);
++    let undefined_type = 99;
++    let mut w = module_start(5, main, &[]); // GLCompute
++    inst(&mut w, OP_EXECUTION_MODE, &[main, 17, 1, 1, 1]); // LocalSize 1 1 1
++    inst(&mut w, OP_TYPE_VOID, &[void]);
++    inst(&mut w, OP_TYPE_BOOL, &[bool_ty]);
++    inst(&mut w, OP_TYPE_FUNCTION, &[fn_void, void]);
++    inst(&mut w, OP_CONSTANT_TRUE, &[bool_ty, true_]);
++    inst(&mut w, OP_FUNCTION, &[void, callee, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[callee_label]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++    inst(&mut w, OP_FUNCTION, &[void, main, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[entry]);
++    inst(&mut w, OP_SELECTION_MERGE, &[merge, 0]);
++    inst(&mut w, OP_BRANCH_CONDITIONAL, &[true_, then, merge]);
++    inst(&mut w, OP_LABEL, &[then]);
++    inst(&mut w, OP_FUNCTION_CALL, &[undefined_type, call, callee]);
++    inst(&mut w, OP_BRANCH, &[merge]);
++    inst(&mut w, OP_LABEL, &[merge]);
++    inst(&mut w, OP_LOGICAL_NOT, &[bool_ty, not, call]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++
++    let result = parse(&w);
++    assert!(
++        matches!(result, Err(spv::Error::InvalidId(99))),
++        "{result:?}"
++    );
++}

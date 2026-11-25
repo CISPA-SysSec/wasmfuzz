@@ -2,7 +2,7 @@ diff --git a/Cargo.toml b/Cargo.toml
 index 378b39e..a2c2c88 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -156,3 +156,10 @@ harness = false
+@@ -156,3 +156,11 @@ harness = false
  # TODO: remove when shipping the next major release after 0.25
  [package.metadata.cargo-semver-checks.lints]
  enum_discriminants_undefined_non_unit_variant = { level = "warn" }
@@ -13,11 +13,12 @@ index 378b39e..a2c2c88 100644
 +png = { path = "../png" }
 +tiff = { path = "../tiff" }
 +moxcms = { path = "../moxcms" }
++exr = { path = "../exr" }
 diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
 index a338e73..9e4d7bb 100644
 --- a/fuzz/Cargo.toml
 +++ b/fuzz/Cargo.toml
-@@ -18,6 +18,13 @@ version = "0.4"
+@@ -18,6 +18,14 @@ version = "0.4"
  [workspace]
  members = ["."]
  
@@ -27,6 +28,7 @@ index a338e73..9e4d7bb 100644
 +png = { path = "../../png" }
 +tiff = { path = "../../tiff" }
 +moxcms = { path = "../../moxcms" }
++exr = { path = "../../exr" }
 +
  [[bin]]
  name = "fuzzer_script_guess"

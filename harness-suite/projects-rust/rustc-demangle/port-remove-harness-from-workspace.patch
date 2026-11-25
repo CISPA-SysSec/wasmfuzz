@@ -1,13 +1,13 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index 197a0c4..262f531 100644
+index efa3564..12b979a 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -12,7 +12,8 @@ Rust compiler symbol demangling.
- """
- 
- [workspace]
--members = ["crates/capi", "fuzz"]
-+members = ["crates/capi"]
+@@ -15,8 +15,8 @@ Rust compiler symbol demangling.
+ members = [
+     "crates/capi",
+     "crates/rustfilt",
+-    "fuzz"
+ ]
 +exclude = ["fuzz"]
  
  [dependencies]

@@ -1,0 +1,27 @@
+Subject: [PATCH] djxl_fuzzer: Lower the decoder memory cap on wasm
+
+The tracking memory manager allows the decoder 1 GiB at a time, but the wasm
+heap is 512 MiB and allocations outside the decoder (the harness's own
+buffers, std containers) abort when they fail. Use a 256 MiB cap on wasi.
+
+diff --git a/tools/djxl_fuzzer.cc b/tools/djxl_fuzzer.cc
+index 2389d328..e307a3df 100644
+--- a/tools/djxl_fuzzer.cc
++++ b/tools/djxl_fuzzer.cc
+@@ -592,7 +592,15 @@ int DoTestOneInput(const uint8_t* data, size_t size) {
+   size_t max_pixels = 1 << 21;
+   size_t max_total_pixels = 5 * max_pixels;
+ 
+-  TrackingMemoryManager memory_manager{/* cap */ 1 * kGiB,
++#if defined(__wasi__)
++  // The wasm heap is 512 MiB and allocation failures outside the decoder
++  // (the harness's own buffers, std containers) abort, so keep the decoder
++  // well below it.
++  constexpr size_t kMemoryCap = kGiB / 4;
++#else
++  constexpr size_t kMemoryCap = 1 * kGiB;
++#endif
++  TrackingMemoryManager memory_manager{/* cap */ kMemoryCap,
+                                        /* total_cap */ 5 * kGiB};
+   const auto targets = hwy::SupportedAndGeneratedTargets();
+   hwy::SetSupportedTargetsForTest(targets[getFlag(targets.size() - 1)]);

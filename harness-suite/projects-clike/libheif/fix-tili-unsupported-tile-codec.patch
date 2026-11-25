@@ -1,0 +1,259 @@
+diff --git a/libheif/image-items/tiled.cc b/libheif/image-items/tiled.cc
+index 65e5fa33..18953d34 100644
+--- a/libheif/image-items/tiled.cc
++++ b/libheif/image-items/tiled.cc
+@@ -638,7 +638,18 @@ Error ImageItem_Tiled::initialize_decoder()
+   // --- create a dummy image item for decoding tiles
+ 
+   heif_compression_format format = compression_format_from_fourcc_infe_type(m_tild_header.get_parameters().compression_format_fourcc);
+-  m_tile_item = ImageItem::alloc_for_compression_format(get_context(), format);
++
++  // The tile compression 4cc comes from the file. alloc_for_compression_format() has no
++  // item for unknown formats (or for codecs that are not compiled in) and returns nullptr.
++  if (format != heif_compression_undefined) {
++    m_tile_item = ImageItem::alloc_for_compression_format(get_context(), format);
++  }
++
++  if (!m_tile_item) {
++    return {heif_error_Unsupported_feature,
++            heif_suberror_Unsupported_codec,
++            "'tili' image with unsupported compression format."};
++  }
+ 
+   // For backwards compatibility: copy over properties from `tili` item.
+   // TODO: remove when spec is final and old test images have been converted
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 68b6f1a3..1d14b433 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -213,6 +213,7 @@ if (WITH_UNCOMPRESSED_CODEC)
+ 
+     if (ENABLE_EXPERIMENTAL_FEATURES)
+         add_libheif_test(uncompressed_encode_multicomponent)
++        add_libheif_test(tiled_unsupported_tile_codec)
+     endif()
+ 
+     if (ZLIB_FOUND)
+diff --git a/tests/tiled_unsupported_tile_codec.cc b/tests/tiled_unsupported_tile_codec.cc
+new file mode 100644
+index 00000000..e371c8e2
+--- /dev/null
++++ b/tests/tiled_unsupported_tile_codec.cc
+@@ -0,0 +1,217 @@
++/*
++  libheif regression test: 'tili' image whose tiles use a compression format
++  for which libheif has no image item.
++
++  The tile compression 4cc in 'tilC' comes from the file. For 4ccs that
++  ImageItem::compression_format_from_fourcc_infe_type() does not know (e.g.
++  'avc1'), ImageItem::alloc_for_compression_format() returned nullptr and
++  ImageItem_Tiled::initialize_decoder() dereferenced it. The image must now be
++  rejected with heif_error_Unsupported_feature instead.
++
++  MIT License
++
++  Permission is hereby granted, free of charge, to any person obtaining a copy
++  of this software and associated documentation files (the "Software"), to deal
++  in the Software without restriction, including without limitation the rights
++  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++  copies of the Software, and to permit persons to whom the Software is
++  furnished to do so, subject to the following conditions:
++
++  The above copyright notice and this permission notice shall be included in all
++  copies or substantial portions of the Software.
++
++  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++  SOFTWARE.
++*/
++
++#include "catch_amalgamated.hpp"
++#include "libheif/heif.h"
++#include "libheif/heif_tiling.h"
++#include "test_utils.h"
++
++#include <cstdint>
++#include <vector>
++
++namespace {
++
++constexpr uint32_t kImageWidth = 4;
++constexpr uint32_t kImageHeight = 2;
++constexpr uint32_t kTileSize = 2;
++constexpr uint32_t kNumTiles = (kImageWidth / kTileSize) * (kImageHeight / kTileSize);
++constexpr uint32_t kTileBytes = kTileSize * kTileSize * 3; // 'rgb3': 8-bit interleaved RGB
++
++// Build a 4x2 'tili' image of 2x2 tiles. 'tilC' (version 0) uses 32-bit offset
++// and size fields and carries the given tile configuration boxes. The item data
++// (offset table + tiles) is stored in 'idat'.
++std::vector<uint8_t> build_tili_file(const char tile_4cc[4],
++                                     const std::vector<uint8_t>& tile_config_boxes,
++                                     uint8_t num_tile_config_boxes)
++{
++  std::vector<uint8_t> ftyp_payload;
++  append_fourcc(ftyp_payload, "mif1");
++  put_u32_be(ftyp_payload, 0);
++  append_fourcc(ftyp_payload, "mif1");
++  auto ftyp = make_box("ftyp", ftyp_payload);
++
++  std::vector<uint8_t> hdlr_payload;
++  put_u32_be(hdlr_payload, 0);
++  append_fourcc(hdlr_payload, "pict");
++  put_u32_be(hdlr_payload, 0);
++  put_u32_be(hdlr_payload, 0);
++  put_u32_be(hdlr_payload, 0);
++  hdlr_payload.push_back(0);
++  auto hdlr = make_box("hdlr", hdlr_payload, /*full=*/true);
++
++  std::vector<uint8_t> pitm_payload;
++  put_u16_be(pitm_payload, 1);
++  auto pitm = make_box("pitm", pitm_payload, /*full=*/true);
++
++  std::vector<uint8_t> infe_payload;
++  put_u16_be(infe_payload, 1);          // item_ID
++  put_u16_be(infe_payload, 0);          // item_protection_index
++  append_fourcc(infe_payload, "tili");  // item_type
++  infe_payload.push_back(0);            // item_name
++  auto infe = make_box("infe", infe_payload, /*full=*/true, /*version=*/2);
++
++  std::vector<uint8_t> iinf_payload;
++  put_u16_be(iinf_payload, 1);
++  append(iinf_payload, infe);
++  auto iinf = make_box("iinf", iinf_payload, /*full=*/true);
++
++  std::vector<uint8_t> ispe_payload;
++  put_u32_be(ispe_payload, kImageWidth);
++  put_u32_be(ispe_payload, kImageHeight);
++  auto ispe = make_box("ispe", ispe_payload, /*full=*/true);
++
++  std::vector<uint8_t> tilC_payload;
++  put_u32_be(tilC_payload, kTileSize);  // tile_width
++  put_u32_be(tilC_payload, kTileSize);  // tile_height
++  append_fourcc(tilC_payload, tile_4cc);
++  tilC_payload.push_back(0);            // number_of_extra_dimensions
++  tilC_payload.push_back(num_tile_config_boxes);
++  append(tilC_payload, tile_config_boxes);
++  // flags 0x08: 32-bit offsets, 32-bit sizes
++  auto tilC = make_box("tilC", tilC_payload, /*full=*/true, /*version=*/0, /*flags=*/0x08);
++
++  std::vector<uint8_t> ipco_payload;
++  append(ipco_payload, ispe);
++  append(ipco_payload, tilC);
++  auto ipco = make_box("ipco", ipco_payload);
++
++  std::vector<uint8_t> ipma_payload;
++  put_u32_be(ipma_payload, 1);          // entry_count
++  put_u16_be(ipma_payload, 1);          // item_ID
++  ipma_payload.push_back(2);            // association_count
++  ipma_payload.push_back(0x80 | 1);     // essential, ispe
++  ipma_payload.push_back(0x80 | 2);     // essential, tilC
++  auto ipma = make_box("ipma", ipma_payload, /*full=*/true);
++
++  std::vector<uint8_t> iprp_payload;
++  append(iprp_payload, ipco);
++  append(iprp_payload, ipma);
++  auto iprp = make_box("iprp", iprp_payload);
++
++  // item data: offset table (item-relative offsets) followed by the tiles
++  std::vector<uint8_t> item_data;
++  const uint32_t table_size = kNumTiles * 8;
++  for (uint32_t i = 0; i < kNumTiles; i++) {
++    put_u32_be(item_data, table_size + i * kTileBytes);
++    put_u32_be(item_data, kTileBytes);
++  }
++  for (uint32_t i = 0; i < kNumTiles * kTileBytes; i++) {
++    item_data.push_back(static_cast<uint8_t>(i));
++  }
++  auto idat = make_box("idat", item_data);
++
++  // iloc v1: item 1 in idat (construction_method=1), one extent
++  std::vector<uint8_t> iloc_payload;
++  put_u16_be(iloc_payload, (4 << 12) | (4 << 8) | (0 << 4) | 0);
++  put_u16_be(iloc_payload, 1);          // item_count
++  put_u16_be(iloc_payload, 1);          // item_ID
++  put_u16_be(iloc_payload, 0x0001);     // construction_method=1
++  put_u16_be(iloc_payload, 0);          // data_reference_index
++  put_u16_be(iloc_payload, 1);          // extent_count
++  put_u32_be(iloc_payload, 0);          // extent_offset
++  put_u32_be(iloc_payload, static_cast<uint32_t>(item_data.size()));
++  auto iloc = make_box("iloc", iloc_payload, /*full=*/true, /*version=*/1);
++
++  std::vector<uint8_t> meta_payload;
++  append(meta_payload, hdlr);
++  append(meta_payload, pitm);
++  append(meta_payload, iinf);
++  append(meta_payload, iprp);
++  append(meta_payload, iloc);
++  append(meta_payload, idat);
++  auto meta = make_box("meta", meta_payload, /*full=*/true);
++
++  std::vector<uint8_t> file;
++  append(file, ftyp);
++  append(file, meta);
++  return file;
++}
++
++
++// Read the file and decode the first tile of the primary image. Returns the first error.
++// An image whose decoder cannot be set up is replaced by an error item when the file is
++// read, so its error is already returned when the primary image handle is requested.
++heif_error decode_first_tile(const std::vector<uint8_t>& file)
++{
++  heif_context* ctx = heif_context_alloc();
++  heif_error err = heif_context_read_from_memory_without_copy(ctx, file.data(), file.size(), nullptr);
++  REQUIRE(err.code == heif_error_Ok);
++
++  heif_image_handle* handle = nullptr;
++  err = heif_context_get_primary_image_handle(ctx, &handle);
++  if (err.code == heif_error_Ok) {
++    heif_image* img = nullptr;
++    err = heif_image_handle_decode_image_tile(handle, &img, heif_colorspace_RGB, heif_chroma_interleaved_RGB,
++                                              nullptr, 0, 0);
++    if (img) {
++      heif_image_release(img);
++    }
++
++    heif_image_handle_release(handle);
++  }
++
++  heif_context_free(ctx);
++  return err;
++}
++
++} // namespace
++
++
++TEST_CASE("tili with unci tiles decodes")
++{
++  // Valid counterpart of the files below: 'rgb3' unci tiles, which libheif supports.
++  std::vector<uint8_t> uncC_payload;
++  append_fourcc(uncC_payload, "rgb3");
++  auto uncC = make_box("uncC", uncC_payload, /*full=*/true, /*version=*/1);
++
++  heif_error err = decode_first_tile(build_tili_file("unci", uncC, 1));
++  REQUIRE(err.code == heif_error_Ok);
++}
++
++
++TEST_CASE("tili with avc1 tiles is rejected")
++{
++  // 'avc1' has an image item type but no mapping in compression_format_from_fourcc_infe_type().
++  std::vector<uint8_t> avcC_payload = {0x01, 0x64, 0x00, 0x0c, 0xff, 0xe0, 0x00};
++  auto avcC = make_box("avcC", avcC_payload);
++
++  heif_error err = decode_first_tile(build_tili_file("avc1", avcC, 1));
++  REQUIRE(err.code == heif_error_Unsupported_feature);
++  REQUIRE(err.subcode == heif_suberror_Unsupported_codec);
++}
++
++
++TEST_CASE("tili with unknown tile 4cc is rejected")
++{
++  heif_error err = decode_first_tile(build_tili_file("abcd", {}, 0));
++  REQUIRE(err.code == heif_error_Unsupported_feature);
++  REQUIRE(err.subcode == heif_suberror_Unsupported_codec);
++}

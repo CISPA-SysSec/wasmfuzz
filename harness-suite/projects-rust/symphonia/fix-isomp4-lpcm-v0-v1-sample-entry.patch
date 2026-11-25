@@ -1,3 +1,6 @@
+Upstream: open PR pdeljanov/Symphonia#566 (by iliasabk, 2026-09-22) turns the same unreachable!() for lpcm sample entries below version 2 into a decode error; issue #560 reports it.
+Drop this patch once #566 lands.
+
 diff --git a/symphonia-format-isomp4/src/atoms/stsd.rs b/symphonia-format-isomp4/src/atoms/stsd.rs
 index 73cb913..0a8fc96 100644
 --- a/symphonia-format-isomp4/src/atoms/stsd.rs
@@ -30,3 +33,63 @@ index 73cb913..0a8fc96 100644
                      let codec_bytes_per_sample = bytes_per_pcm_sample(entry.codec_id);
  
                      // Validate the codec-derived bytes-per-sample equals the declared
+diff --git a/symphonia-format-isomp4/tests/lpcm_sample_entry.rs b/symphonia-format-isomp4/tests/lpcm_sample_entry.rs
+new file mode 100644
+index 0000000..4e1d804
+--- /dev/null
++++ b/symphonia-format-isomp4/tests/lpcm_sample_entry.rs
+@@ -0,0 +1,54 @@
++use std::io::Cursor;
++
++use symphonia_core::formats::FormatOptions;
++use symphonia_core::io::MediaSourceStream;
++use symphonia_format_isomp4::IsoMp4Reader;
++
++fn atom(atom_type: &[u8; 4], body: &[u8]) -> Vec<u8> {
++    let mut atom = Vec::new();
++    atom.extend_from_slice(&(8 + body.len() as u32).to_be_bytes());
++    atom.extend_from_slice(atom_type);
++    atom.extend_from_slice(body);
++    atom
++}
++
++/// Builds a file with a single track whose sample description is an `lpcm` audio sample entry of
++/// the given version.
++fn lpcm_file(version: u16) -> Vec<u8> {
++    let mut entry = Vec::new();
++    entry.extend_from_slice(&[0; 6]); // Reserved.
++    entry.extend_from_slice(&1u16.to_be_bytes()); // Data reference index.
++    entry.extend_from_slice(&version.to_be_bytes());
++    entry.extend_from_slice(&[0; 6]); // Revision and vendor.
++    entry.extend_from_slice(&2u16.to_be_bytes()); // Channels.
++    entry.extend_from_slice(&16u16.to_be_bytes()); // Sample size.
++    entry.extend_from_slice(&[0; 4]); // Compression ID and packet size.
++    entry.extend_from_slice(&(44100u32 << 16).to_be_bytes()); // Sample rate.
++    if version == 1 {
++        entry.extend_from_slice(&1u32.to_be_bytes()); // Frames per packet.
++        entry.extend_from_slice(&2u32.to_be_bytes()); // Bytes per sample.
++        entry.extend_from_slice(&4u32.to_be_bytes()); // Bytes per frame.
++        entry.extend_from_slice(&2u32.to_be_bytes()); // Bytes per sample.
++    }
++
++    let mut stsd = vec![0; 4]; // Version and flags.
++    stsd.extend_from_slice(&1u32.to_be_bytes()); // Entry count.
++    stsd.extend(atom(b"lpcm", &entry));
++
++    let stbl = atom(b"stbl", &atom(b"stsd", &stsd));
++    let trak = atom(b"trak", &atom(b"mdia", &atom(b"minf", &stbl)));
++
++    let mut file = atom(b"ftyp", b"M4A \0\0\0\0");
++    file.extend(atom(b"moov", &trak));
++    file
++}
++
++#[test]
++fn lpcm_sample_entry_below_version_2_is_rejected() {
++    // An lpcm sample entry carries its PCM format only in the version 2 fields.
++    for version in [0, 1] {
++        let mss =
++            MediaSourceStream::new(Box::new(Cursor::new(lpcm_file(version))), Default::default());
++        assert!(IsoMp4Reader::try_new(mss, FormatOptions::default()).is_err());
++    }
++}

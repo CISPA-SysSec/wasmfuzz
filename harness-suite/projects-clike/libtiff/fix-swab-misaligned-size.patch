@@ -1,10 +1,24 @@
-Subject: [PATCH] skip byte swap on misaligned buffer sizes
----
+Skip the byte swap in the _TIFFSwab*BitData() post-decode routines when the buffer size is not
+a multiple of the sample size, instead of failing an assertion.
+
+TIFFScanlineSize() of a contiguous YCbCr image divides the size of a row of sampling blocks by
+the vertical subsampling, so with 1x4 subsampling and an odd width the scanline size is not a
+multiple of the sample size (3 bytes for one 16-bit pixel). TIFFReadScanline() of such an image
+in non-native byte order passes that size to _TIFFSwab16BitData() (likewise 24, 32 and 64 bits),
+whose assert((cc & 1) == 0) aborts; tiff_read_rgba_fuzzer reads every scanline after
+TIFFReadRGBAImage(), so a 164-byte uncompressed big-endian file aborts it. Includes
+test/test_swab_odd_size.c.
+Upstream: open issue libtiff/libtiff#669 (by Marsman1996, 2025-02-09) reports the same
+_TIFFSwab16BitData assertion through tiffcmp; draft MR !695 (by Su_Laus, 2025-02-11, last
+updated 2025-12-13) checks the post-decode length and errors out instead of skipping the swap.
+Not fixed as of 7c72b091 (master HEAD on 2026-11-21).
+Drop this patch once !695 lands.
+
 diff --git a/libtiff/tif_read.c b/libtiff/tif_read.c
-index c1440df..93719de 100644
+index ccb1a956..c61040ef 100644
 --- a/libtiff/tif_read.c
 +++ b/libtiff/tif_read.c
-@@ -1750,27 +1750,31 @@ void _TIFFNoPostDecode(TIFF *tif, uint8_t *buf, tmsize_t cc)
+@@ -1797,27 +1797,31 @@ void _TIFFNoPostDecode(TIFF *tif, uint8_t *buf, tmsize_t cc)
  void _TIFFSwab16BitData(TIFF *tif, uint8_t *buf, tmsize_t cc)
  {
      (void)tif;
@@ -40,3 +54,166 @@ index c1440df..93719de 100644
 +        return;
      TIFFSwabArrayOfDouble((double *)buf, cc / 8);
  }
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index 4ac68d66..8b78a915 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -244,6 +244,12 @@ target_link_libraries(test_RGBAImage PRIVATE tiff tiff_port)
+ target_compile_definitions(test_RGBAImage PRIVATE SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\")
+ list(APPEND simple_tests test_RGBAImage)
+ 
++add_executable(test_swab_odd_size ../placeholder.h)
++target_sources(test_swab_odd_size PRIVATE test_swab_odd_size.c)
++set_target_properties(test_swab_odd_size PROPERTIES LINKER_LANGUAGE CXX)
++target_link_libraries(test_swab_odd_size PRIVATE tiff tiff_port)
++list(APPEND simple_tests test_swab_odd_size)
++
+ # Apply C++ compatibility mode to all test targets if enabled
+ foreach(target ${simple_tests})
+   tiff_target_compile_as_cxx(${target})
+diff --git a/test/Makefile.am b/test/Makefile.am
+index b2b79185..0c08dfd2 100644
+--- a/test/Makefile.am
++++ b/test/Makefile.am
+@@ -93,7 +93,7 @@ if TIFF_TESTS
+ check_PROGRAMS = \
+ 	ascii_tag long_tag short_tag strip_rw rewrite custom_dir custom_dir_EXIF_231 \
+ 	defer_strile_loading defer_strile_writing test_directory test_IFD_enlargement test_open_options \
+-	test_append_to_strip test_ifd_loop_detection test_RGBAImage testtypes test_signed_tags thunder_decode $(JPEG_DEPENDENT_CHECK_PROG) $(STATIC_CHECK_PROGS)
++	test_append_to_strip test_ifd_loop_detection test_RGBAImage test_swab_odd_size testtypes test_signed_tags thunder_decode $(JPEG_DEPENDENT_CHECK_PROG) $(STATIC_CHECK_PROGS)
+ endif
+ 
+ # Test scripts to execute
+@@ -308,6 +308,8 @@ test_ifd_loop_detection_SOURCES = test_ifd_loop_detection.c
+ test_ifd_loop_detection_LDADD = $(LIBTIFF)
+ test_RGBAImage_SOURCES = test_RGBAImage.c
+ test_RGBAImage_LDADD = $(LIBTIFF)
++test_swab_odd_size_SOURCES = test_swab_odd_size.c
++test_swab_odd_size_LDADD = $(LIBTIFF)
+ 
+ AM_CPPFLAGS = -I$(top_srcdir)/libtiff
+ 
+diff --git a/test/test_swab_odd_size.c b/test/test_swab_odd_size.c
+new file mode 100644
+index 00000000..bb55490f
+--- /dev/null
++++ b/test/test_swab_odd_size.c
+@@ -0,0 +1,118 @@
++/*
++ * Permission to use, copy, modify, distribute, and sell this software and
++ * its documentation for any purpose is hereby granted without fee, provided
++ * that (i) the above copyright notices and this permission notice appear in
++ * all copies of the software and related documentation, and (ii) the names of
++ * Sam Leffler and Silicon Graphics may not be used in any advertising or
++ * publicity relating to the software without the specific, prior written
++ * permission of Sam Leffler and Silicon Graphics.
++ *
++ * THE SOFTWARE IS PROVIDED "AS-IS" AND WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS, IMPLIED OR OTHERWISE, INCLUDING WITHOUT LIMITATION, ANY
++ * WARRANTY OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
++ *
++ * IN NO EVENT SHALL SAM LEFFLER OR SILICON GRAPHICS BE LIABLE FOR
++ * ANY SPECIAL, INCIDENTAL, INDIRECT OR CONSEQUENTIAL DAMAGES OF ANY KIND,
++ * OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
++ * WHETHER OR NOT ADVISED OF THE POSSIBILITY OF DAMAGE, AND ON ANY THEORY OF
++ * LIABILITY, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
++ * OF THIS SOFTWARE.
++ */
++
++/*
++ * TIFF Library
++ *
++ * TIFFReadScanline() of a non-native byte order YCbCr image with 1x4
++ * subsampling. TIFFScanlineSize() divides the size of a row of sampling
++ * blocks by the vertical subsampling, so with an odd width the scanline
++ * size is not a multiple of the sample size, and the byte swapping
++ * post-decode routines (_TIFFSwab16BitData() etc.) failed their assertion
++ * on it. Cf https://gitlab.com/libtiff/libtiff/-/issues/669
++ */
++
++#include "tif_config.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#ifdef HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++
++#include "tiffio.h"
++
++#define FILENAME "test_swab_odd_size.tif"
++
++static int test(const char *mode, uint16_t bitspersample)
++{
++    const uint32_t width = 1, height = 4;
++    TIFF *tif;
++    tmsize_t size;
++    unsigned char *buf;
++    uint32_t row;
++
++    tif = TIFFOpen(FILENAME, mode);
++    if (!tif)
++    {
++        fprintf(stderr, "Cannot create %s\n", FILENAME);
++        return 1;
++    }
++    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
++    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
++    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bitspersample);
++    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 3);
++    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_YCBCR);
++    TIFFSetField(tif, TIFFTAG_YCBCRSUBSAMPLING, 1, 4);
++    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
++    TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_NONE);
++    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, height);
++    size = TIFFStripSize(tif);
++    buf = (unsigned char *)calloc(1, (size_t)size);
++    if (!buf || TIFFWriteEncodedStrip(tif, 0, buf, size) != size)
++    {
++        fprintf(stderr, "Cannot write %s (mode %s, %u bits)\n", FILENAME,
++                mode, bitspersample);
++        free(buf);
++        TIFFClose(tif);
++        return 1;
++    }
++    free(buf);
++    TIFFClose(tif);
++
++    tif = TIFFOpen(FILENAME, "r");
++    if (!tif)
++    {
++        fprintf(stderr, "Cannot open %s\n", FILENAME);
++        return 1;
++    }
++    size = TIFFScanlineSize(tif);
++    buf = (unsigned char *)malloc((size_t)size);
++    if (!buf)
++    {
++        TIFFClose(tif);
++        return 1;
++    }
++    /* Reading may fail or succeed, but must not abort. */
++    for (row = 0; row < height; row++)
++        (void)TIFFReadScanline(tif, buf, row, 0);
++    free(buf);
++    TIFFClose(tif);
++    unlink(FILENAME);
++    return 0;
++}
++
++int main(void)
++{
++    static const uint16_t bits[] = {16, 24, 32, 64};
++    size_t i;
++    int ret = 0;
++
++    for (i = 0; i < sizeof(bits) / sizeof(bits[0]); i++)
++    {
++        /* One of the two is the non-native byte order. */
++        ret |= test("wb", bits[i]);
++        ret |= test("wl", bits[i]);
++    }
++    return ret;
++}

@@ -33,10 +33,10 @@ index 11ec039..317a44e 100644
  	    xsltDocumentFunctionLoadDocument(ctxt, URI, fragment);
  	    xmlFree(URI);
 diff --git a/libxslt/transform.c b/libxslt/transform.c
-index 38c2dce..7e00995 100644
+index aea6c8b..f5f2b81 100644
 --- a/libxslt/transform.c
 +++ b/libxslt/transform.c
-@@ -519,19 +519,20 @@ xsltTransformCacheFree(xsltTransformCachePtr cache)
+@@ -521,19 +521,20 @@ xsltTransformCacheFree(xsltTransformCachePtr cache)
      /*
      * Free tree fragments.
      */
@@ -65,7 +65,7 @@ index 38c2dce..7e00995 100644
  	}
      }
      /*
-@@ -2264,38 +2265,36 @@ xsltLocalVariablePush(xsltTransformContextPtr ctxt,
+@@ -2266,38 +2267,36 @@ xsltLocalVariablePush(xsltTransformContextPtr ctxt,
   * are preserved; all other fragments are freed/cached.
   */
  static void
@@ -120,7 +120,7 @@ index 38c2dce..7e00995 100644
          }
      } while (cur != base);
  }
-@@ -2323,7 +2322,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
+@@ -2325,7 +2324,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
      xmlNodePtr oldInsert, oldInst, oldCurInst, oldContextNode;
      xmlNodePtr cur, insert, copy = NULL;
      int level = 0, oldVarsNr;
@@ -129,7 +129,7 @@ index 38c2dce..7e00995 100644
  
  #ifdef XSLT_REFACTORED
      xsltStylePreCompPtr info;
-@@ -2369,7 +2368,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
+@@ -2371,7 +2370,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
      }
      ctxt->depth++;
  
@@ -138,7 +138,7 @@ index 38c2dce..7e00995 100644
      oldInsert = insert = ctxt->insert;
      oldInst = oldCurInst = ctxt->inst;
      oldContextNode = ctxt->node;
-@@ -2603,7 +2602,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
+@@ -2605,7 +2604,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
  		    /*
  		    * Cleanup temporary tree fragments.
  		    */
@@ -147,7 +147,7 @@ index 38c2dce..7e00995 100644
  			xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
  
  		    ctxt->insert = oldInsert;
-@@ -2698,7 +2697,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
+@@ -2700,7 +2699,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
  		    /*
  		    * Cleanup temporary tree fragments.
  		    */
@@ -156,7 +156,7 @@ index 38c2dce..7e00995 100644
  			xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
  
  		    ctxt->insert = oldInsert;
-@@ -2764,7 +2763,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
+@@ -2766,7 +2765,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
  		/*
  		* Cleanup temporary tree fragments.
  		*/
@@ -165,7 +165,7 @@ index 38c2dce..7e00995 100644
  		    xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
  
                  ctxt->insert = oldInsert;
-@@ -2894,7 +2893,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
+@@ -2896,7 +2895,7 @@ xsltApplySequenceConstructor(xsltTransformContextPtr ctxt,
  		/*
  		* Cleanup temporary tree fragments.
  		*/
@@ -174,7 +174,7 @@ index 38c2dce..7e00995 100644
  		    xsltReleaseLocalRVTs(ctxt, oldLocalFragmentTop);
  
                  ctxt->insert = oldInsert;
-@@ -3073,7 +3072,7 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
+@@ -3075,7 +3074,7 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
      int oldVarsBase = 0;
      xmlNodePtr cur;
      xsltStackElemPtr tmpParam = NULL;
@@ -183,7 +183,7 @@ index 38c2dce..7e00995 100644
  #ifdef WITH_PROFILER
      long start = 0;
  #endif
-@@ -3121,8 +3120,8 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
+@@ -3123,8 +3122,8 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
          return;
  	}
  
@@ -194,7 +194,7 @@ index 38c2dce..7e00995 100644
  
      /*
      * Initiate a distinct scope of local params/variables.
-@@ -3233,16 +3232,16 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
+@@ -3235,16 +3234,16 @@ xsltApplyXSLTTemplate(xsltTransformContextPtr ctxt,
      * user code should now use xsltRegisterLocalRVT() instead
      * of the obsolete xsltRegisterTmpRVT().
      */
@@ -218,7 +218,7 @@ index 38c2dce..7e00995 100644
  
      /*
      * Pop the xsl:template declaration from the stack.
-@@ -5320,7 +5319,7 @@ xsltIf(xsltTransformContextPtr ctxt, xmlNodePtr contextNode,
+@@ -5322,7 +5321,7 @@ xsltIf(xsltTransformContextPtr ctxt, xmlNodePtr contextNode,
  
  #ifdef XSLT_FAST_IF
      {
@@ -227,7 +227,7 @@ index 38c2dce..7e00995 100644
  
  	res = xsltPreCompEvalToBoolean(ctxt, contextNode, comp);
  
-@@ -5328,7 +5327,7 @@ xsltIf(xsltTransformContextPtr ctxt, xmlNodePtr contextNode,
+@@ -5330,7 +5329,7 @@ xsltIf(xsltTransformContextPtr ctxt, xmlNodePtr contextNode,
  	* Cleanup fragments created during evaluation of the
  	* "select" expression.
  	*/
@@ -670,7 +670,7 @@ index 6532f97..5946961 100644
  		continue;
  	    }
 diff --git a/libxslt/xsltInternals.h b/libxslt/xsltInternals.h
-index 6faa07d..ec84e1d 100644
+index 8465047..0bf0d31 100644
 --- a/libxslt/xsltInternals.h
 +++ b/libxslt/xsltInternals.h
 @@ -1410,6 +1410,8 @@ struct _xsltStylePreComp {
@@ -708,7 +708,7 @@ index 6faa07d..ec84e1d 100644
      int nbRVT;
      xsltStackElemPtr stackItems;
      int nbStackItems;
-@@ -1749,8 +1756,8 @@ struct _xsltTransformContext {
+@@ -1750,8 +1757,8 @@ struct _xsltTransformContext {
       * handling of temporary Result Value Tree
       * (XSLT 1.0 term: "Result Tree Fragment")
       */
@@ -719,7 +719,7 @@ index 6faa07d..ec84e1d 100644
      int             ctxtflags;          /* context processing flags */
  
      /*
-@@ -1783,7 +1790,7 @@ struct _xsltTransformContext {
+@@ -1784,7 +1791,7 @@ struct _xsltTransformContext {
      xmlDocPtr initialContextDoc;
      xsltTransformCachePtr cache;
      void *contextVariable; /* the current variable item */
@@ -728,7 +728,7 @@ index 6faa07d..ec84e1d 100644
  			   the instruction which created the fragment
                             exits */
      xmlDocPtr localRVTBase; /* Obsolete */
-@@ -1932,8 +1939,11 @@ XSLTPUBFUN int XSLTCALL
+@@ -1933,8 +1940,11 @@ XSLTPUBFUN int XSLTCALL
  XSLTPUBFUN void XSLTCALL
  			xsltFreeRVTs		(xsltTransformContextPtr ctxt);
  XSLTPUBFUN void XSLTCALL
@@ -741,11 +741,6 @@ index 6faa07d..ec84e1d 100644
  /*
   * Extra functions for Attribute Value Templates
   */
-@@ -1992,4 +2002,3 @@ XSLTPUBFUN int XSLTCALL
- #endif
- 
- #endif /* __XML_XSLT_H__ */
--
 diff --git a/libxslt/xsltlocale.c b/libxslt/xsltlocale.c
 index 1d7f253..a594464 100644
 --- a/libxslt/xsltlocale.c

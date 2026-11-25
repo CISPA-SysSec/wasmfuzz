@@ -1,0 +1,139 @@
+naga: spv-in: only skip the entry point wrappers' fake function ids
+
+Found by the naga `spv_parser` fuzz target: `index out of bounds: the len is
+0 but the index is 3` at `front/spv/mod.rs` `patch_statements`
+(`fun_parameter_sampling[i as usize] |= flags`).
+
+The entry point wrappers call their functions through fake ids `!0, !1, ..`
+(one per entry point), and the patching pass in `parse` skips them with
+`fun_id > !(functions.len() as u32)`. That threshold counts functions, not
+entry points, so it also skipped real functions whose ids lie just below
+`u32::MAX` (the fuzzer's module: no entry points, a function with id
+0xFFFFFFFD). The skipped function was never moved into the new arena; its
+stale handle aliased another function's, `patch_function`'s
+`lookup.handle == h` search then took that function's (empty) parameter
+sampling flags, and indexing them panicked. Now:
+
+- the skip compares against `!(entry_points.len())`, i.e. exactly the fake
+  ids;
+- a real function whose id collides with a fake id is refused with
+  `Error::InvalidId` before the wrappers are built (the ids must be below the
+  header's bound anyway).
+
+Regression tests in `naga/tests/naga/spirv_malformed.rs` (added by
+fix-naga-spv-malformed-module-panics.patch).
+
+Not fixed upstream as of 110b588.
+Upstream: none found; the open umbrella issue gfx-rs/wgpu#7687 does not list
+this site.
+
+diff --git a/naga/src/front/spv/mod.rs b/naga/src/front/spv/mod.rs
+index 48cf4e0..b9891d2 100644
+--- a/naga/src/front/spv/mod.rs
++++ b/naga/src/front/spv/mod.rs
+@@ -1817,6 +1817,21 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+             module.upgrade_atomics(&self.upgrade_atomics)?;
+         }
+ 
++        // The entry point wrappers call their functions through the fake ids
++        // `!0, !1, ..`, one per entry point, and the patching below skips those
++        // ids. A real function with an id in that range would be skipped too
++        // and keep a stale handle into the old function arena.
++        let fake_ids_above = !(self.deferred_entry_points.len() as u32);
++        if let Some(id) = self
++            .lookup_function
++            .keys()
++            .copied()
++            .filter(|&id| id > fake_ids_above)
++            .min()
++        {
++            return Err(Error::InvalidId(id));
++        }
++
+         // Do entry point specific processing after all functions are parsed so that we can
+         // cull unused problematic builtins of gl_PerVertex.
+         for (ep, fun_id) in mem::take(&mut self.deferred_entry_points) {
+@@ -1830,7 +1845,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
+             nodes.reverse(); // we need dominated first
+             let mut functions = module.functions.take();
+             for fun_id in nodes {
+-                if fun_id > !(functions.len() as u32) {
++                // The fake ids are `!0..=!(entry_points.len() - 1)`. Comparing
++                // against the number of functions instead also skipped real
++                // functions with ids just below the fake ones, which kept stale
++                // handles that alias other functions in the new arena.
++                if fun_id > !(module.entry_points.len() as u32) {
+                     // skip all the fake IDs registered for the entry points
+                     continue;
+                 }
+diff --git a/naga/tests/naga/spirv_malformed.rs b/naga/tests/naga/spirv_malformed.rs
+index 6caef0e..e3e6421 100644
+--- a/naga/tests/naga/spirv_malformed.rs
++++ b/naga/tests/naga/spirv_malformed.rs
+@@ -757,3 +757,66 @@ fn composite_insert_into_huge_array() {
+         "{result:?}"
+     );
+ }
++
++/// A function whose id lies just below the fake ids that the entry point
++/// wrappers use (`!0, !1, ..`). The patching pass skipped every id above
++/// `!(number of functions)`, so this function was never moved into the new
++/// arena and its stale handle aliased another function's, which then picked up
++/// the wrong parameter sampling flags (an index out of bounds in
++/// `patch_statements`).
++#[test]
++fn function_id_just_below_fake_entry_point_ids() {
++    let (void, fn_void, caller, caller_label, call) = (1, 2, 3, 4, 5);
++    let (callee, callee_label) = (0xFFFF_FFFE, 6);
++    let mut w = HEADER.to_vec();
++    inst(&mut w, OP_CAPABILITY, &[1]); // Shader
++    inst(&mut w, OP_MEMORY_MODEL, &[0, 1]); // Logical GLSL450
++    inst(&mut w, OP_TYPE_VOID, &[void]);
++    inst(&mut w, OP_TYPE_FUNCTION, &[fn_void, void]);
++    inst(&mut w, OP_FUNCTION, &[void, callee, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[callee_label]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++    inst(&mut w, OP_FUNCTION, &[void, caller, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[caller_label]);
++    inst(&mut w, OP_FUNCTION_CALL, &[void, call, callee]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++
++    let module = parse(&w).unwrap();
++    assert_eq!(module.functions.len(), 2);
++    for (_, fun) in module.functions.iter() {
++        for statement in fun.body.iter() {
++            if let naga::Statement::Call { function, .. } = *statement {
++                assert!(module.functions.try_get(function).is_ok());
++            }
++        }
++    }
++}
++
++/// A function whose id is the fake id of an entry point wrapper (`!0` for the
++/// first entry point) is refused rather than confused with the wrapper.
++#[test]
++fn function_id_colliding_with_fake_entry_point_id() {
++    let (void, fn_void, main, main_label, call) = (1, 2, 3, 4, 5);
++    let (callee, callee_label) = (0xFFFF_FFFF, 6);
++    let mut w = module_start(5, main, &[]); // GLCompute
++    inst(&mut w, OP_EXECUTION_MODE, &[main, 17, 1, 1, 1]); // LocalSize 1 1 1
++    inst(&mut w, OP_TYPE_VOID, &[void]);
++    inst(&mut w, OP_TYPE_FUNCTION, &[fn_void, void]);
++    inst(&mut w, OP_FUNCTION, &[void, callee, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[callee_label]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++    inst(&mut w, OP_FUNCTION, &[void, main, 0, fn_void]);
++    inst(&mut w, OP_LABEL, &[main_label]);
++    inst(&mut w, OP_FUNCTION_CALL, &[void, call, callee]);
++    inst(&mut w, OP_RETURN, &[]);
++    inst(&mut w, OP_FUNCTION_END, &[]);
++
++    let result = parse(&w);
++    assert!(
++        matches!(result, Err(spv::Error::InvalidId(0xFFFF_FFFF))),
++        "{result:?}"
++    );
++}

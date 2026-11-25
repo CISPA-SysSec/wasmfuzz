@@ -1,5 +1,5 @@
 diff --git a/tools/cjxl_fuzzer.cc b/tools/cjxl_fuzzer.cc
-index 7243fc4..d9d6ef1 100644
+index 7243fc48..d9d6ef15 100644
 --- a/tools/cjxl_fuzzer.cc
 +++ b/tools/cjxl_fuzzer.cc
 @@ -71,7 +71,11 @@ bool EncodeJpegXl(const FuzzSpec& spec, JxlMemoryManager* memory_manager) {
@@ -15,7 +15,7 @@ index 7243fc4..d9d6ef1 100644
    JxlEncoderPtr enc_ptr = JxlEncoderMake(memory_manager);
    JxlEncoder* enc = enc_ptr.get();
 diff --git a/tools/djxl_fuzzer.cc b/tools/djxl_fuzzer.cc
-index 6f73dca..2389d32 100644
+index 6f73dca1..2389d328 100644
 --- a/tools/djxl_fuzzer.cc
 +++ b/tools/djxl_fuzzer.cc
 @@ -91,7 +91,11 @@ bool DecodeJpegXl(const uint8_t* jxl, size_t size,
@@ -31,7 +31,7 @@ index 6f73dca..2389d32 100644
  
    auto mt = std::make_unique<std::mt19937>(spec.random_seed);
 diff --git a/tools/streaming_fuzzer.cc b/tools/streaming_fuzzer.cc
-index de5df91..f6b0994 100644
+index dc61a9e5..82b9d976 100644
 --- a/tools/streaming_fuzzer.cc
 +++ b/tools/streaming_fuzzer.cc
 @@ -140,6 +140,9 @@ struct FuzzSpec {

@@ -1,0 +1,110 @@
+Subject: [PATCH] openpgp: Fix SubpacketLength::cmp for raw two-octet lengths above 8383
+
+A two-octet subpacket length encodes values up to 16319 (RFC 9580,
+"Signature Subpacket Specification"), but the optimal encoding
+(BodyLength rules) switches to five octets at 8384, so the parser
+keeps such lengths as `raw`.  Comparing
+a raw length with one that has no raw form serialized the latter into
+a buffer of the *raw* length's size: "Invalid buffer size, expected 5,
+got 2", and the `unwrap()` panicked.  Reached from Cert
+canonicalization (Signature::normalized_cmp), on any host.
+Serialize each length into a buffer of its own size; comparing exact
+encodings keeps the order consistent with the (None, None) case.
+
+Repro: repro/fix-subpacket-length-cmp.bin (cert_from_bytes,
+cert_parser_from_bytes, cert_parser_binary_from_bytes).
+---
+diff --git a/openpgp/src/packet/signature/subpacket.rs b/openpgp/src/packet/signature/subpacket.rs
+index da623778..1b837a16 100644
+--- a/openpgp/src/packet/signature/subpacket.rs
++++ b/openpgp/src/packet/signature/subpacket.rs
+@@ -2124,17 +2124,25 @@ impl Ord for SubpacketLength {
+             (Some(self_raw), Some(other_raw)) => {
+                 self_raw.cmp(other_raw)
+             },
++            // A raw encoding need not have the same length as the
++            // optimal encoding of the other length: a two-octet
++            // subpacket length can encode values up to 16319, but
++            // the optimal encoding switches to five octets at 8384.
++            // Serialize the other length into a buffer of its own
++            // size, not into one of `self`'s size.
+             (Some(self_raw), None) => {
+                 let mut other_raw = [0; 5];
+-                other.serialize_into(&mut other_raw[..self.serialized_len()])
+-                    .unwrap();
+-                self_raw[..].cmp(&other_raw[..self.serialized_len()])
++                let other_len = other.serialized_len();
++                other.serialize_into(&mut other_raw[..other_len])
++                    .expect("a subpacket length fits into five octets");
++                self_raw[..].cmp(&other_raw[..other_len])
+             },
+             (None, Some(other_raw)) => {
+                 let mut self_raw = [0; 5];
+-                self.serialize_into(&mut self_raw[..self.serialized_len()])
+-                    .unwrap();
+-                self_raw[..self.serialized_len()].cmp(&other_raw[..])
++                let self_len = self.serialized_len();
++                self.serialize_into(&mut self_raw[..self_len])
++                    .expect("a subpacket length fits into five octets");
++                self_raw[..self_len].cmp(&other_raw[..])
+             },
+         }
+     }
+@@ -8261,3 +8269,57 @@ fn issuer_default_v6() -> Result<()> {
+     assert_eq!(sig_.issuers().count(), 0);
+     Ok(())
+ }
++
++/// A two-octet subpacket length can encode values up to 16319, but
++/// the optimal encoding of lengths from 8384 on uses five octets.
++/// Comparing such a raw length with a length that has no raw
++/// encoding used to serialize the latter into a buffer sized for the
++/// former, and panicked.
++#[test]
++fn subpacket_length_cmp_raw_vs_optimal() {
++    // 0xe0 0x00 is the two-octet encoding of 8384.
++    let two = SubpacketLength::new(8384, Some(vec![0xe0, 0x00]));
++    let five = SubpacketLength::from(8384);
++    assert_eq!(five.serialized_len(), 5);
++    let one = SubpacketLength::from(1);
++
++    for (a, b) in [(&two, &five), (&two, &one), (&five, &one)] {
++        assert_eq!(a.cmp(b), b.cmp(a).reverse());
++        assert_ne!(a, b);
++    }
++    // Ordered by their serialized form.
++    assert!(one < two);
++    assert!(two < five);
++}
++
++/// The same, end to end: two otherwise identical signatures whose
++/// hashed areas differ only in the encoding of a subpacket's length.
++#[test]
++fn subpacket_area_cmp_raw_vs_optimal() -> Result<()> {
++    use crate::parse::Parse;
++
++    let value = vec![0x41u8; 8383];
++    let mut area = Vec::new();
++    // Two-octet encoding of 8384 (the tag plus 8383 octets).
++    area.extend_from_slice(&[0xe0, 0x00, 100]); // Private tag 100.
++    area.extend_from_slice(&value);
++    let mut area5 = Vec::new();
++    area5.extend_from_slice(&[0xff, 0x00, 0x00, 0x20, 0xc0, 100]);
++    area5.extend_from_slice(&value);
++
++    let sig = |area: &[u8]| -> Result<Signature> {
++        let mut body = vec![4, 0x00, 1, 8];
++        body.extend_from_slice(&(area.len() as u16).to_be_bytes());
++        body.extend_from_slice(area);
++        // No unhashed area, digest prefix, a one-bit RSA MPI.
++        body.extend_from_slice(&[0, 0, 0, 0, 0, 1, 1]);
++        // `Signature::from_bytes` parses the packet body.
++        Signature::from_bytes(&body)
++    };
++    let a = sig(&area)?;
++    let b = sig(&area5)?;
++    let _ = a.cmp(&b);
++    let _ = b.cmp(&a);
++    let _ = a.normalized_cmp(&b);
++    Ok(())
++}

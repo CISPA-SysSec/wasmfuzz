@@ -1,0 +1,60 @@
+Upstream: none found (GitLab search 2026-11-21).
+
+Limitor's consume, data_consume and data_consume_hard returned the inner reader's buffer cut at
+the limit, which the BufferedReader documentation allows (the returned buffer includes the
+consumed data and may extend past it). This patch cuts it to the consumed amount instead, and
+consume and data_consume_hard assert that the inner reader returned at least `amount` bytes. It
+does not fix a known panic: self.limit + amount is the limit before the call and cannot overflow,
+the slices stayed within the buffer, and a short buffer from the inner data_consume_hard, which
+was passed on before and then failed the assert in BufferedReader::steal, now fails the new
+assert. Callers see fewer bytes past the consumed data, so the patch changes behaviour; it is kept
+as its own patch for that reason and has no test. 645k distinct crash inputs collected by fuzzing
+the openpgp fuzz targets give the same panics with and without it (native x86_64 and i686 release
+builds).
+
+diff --git a/buffered-reader/src/limitor.rs b/buffered-reader/src/limitor.rs
+index a700ae70..44effcf4 100644
+--- a/buffered-reader/src/limitor.rs
++++ b/buffered-reader/src/limitor.rs
+@@ -88,17 +88,20 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Sync + Send> BufferedReader<C> for Li
+         assert!(amount as u64 <= self.limit);
+         self.limit -= amount as u64;
+         let data = self.reader.consume(amount);
+-        &data[..cmp::min(self.limit + amount as u64, data.len() as u64) as usize]
++        assert!(
++            data.len() >= amount,
++            "inner reader must return at least `amount` bytes from consume"
++        );
++        &data[..amount]
+     }
+ 
+     fn data_consume(&mut self, amount: usize) -> Result<&[u8], io::Error> {
+         let amount = cmp::min(amount as u64, self.limit) as usize;
+         let result = self.reader.data_consume(amount);
+         if let Ok(buffer) = result {
+-            let amount = cmp::min(amount, buffer.len());
+-            self.limit -= amount as u64;
+-            return Ok(&buffer[
+-                ..cmp::min(buffer.len() as u64, self.limit + amount as u64) as usize]);
++            let consumed = cmp::min(amount, buffer.len());
++            self.limit -= consumed as u64;
++            return Ok(&buffer[..consumed]);
+         }
+         result
+     }
+@@ -109,10 +112,12 @@ impl<T: BufferedReader<C>, C: fmt::Debug + Sync + Send> BufferedReader<C> for Li
+         }
+         let result = self.reader.data_consume_hard(amount);
+         if let Ok(buffer) = result {
+-            let amount = cmp::min(amount, buffer.len());
++            assert!(
++                buffer.len() >= amount,
++                "inner reader must return at least `amount` bytes from data_consume_hard"
++            );
+             self.limit -= amount as u64;
+-            return Ok(&buffer[
+-                ..cmp::min(buffer.len() as u64, self.limit + amount as u64) as usize]);
++            return Ok(&buffer[..amount]);
+         }
+         result
+     }

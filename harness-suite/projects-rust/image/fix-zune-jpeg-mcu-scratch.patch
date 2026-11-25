@@ -1,14 +1,45 @@
 Subject: [PATCH] zune-jpeg: size the upsampler scratch from the widest component
 
-Fixed upstream by etemesi254/zune-image#374 (36007420, "jpeg: fix scratch
-space for baseline and progressive upsampling"). It is in zune-jpeg
-0.5.16-rc1, but no stable release has it yet (0.5.15 is the latest). The
-`rchunks`/`worker.rs` guards here overlap the zune-image project's
-fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
+HV upsampling scratch was sized from components[0] only, so a component with
+a wider stride trips the upsample_hv assertion. The other hunks turn panics on
+the same malformed layouts into errors or skips: a progressive colorspace with
+more components than the SOF, an MCU row shorter than the vertical upsampler
+expects, and a 1x1 IDCT into a too-short output tail. Each was hit through
+image's JPEG decoder; the test added here decodes one input per hunk and
+fails without the fix (scalar and AVX2 paths).
 
+Upstream: the scratch sizing is fixed by etemesi254/zune-image#374 (36007420,
+"jpeg: fix scratch space for baseline and progressive upsampling"). zune-image
+main (2cdbbf5 and HEAD 692520a) decodes all four test inputs without
+panicking, but no release has that code: 0.5.15 is the latest stable, and
+0.5.16-rc3 (crates.io, 2026-10-19) still panics on the vertical upsample input
+(worker.rs:470). The `rchunks`/`worker.rs` guards here overlap the zune-image
+project's fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
+
+diff --git a/src/idct/scalar.rs b/src/idct/scalar.rs
+index 624e2c8..023b4c1 100644
+--- a/src/idct/scalar.rs
++++ b/src/idct/scalar.rs
+@@ -29,6 +29,14 @@ fn wm(a: i32, b: i32) -> i32 {
+ 
+ #[inline]
+ pub fn idct_int_1x1(in_vector: &mut [i32; 64], mut out_vector: &mut [i16], stride: usize) {
++    // `mcu` can pass an empty or too-short tail slice from `get_mut(idct_position..)`; skip writes
++    // rather than panicking (full IDCT already uses a temp-buffer fallback for short outputs).
++    let Some(min_out) = stride.checked_mul(7).and_then(|n| n.checked_add(8)) else {
++        return;
++    };
++    if out_vector.len() < min_out {
++        return;
++    }
+     let coeff = ((wa(wa(in_vector[0], 4), 1024) >> 3).clamp(0, 255)) as i16;
+ 
+     out_vector[..8].fill(coeff);
+diff --git a/src/mcu.rs b/src/mcu.rs
+index 98e6ca1..2a47d57 100644
 --- a/src/mcu.rs
 +++ b/src/mcu.rs
-@@ -331,7 +331,18 @@
+@@ -331,7 +331,18 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
  
          // Size of our output image(width*height)
          let is_hv = usize::from(self.is_interleaved);
@@ -28,7 +59,7 @@ fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
          let width = usize::from(self.info.width);
          let padded_width = calculate_padded_width(width, self.info.sample_ratio);
  
-@@ -580,7 +591,11 @@
+@@ -580,7 +591,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                                  component.width_stride * c2 + c3
                              };
  
@@ -41,7 +72,7 @@ fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
  
                              if len <= 1 {
                                  (self.idct_1x1_func)(tmp, idct_pos, component.width_stride);
-@@ -893,8 +893,13 @@
+@@ -893,8 +908,13 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                              * component.width_stride
                              * component.sample_ratio.sample();
  
@@ -57,9 +88,91 @@ fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
  
                          component
                              .first_row_upsample_dest
+@@ -955,3 +975,79 @@ enum McuContinuation {
+     InterScanMarker(Marker),
+     Terminate
+ }
++
++#[cfg(test)]
++mod malformed_tests {
++    use zune_core::bytestream::ZCursor;
++
++    use crate::JpegDecoder;
++
++    // HV upsampler scratch sized from component 0 only
++    const UPSAMPLE_HV_SCRATCH: &[u8] = &[
++        0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x61, 0x63, 0x61, 0x61, 0x61, 0x61, 0x61,
++        0x61, 0x61, 0x65, 0x61, 0x61, 0x61, 0x66, 0x61, 0x61, 0x61, 0x9e, 0x61, 0x61, 0x61,
++        0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++        0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++        0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x71, 0x61, 0x61, 0x61, 0x61, 0x61,
++        0x61, 0xff, 0xc2, 0x00, 0x0e, 0x08, 0x00, 0x01, 0x00, 0x01, 0x02, 0x01, 0x11, 0x00,
++        0x01, 0x22, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x3b, 0x00, 0x00, 0x11,
++    ];
++
++    // progressive colorspace with more components than the SOF
++    const PROGRESSIVE_COMPONENT_COUNT: &[u8] = &[
++        0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x61, 0x63, 0x61, 0x61, 0x61, 0x64, 0x61,
++        0x61, 0x61, 0x65, 0x61, 0x61, 0x61, 0x66, 0x61, 0x61, 0x61, 0x9e, 0x61, 0x61, 0x61,
++        0x61, 0x61, 0x61, 0x61, 0x69, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++        0x61, 0x61, 0x4c, 0x61, 0x61, 0x61, 0x6d, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++        0x61, 0x61, 0x61, 0x61, 0xc9, 0x61, 0x61, 0x61, 0x71, 0x61, 0x61, 0x61, 0x2e, 0x61,
++        0x61, 0xff, 0xc2, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00,
++        0xff, 0xee, 0x00, 0x0e, 0x41, 0x64, 0x6f, 0x62, 0x65, 0x00, 0xff, 0xff, 0xe0, 0x82,
++        0xdd, 0x02, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x18, 0x00, 0x80,
++    ];
++
++    // MCU row shorter than the vertical upsampler expects
++    const VERTICAL_UPSAMPLE_ROW: &[u8] = &[
++        0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0xff, 0xc2, 0x00, 0x14, 0x08, 0x00, 0x40, 0x00, 0x05, 0x04, 0x01, 0x11, 0x00,
++        0x00, 0x12, 0x00, 0x66, 0x11, 0x00, 0x01, 0x11, 0x00, 0xff, 0xee, 0x00, 0x0e, 0x41,
++        0x64, 0x6f, 0x62, 0x65, 0x00, 0x06, 0x00, 0x10, 0x00, 0x55, 0x01, 0xff, 0xda, 0x00,
++        0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00, 0x00, 0xff, 0x9d, 0x00, 0x04, 0x00, 0x01,
++        0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x1d, 0x00, 0x7f, 0x08, 0xd8, 0xff, 0x00, 0x00,
++        0x08, 0xce, 0xf9, 0xda, 0x00, 0x00, 0x00, 0x87, 0xff, 0x00, 0x45, 0x7f, 0xff, 0x00,
++        0x45,
++    ];
++
++    // 1x1 IDCT into a too-short output tail
++    const IDCT_1X1_TAIL: &[u8] = &[
++        0xff, 0xd8, 0xff, 0xc4, 0x00, 0x26, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x10, 0x01, 0x00, 0x00,
++        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
++        0xff, 0xc0, 0x00, 0x14, 0x08, 0x00, 0x01, 0x40, 0x00, 0x04, 0x01, 0x21, 0x00, 0x01,
++        0x14, 0x00, 0x01, 0x21, 0x00, 0x00, 0x42, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x17,
++        0x00, 0xf2, 0x01, 0xfe, 0x81, 0x10, 0xfb, 0x6c, 0xfe, 0x01, 0x01, 0x2c, 0x2c, 0x2c,
++        0x02, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xff, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x20, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++        0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xff,
++        0xff, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0xff, 0xda, 0x00, 0x0a, 0x02, 0x01, 0x00,
++        0x00, 0x00, 0x00, 0x3f, 0x00, 0x01, 0xff, 0xc2, 0x00, 0x0e, 0x08, 0x00, 0x00, 0x03,
++        0x04, 0x02, 0x1b, 0x11, 0x00, 0x01, 0x11, 0x00, 0xff, 0xdc, 0x00, 0x04, 0x00, 0x00,
++        0x5e, 0xff, 0x01, 0x00,
++    ];
++
++    #[test]
++    fn malformed_upsampling_inputs_do_not_panic() {
++        for data in [
++            UPSAMPLE_HV_SCRATCH,
++            PROGRESSIVE_COMPONENT_COUNT,
++            VERTICAL_UPSAMPLE_ROW,
++            IDCT_1X1_TAIL,
++        ] {
++            // An error is fine; panicking is not.
++            let _ = JpegDecoder::new(ZCursor::new(data)).decode();
++        }
++    }
++}
+diff --git a/src/mcu_prog.rs b/src/mcu_prog.rs
+index 6f4e1f6..e413b0c 100644
 --- a/src/mcu_prog.rs
 +++ b/src/mcu_prog.rs
-@@ -98,7 +98,18 @@
+@@ -98,7 +98,18 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
  
          mcu_width *= 64;
  
@@ -79,7 +192,7 @@ fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
              let comp = &self.components[i];
              let len = mcu_width * comp.vertical_sample * comp.horizontal_sample * mcu_height;
  
-@@ -502,7 +513,18 @@
+@@ -502,7 +513,18 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
  
          // Size of our output image(width*height)
          let is_hv = usize::from(self.is_interleaved);
@@ -99,9 +212,11 @@ fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
          let width = usize::from(self.info.width);
          let padded_width = calculate_padded_width(width, self.info.sample_ratio);
  
+diff --git a/src/upsampler/scalar.rs b/src/upsampler/scalar.rs
+index a94b824..470e6c1 100644
 --- a/src/upsampler/scalar.rs
 +++ b/src/upsampler/scalar.rs
-@@ -80,8 +80,17 @@
+@@ -80,8 +80,17 @@ pub fn upsample_hv(
  
      assert_eq!(input.len() * 4, output.len());
  
@@ -121,26 +236,11 @@ fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
  
  
      let mut t = [0];
---- a/src/idct/scalar.rs
-+++ b/src/idct/scalar.rs
-@@ -29,6 +29,14 @@
- 
- #[inline]
- pub fn idct_int_1x1(in_vector: &mut [i32; 64], mut out_vector: &mut [i16], stride: usize) {
-+    // `mcu` can pass an empty or too-short tail slice from `get_mut(idct_position..)`; skip writes
-+    // rather than panicking (full IDCT already uses a temp-buffer fallback for short outputs).
-+    let Some(min_out) = stride.checked_mul(7).and_then(|n| n.checked_add(8)) else {
-+        return;
-+    };
-+    if out_vector.len() < min_out {
-+        return;
-+    }
-     let coeff = ((wa(wa(in_vector[0], 4), 1024) >> 3).clamp(0, 255)) as i16;
- 
-     out_vector[..8].fill(coeff);
+diff --git a/src/worker.rs b/src/worker.rs
+index 83927d7..53ff9f0 100644
 --- a/src/worker.rs
 +++ b/src/worker.rs
-@@ -416,7 +416,12 @@
+@@ -416,7 +416,12 @@ pub(crate) fn upsample(
                  // get current row
                  let row = &component.row[..];
                  let row_up = &component.row_up[..];
@@ -154,7 +254,7 @@ fix-jpeg-{mcu,worker}-upsampling-bounds.patch.
                  (component.up_sampler)(row, row_up, row_down, upsampler_scratch_space, dest);
              }
  
-@@ -535,9 +540,11 @@
+@@ -535,9 +540,11 @@ pub(crate) fn upsample(
                  PS(cae): I can't add the image to the repo as it is nsfw, but can send if required
                  */
                  let length = component.first_row_upsample_dest.len();

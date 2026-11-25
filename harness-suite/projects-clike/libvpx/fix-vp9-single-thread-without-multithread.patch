@@ -1,0 +1,100 @@
+Decode VP9 single-threaded when built without thread support.
+
+init_decoder() (vp9/vp9_dx_iface.c) takes max_threads from cfg.threads even with
+CONFIG_MULTITHREAD=0. vpx_dec_fuzzer passes 1-64 threads, so frames with several tile columns
+take decode_tiles_mt() / decode_tiles_row_wise_mt(), whose workers then run one after another
+while the lf_sync / row-mt synchronization compiles to no-ops. With VP9D_SET_LOOP_FILTER_OPT
+the first tile worker loop-filters rows of tile columns that are not decoded yet: stale
+MODE_INFO trips assert(...) in get_uv_tx_size() (wasm Unreachable) or reads out of bounds in
+vp9_filter_block_plane_non420() (native ASan SEGV, vp9_loopfilter.c:1110). Without the option
+the interleaved loop filter rows give wrong output, and row-mt never finishes. Use one thread
+as VP8 does without CONFIG_MULTITHREAD. Adds DecodeAPI.Vp9TileThreadsLoopFilterOpt
+(test/decode_api_test.cc): it decodes an 89-byte corrupt keyframe with several tile columns
+with 1, 2, 4 and 34 threads and the loop filter option, and expects the same result each time.
+In a --disable-multithread build it aborts in get_uv_tx_size() without this change and passes
+with it; it also passes in a multi-threaded build. The existing VP9MultiThreaded/TestVectorTest
+tile vectors also fail (modes 0/1, MD5 mismatch) or hang (mode 2) in a --disable-multithread
+build and pass with this change.
+Not fixed upstream as of 1c8f28a1, nor at main 29b28a3e (2026-11-19).
+
+Upstream: none found (googlesource log since the pin checked on 2026-11-21; the issues.webmproject.org tracker has no public search API).
+
+diff --git a/test/decode_api_test.cc b/test/decode_api_test.cc
+index 1e70e81d4..57a884cf0 100644
+--- a/test/decode_api_test.cc
++++ b/test/decode_api_test.cc
+@@ -610,6 +610,53 @@ TEST(DecodeAPI, Buganizer499206650) {
+ 
+   EXPECT_EQ(vpx_codec_destroy(&dec), VPX_CODEC_OK);
+ }
++
++// Decodes |frame| with |threads| tile workers and the loop filter
++// optimization on; returns the result of vpx_codec_decode().
++vpx_codec_err_t DecodeVp9WithThreads(const uint8_t *frame, size_t size,
++                                     unsigned int threads) {
++  vpx_codec_ctx_t dec;
++  vpx_codec_dec_cfg_t cfg = { threads, 0, 0 };
++  EXPECT_EQ(vpx_codec_dec_init(&dec, vpx_codec_vp9_dx(), &cfg, 0),
++            VPX_CODEC_OK);
++  if (threads > 1) {
++    EXPECT_EQ(vpx_codec_control(&dec, VP9D_SET_LOOP_FILTER_OPT, 1),
++              VPX_CODEC_OK);
++  }
++  const vpx_codec_err_t res =
++      vpx_codec_decode(&dec, frame, static_cast<unsigned int>(size),
++                       /*user_priv=*/nullptr, /*deadline=*/0);
++  vpx_codec_iter_t it = nullptr;
++  while (vpx_codec_get_frame(&dec, &it)) {
++  }
++  EXPECT_EQ(vpx_codec_destroy(&dec), VPX_CODEC_OK);
++  return res;
++}
++
++// A corrupt keyframe with several tile columns, decoded with more than one
++// thread. In a build without CONFIG_MULTITHREAD the tile workers run one after
++// another, so the loop filter of the first worker used to filter rows of tile
++// columns that were not decoded yet (assertion in get_uv_tx_size(), or an out
++// of bounds read in vp9_filter_block_plane_non420()).
++TEST(DecodeAPI, Vp9TileThreadsLoopFilterOpt) {
++  static constexpr std::array<uint8_t, 89> frame = {
++    0xb1, 0xa4, 0xc1, 0xa1, 0x50, 0x00, 0xe1, 0x00, 0x10, 0x11, 0xc3, 0x20,
++    0x5a, 0x01, 0x20, 0x00, 0x00, 0x06, 0x00, 0x03, 0x60, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x0d, 0x00, 0x00, 0x08, 0x1f, 0xe0, 0x60, 0x7c, 0x61, 0x61,
++    0x61, 0x61, 0x62, 0x61, 0x61, 0x9e, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0xb1, 0xa4, 0xc1, 0xa1, 0x11, 0x00, 0xe1, 0x00,
++    0x10, 0x1a, 0x03, 0x60, 0x5b, 0x3d, 0x20, 0x00, 0x00, 0x02, 0x00, 0x03,
++    0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x65, 0x61,
++  };
++  const vpx_codec_err_t expected =
++      DecodeVp9WithThreads(frame.data(), frame.size(), 1);
++  for (unsigned int threads : { 2u, 4u, 34u }) {
++    EXPECT_EQ(DecodeVp9WithThreads(frame.data(), frame.size(), threads),
++              expected)
++        << "threads " << threads;
++  }
++}
+ #endif  // CONFIG_VP9_DECODER
+ 
+ TEST(DecodeAPI, HighBitDepthCapability) {
+diff --git a/vp9/vp9_dx_iface.c b/vp9/vp9_dx_iface.c
+index bad113595..87fd57112 100644
+--- a/vp9/vp9_dx_iface.c
++++ b/vp9/vp9_dx_iface.c
+@@ -270,7 +270,16 @@ static vpx_codec_err_t init_decoder(vpx_codec_alg_priv_t *ctx) {
+     set_error_detail(ctx, "Failed to allocate decoder");
+     return VPX_CODEC_MEM_ERROR;
+   }
++#if CONFIG_MULTITHREAD
+   ctx->pbi->max_threads = ctx->cfg.threads;
++#else
++  // Without thread support the tile and loop filter workers run one after
++  // another, which breaks the row synchronization the multi-threaded tile,
++  // row-mt and loop filter paths rely on: the loop filter reads tile columns
++  // that are not decoded yet and the row-mt workers wait forever. Decode
++  // single-threaded, as VP8 does.
++  ctx->pbi->max_threads = 1;
++#endif
+   ctx->pbi->inv_tile_order = ctx->invert_tile_order;
+ 
+   RANGE_CHECK(ctx, row_mt, 0, 1);

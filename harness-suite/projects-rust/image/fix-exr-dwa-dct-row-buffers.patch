@@ -1,0 +1,186 @@
+Subject: [PATCH] exr: buffer DWA DCT blocks one block row at a time
+
+decode_lossy_dct_group allocated `[[f32; 64]; 3]` (768 bytes) for every 8x8
+block of the chunk before decoding, also for single channels. For a 2-byte half
+channel that is 6 times the pixel data, and up to 48 times for a 1 pixel wide
+block, so a chunk within any sensible allocation limit (512 MiB) still asks
+for gigabytes. The coefficients are consumed in block row order anyway: decode,
+inverse-transform and write out one row of blocks at a time, like the C
+reference does with its row block buffers.
+
+The regression test is an integration test with a peak-counting allocator,
+registered in Cargo.toml because the published manifest disables autotests.
+
+Upstream: open PR johannesvollmer/exrs#310 (by Pixel-Minions, 2026-11-05) makes the same change (decode the lossy DCT one row of blocks at a time), pitched as a speedup; exr 1.74.3 does not have it.
+Drop this patch once #310 lands in a release the image pin uses.
+
+diff --git a/Cargo.toml b/Cargo.toml
+index e1f9562..59fdf7f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -158,6 +158,10 @@ path = "tests/fuzz.rs"
+ name = "roundtrip"
+ path = "tests/roundtrip.rs"
+ 
++[[test]]
++name = "dwa_lossy_memory"
++path = "tests/dwa_lossy_memory.rs"
++
+ [[bench]]
+ name = "dct"
+ path = "benches/dct.rs"
+diff --git a/src/compression/dwa/lossy_dct/mod.rs b/src/compression/dwa/lossy_dct/mod.rs
+index d1125e4..c55e7e8 100644
+--- a/src/compression/dwa/lossy_dct/mod.rs
++++ b/src/compression/dwa/lossy_dct/mod.rs
+@@ -349,13 +349,16 @@ fn decode_lossy_dct_group(
+     let blocks_y = (height + 7) / 8;
+     let block_count = blocks_x * blocks_y;
+ 
+-    // Buffer the whole group rather than one block at a time. That lets the
+-    // inverse DCT batch over every block that actually needs it, matching the
+-    // structure of the C reference.
+-    let mut dct_blocks: Vec<[[f32; 64]; 3]> = vec![[[0.0f32; 64]; 3]; block_count];
+-    let mut needs_inverse_dct: Vec<[bool; 3]> = vec![[false; 3]; block_count];
++    // Buffer one row of blocks rather than one block at a time. That lets the
++    // inverse DCT batch over every block of the row that actually needs it,
++    // matching the structure of the C reference, without allocating 768 bytes
++    // for each 8x8 block of the whole chunk up front.
++    let mut dct_blocks: Vec<[[f32; 64]; 3]> = vec![[[0.0f32; 64]; 3]; blocks_x];
++    let mut needs_inverse_dct: Vec<[bool; 3]> = vec![[false; 3]; blocks_x];
+ 
+     for block_y in 0..blocks_y {
++        needs_inverse_dct.fill([false; 3]);
++
+         for block_x in 0..blocks_x {
+             let block_index = block_y * blocks_x + block_x;
+ 
+@@ -370,7 +373,7 @@ fn decode_lossy_dct_group(
+ 
+                 let last_non_zero = un_rle_ac(ac, &mut zig_block)?;
+ 
+-                let dct_block = &mut dct_blocks[block_index][component];
++                let dct_block = &mut dct_blocks[block_x][component];
+                 if last_non_zero == 0 {
+                     // DC-only block: all AC coefficients are zero, so the
+                     // inverse DCT can fill the whole block from one value.
+@@ -378,24 +381,21 @@ fn decode_lossy_dct_group(
+                     discrete_cosine_transform::dct_inverse_8x8_dc_only(dct_block);
+                 } else {
+                     from_half_zigzag(&zig_block, dct_block);
+-                    needs_inverse_dct[block_index][component] = true;
++                    needs_inverse_dct[block_x][component] = true;
+                 }
+             }
+         }
+-    }
+ 
+-    discrete_cosine_transform::dct_inverse_8x8_batch(
+-        dct_blocks
+-            .iter_mut()
+-            .zip(needs_inverse_dct.iter())
+-            .flat_map(|(blocks, flags)| blocks.iter_mut().zip(flags.iter()))
+-            .filter_map(|(block, &needed)| needed.then_some(block)),
+-    );
++        discrete_cosine_transform::dct_inverse_8x8_batch(
++            dct_blocks
++                .iter_mut()
++                .zip(needs_inverse_dct.iter())
++                .flat_map(|(blocks, flags)| blocks.iter_mut().zip(flags.iter()))
++                .filter_map(|(block, &needed)| needed.then_some(block)),
++        );
+ 
+-    for block_y in 0..blocks_y {
+         for block_x in 0..blocks_x {
+-            let block_index = block_y * blocks_x + block_x;
+-            let dct_blocks = &mut dct_blocks[block_index];
++            let dct_blocks = &mut dct_blocks[block_x];
+ 
+             if components == 3 {
+                 for i in 0..64 {
+diff --git a/tests/dwa_lossy_memory.rs b/tests/dwa_lossy_memory.rs
+new file mode 100644
+index 0000000..64f86aa
+--- /dev/null
++++ b/tests/dwa_lossy_memory.rs
+@@ -0,0 +1,80 @@
++//! The lossy DWA decoder must not buffer the DCT coefficients of a whole
++//! chunk: at 768 bytes per 8x8 block, a narrow and tall tile of 2-byte samples
++//! would need about 48 times the memory of its pixels.
++
++use std::{
++    alloc::{GlobalAlloc, Layout, System},
++    sync::atomic::{AtomicUsize, Ordering},
++};
++
++use exr::{
++    math::RoundingMode,
++    meta::{attribute::LevelMode, header::Header, BlockDescription},
++    prelude::*,
++};
++use smallvec::smallvec;
++
++struct PeakAllocator;
++
++static CURRENT: AtomicUsize = AtomicUsize::new(0);
++static PEAK: AtomicUsize = AtomicUsize::new(0);
++
++unsafe impl GlobalAlloc for PeakAllocator {
++    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++        let pointer = System.alloc(layout);
++        if !pointer.is_null() {
++            let current = CURRENT.fetch_add(layout.size(), Ordering::SeqCst) + layout.size();
++            PEAK.fetch_max(current, Ordering::SeqCst);
++        }
++        pointer
++    }
++
++    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
++        System.dealloc(pointer, layout);
++        CURRENT.fetch_sub(layout.size(), Ordering::SeqCst);
++    }
++}
++
++#[global_allocator]
++static ALLOCATOR: PeakAllocator = PeakAllocator;
++
++#[test]
++fn lossy_dwa_memory_is_proportional_to_the_block() {
++    let height = 1 << 16;
++    let size = Vec2(1, height);
++    let tiles = TileDescription {
++        tile_size: size,
++        level_mode: LevelMode::Singular,
++        rounding_mode: RoundingMode::Down,
++    };
++
++    let compression = Compression::DWAA(None);
++    let channels = smallvec![ChannelDescription::named("Y", SampleType::F16)];
++    let header = Header::new("narrow".into(), size, channels).with_encoding(
++        compression,
++        BlockDescription::Tiles(tiles),
++        LineOrder::Increasing,
++    );
++
++    let rectangle = IntegerBounds::from_dimensions(size);
++    let raw: Vec<u8> = (0..height)
++        .flat_map(|y| f16::from_f32((y % 97) as f32 / 97.0).to_bits().to_ne_bytes())
++        .collect();
++
++    let compressed =
++        compression.compress_image_section_to_le(&header, raw.clone(), rectangle).unwrap();
++    assert!(compressed.len() < raw.len(), "block was not compressed");
++
++    let before = CURRENT.load(Ordering::SeqCst);
++    PEAK.store(before, Ordering::SeqCst);
++
++    let decoded =
++        compression.decompress_image_section_from_le(&header, compressed, rectangle, true).unwrap();
++
++    let peak = PEAK.load(Ordering::SeqCst) - before;
++    assert_eq!(decoded.len(), raw.len());
++    // The AC coefficients of the padded 8x8 blocks alone may take 8 times the
++    // pixel bytes for a 1 pixel wide tile, but buffering the DCT blocks of the
++    // whole chunk takes 48 times.
++    assert!(peak < 16 * raw.len(), "decoding a {} byte block allocated {} bytes", raw.len(), peak);
++}

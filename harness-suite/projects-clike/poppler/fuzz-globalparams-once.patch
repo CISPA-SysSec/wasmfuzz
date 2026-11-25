@@ -1,0 +1,138 @@
+Subject: [PATCH] fuzzing: Set up GlobalParams once in LLVMFuzzerInitialize
+
+Since a297ef25 ("oss-fuzz: Make tests faster") the cpp fuzzers create a
+GlobalParamsIniter per input so they can call setErrQuiet(true). It is
+the first initer, so every input builds and destroys GlobalParams (the
+NameToCharCode tables, resident unicode maps, encoding-dir scan): 3.4M +
+1.35M fuel, 11-32 % per input. GlobalParams only depends on the
+environment, so build it once in LLVMFuzzerInitialize and keep it, and
+run the base-14 font search there as well (without fonts installed it
+probed 14 fonts x 6 dirs on each input's first font lookup, 1.9M fuel;
+fix-setupbasefonts-repeated-search.patch makes later lookups skip it).
+document_private's own initer is still never the first one, so the
+error callback stays nullptr. What an input can still leave
+behind in GlobalParams: CMapCache keeps up to 4 Identity-H/V CMaps keyed
+by the font's collection, which a later input may get from the cache
+instead of building an equal one; the other caches only fill from
+poppler-data files. No related open upstream MRs or issues (gitlab
+poppler/poppler "fuzz", "GlobalParams", 2026-11-20; !1973 adds a jbig2
+fuzzer only). Drop when upstream initializes GlobalParams once.
+
+diff --git a/cpp/tests/fuzzing/doc_fuzzer.cc b/cpp/tests/fuzzing/doc_fuzzer.cc
+index 964ec28..afc2e2f 100644
+--- a/cpp/tests/fuzzing/doc_fuzzer.cc
++++ b/cpp/tests/fuzzing/doc_fuzzer.cc
+@@ -9,14 +9,22 @@
+ const size_t input_size = 32;
+ const size_t count = 6;
+ 
+-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
++extern "C" int LLVMFuzzerInitialize(int * /*argc*/, char *** /*argv*/)
+ {
+     initialize_poppler_data_dir();
++    // GlobalParams only depends on the environment: set it up once, not per input
++    static GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++    // and look for the base-14 font files now instead of on each input's first font lookup
++    globalParams->setupBaseFonts(nullptr);
++    return 0;
++}
++
++extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
++{
+     if (size < input_size * count) {
+         return 0;
+     }
+-    GlobalParamsIniter globalParamsIniter(nullptr);
+-    globalParams->setErrQuiet(true);
+     poppler::document *doc = poppler::document::load_from_raw_data((const char *)data, size);
+     if (!doc || doc->is_locked()) {
+         delete doc;
+diff --git a/cpp/tests/fuzzing/page_label_fuzzer.cc b/cpp/tests/fuzzing/page_label_fuzzer.cc
+index 9a6a005..949f018 100644
+--- a/cpp/tests/fuzzing/page_label_fuzzer.cc
++++ b/cpp/tests/fuzzing/page_label_fuzzer.cc
+@@ -10,15 +10,22 @@
+ 
+ const size_t input_size = 32;
+ 
+-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
++extern "C" int LLVMFuzzerInitialize(int * /*argc*/, char *** /*argv*/)
+ {
+     initialize_poppler_data_dir();
++    // GlobalParams only depends on the environment: set it up once, not per input
++    static GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++    // and look for the base-14 font files now instead of on each input's first font lookup
++    globalParams->setupBaseFonts(nullptr);
++    return 0;
++}
++
++extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
++{
+     if (size < input_size) {
+         return 0;
+     }
+-    GlobalParamsIniter globalParamsIniter(nullptr);
+-    globalParams->setErrQuiet(true);
+-
+     poppler::document *doc = poppler::document::load_from_raw_data((const char *)data, size);
+     if (!doc || doc->is_locked()) {
+         delete doc;
+diff --git a/cpp/tests/fuzzing/page_search_fuzzer.cc b/cpp/tests/fuzzing/page_search_fuzzer.cc
+index 87bc106..9b8b5d7 100644
+--- a/cpp/tests/fuzzing/page_search_fuzzer.cc
++++ b/cpp/tests/fuzzing/page_search_fuzzer.cc
+@@ -10,15 +10,22 @@
+ 
+ const size_t input_size = 32;
+ 
+-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
++extern "C" int LLVMFuzzerInitialize(int * /*argc*/, char *** /*argv*/)
+ {
+     initialize_poppler_data_dir();
++    // GlobalParams only depends on the environment: set it up once, not per input
++    static GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++    // and look for the base-14 font files now instead of on each input's first font lookup
++    globalParams->setupBaseFonts(nullptr);
++    return 0;
++}
++
++extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
++{
+     if (size < input_size) {
+         return 0;
+     }
+-    GlobalParamsIniter globalParamsIniter(nullptr);
+-    globalParams->setErrQuiet(true);
+-
+     poppler::document *doc = poppler::document::load_from_raw_data((const char *)data, size);
+     if (!doc || doc->is_locked()) {
+         delete doc;
+diff --git a/cpp/tests/fuzzing/pdf_fuzzer.cc b/cpp/tests/fuzzing/pdf_fuzzer.cc
+index 8480875..75b3bdc 100644
+--- a/cpp/tests/fuzzing/pdf_fuzzer.cc
++++ b/cpp/tests/fuzzing/pdf_fuzzer.cc
+@@ -7,12 +7,19 @@
+ #include <poppler-page-renderer.h>
+ #include <GlobalParams.h>
+ 
+-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
++extern "C" int LLVMFuzzerInitialize(int * /*argc*/, char *** /*argv*/)
+ {
+     initialize_poppler_data_dir();
+-    GlobalParamsIniter globalParamsIniter(nullptr);
++    // GlobalParams only depends on the environment: set it up once, not per input
++    static GlobalParamsIniter globalParamsIniter(nullptr);
+     globalParams->setErrQuiet(true);
++    // and look for the base-14 font files now instead of on each input's first font lookup
++    globalParams->setupBaseFonts(nullptr);
++    return 0;
++}
+ 
++extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
++{
+     poppler::document *doc = poppler::document::load_from_raw_data((const char *)data, size);
+     if (!doc || doc->is_locked()) {
+         delete doc;

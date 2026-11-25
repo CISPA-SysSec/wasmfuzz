@@ -1,5 +1,19 @@
+C port of the v0 demangler features that upstream added to src/v0.rs only:
+pattern types (`W<type><pat>`, rust-lang/rustc-demangle#81) and splatted fn
+arguments (`w` before a type, printed as `#[rustc_splat] `, #90 and #93). The
+C demangler printed such symbols undemangled while rustc_demangle demangles
+them, so the native_c differential fuzz target failed its assert_eq on e.g.
+`_RINvC5krate3fooWmRm1_m9_E`. The smoke_test cases added here fail without
+the demangle.c change.
+
+The legacy `$u..$` hunk mirrors the lowercase-hex check in src/legacy.rs. It
+does not change behaviour: try_parse_uint already rejects anything but
+lowercase hex digits.
+
+Upstream: none found; crates/native-c at upstream HEAD (4023665) lacks both.
+
 diff --git a/crates/native-c/src/demangle.c b/crates/native-c/src/demangle.c
-index e4eb399..553d6b2 100644
+index e4eb399..2526e7c 100644
 --- a/crates/native-c/src/demangle.c
 +++ b/crates/native-c/src/demangle.c
 @@ -111,6 +111,7 @@ struct printer {
@@ -10,7 +24,7 @@ index e4eb399..553d6b2 100644
  static NODISCARD overflow_status printer_print_const(struct printer *printer, bool in_value);
  
  static NODISCARD demangle_status try_parse_path(struct parser *parser) {
-@@ -1586,6 +1587,15 @@ static NODISCARD overflow_status printer_print_type_backref(struct printer *prin
+@@ -1586,6 +1587,14 @@ static NODISCARD overflow_status printer_print_type_backref(struct printer *prin
  }
  
  static NODISCARD overflow_status printer_print_type(struct printer *printer) {
@@ -18,15 +32,14 @@ index e4eb399..553d6b2 100644
 +    // FIXME(splat):
 +    // - for efficiency we might want to use a letter that can't occur in any type, rather than
 +    //   taking an unused letter
-+    // - splat isn't implemented for legacy mangling
 +    if (printer_eat(printer, 'w')) {
-+        PRINT_STR(printer, "#[splat] ");
++        PRINT_STR(printer, "#[rustc_splat] ");
 +    }
 +
      uint8_t tag;
      PARSE(printer, parser_ch, &tag);
  
-@@ -1662,6 +1672,11 @@ static NODISCARD overflow_status printer_print_type(struct printer *printer) {
+@@ -1662,6 +1671,11 @@ static NODISCARD overflow_status printer_print_type(struct printer *printer) {
      case 'B':
          PRINT(printer_print_backref(printer, printer_print_type_backref, NULL));
          break;
@@ -38,7 +51,7 @@ index e4eb399..553d6b2 100644
      default:
          // Go back to the tag, so `print_path` also sees it.
          if (printer->status == DemangleOk && /* safety */ printer->parser.next > 0) {
-@@ -1674,6 +1689,39 @@ static NODISCARD overflow_status printer_print_type(struct printer *printer) {
+@@ -1674,6 +1688,39 @@ static NODISCARD overflow_status printer_print_type(struct printer *printer) {
      return OverflowOk;
  }
  
@@ -78,7 +91,7 @@ index e4eb399..553d6b2 100644
  NODISCARD static demangle_status rust_demangle_legacy_demangle(const char *s, size_t s_len, struct demangle_legacy *res, const char **rest)
  {
      if (s_len > strlen(s)) {
-@@ -1846,8 +1894,17 @@ NODISCARD static overflow_status rust_demangle_legacy_display_demangle(struct de
+@@ -1846,8 +1893,17 @@ NODISCARD static overflow_status rust_demangle_legacy_display_demangle(struct de
                      if (escape_len > 1 && escape_start[0] == 'u') {
                          escape_start++;
                          escape_len--;
@@ -97,3 +110,19 @@ index e4eb399..553d6b2 100644
                              && val < UINT32_MAX
                              && validate_char((uint32_t)val))
                          {
+diff --git a/crates/native-c/src/lib.rs b/crates/native-c/src/lib.rs
+index 0c7d69b..ba74de1 100644
+--- a/crates/native-c/src/lib.rs
++++ b/crates/native-c/src/lib.rs
+@@ -91,6 +91,11 @@ fn smoke_test() {
+         "::<{*\"\\u{1f40a}\\u{1f988}\\u{1f986}\\u{1f42e} \\u{a7} \\u{1f436}\\u{1f452}\\u{2615}\\u{1f525} \\u{a7} \\u{1f9e1}\\u{1f49b}\\u{1f49a}\\u{1f499}\\u{1f49c}\"}>",
+         "::<{*\"\\u{1f40a}\\u{1f988}\\u{1f986}\\u{1f42e} \\u{a7} \\u{1f436}\\u{1f452}\\u{2615}\\u{1f525} \\u{a7} \\u{1f9e1}\\u{1f49b}\\u{1f49a}\\u{1f499}\\u{1f49c}\"}>"
+         ),
++        // splatted fn argument
++        ("_RINvC5krate3fooFwThmEEuE", "krate::foo::<fn(#[rustc_splat] (u8, u32))>", "krate::foo::<fn(#[rustc_splat] (u8, u32))>"),
++        // pattern types
++        ("_RINvC5krate3fooWmRm1_m9_E", "krate::foo::<u32 is 1u32..=9u32>", "krate::foo::<u32 is 1..=9>"),
++        ("_RINvC5krate3fooWmORm1_m2_Rm5_m6_EE", "krate::foo::<u32 is 1u32..=2u32 | 5u32..=6u32>", "krate::foo::<u32 is 1..=2 | 5..=6>"),
+         // invalid syntax via backref
+         ("_RNvNvB0_1x1y", "{invalid syntax}::x::y", "{invalid syntax}::x::y"),
+         // overflow via backref

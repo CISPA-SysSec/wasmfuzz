@@ -1,0 +1,49 @@
+Subject: [PATCH] adpcm: reject IMA QuickTime streams without 64 frames per block
+
+Open upstream as pdeljanov/Symphonia#567 (fixes #561), the same check in
+AdpcmDecoder::try_new. Drop this patch once #567 lands.
+
+diff --git a/symphonia-codec-adpcm/src/lib.rs b/symphonia-codec-adpcm/src/lib.rs
+index 5b44f88..e326de0 100644
+--- a/symphonia-codec-adpcm/src/lib.rs
++++ b/symphonia-codec-adpcm/src/lib.rs
+@@ -122,6 +122,11 @@ impl AdpcmDecoder {
+             _ => return unsupported_error("adpcm: codec is unsupported"),
+         };
+ 
++        // IMA4 blocks are always 34 bytes holding 64 frames per channel (codec_ima_qt::decode_mono).
++        if matches!(inner_decoder, InnerDecoder::AdpcmImaQT) && params.frames_per_block != Some(64) {
++            return decode_error("adpcm: ima qt requires 64 frames per block");
++        }
++
+         Ok(AdpcmDecoder {
+             params: params.clone(),
+             inner_decoder,
+@@ -242,3 +247,27 @@ impl RegisterableAudioDecoder for AdpcmDecoder {
+         ]
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use symphonia_core::audio::Channels;
++
++    fn ima_qt_params(frames_per_block: u64) -> AudioCodecParameters {
++        let mut params = AudioCodecParameters::new();
++        params
++            .for_codec(CODEC_ID_ADPCM_IMA_QT)
++            .with_sample_rate(44100)
++            .with_channels(Channels::Positioned(symphonia_core::audio::Position::FRONT_LEFT))
++            .with_max_frames_per_packet(frames_per_block)
++            .with_frames_per_block(frames_per_block);
++        params
++    }
++
++    #[test]
++    fn ima_qt_rejects_blocks_other_than_64_frames() {
++        let opts = AudioDecoderOptions::default();
++        assert!(AdpcmDecoder::try_new(&ima_qt_params(2), &opts).is_err());
++        assert!(AdpcmDecoder::try_new(&ima_qt_params(64), &opts).is_ok());
++    }
++}

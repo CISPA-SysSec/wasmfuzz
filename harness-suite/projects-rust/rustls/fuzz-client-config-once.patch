@@ -1,0 +1,64 @@
+Subject: [PATCH] fuzz: build the client fuzzer's ClientConfig once
+
+The client fuzzer built its ClientConfig (and parsed the verifier's trust
+anchor) for every input. Build it once from a static constructor and give
+every input a clone of it with a fresh session store and certificate
+compression cache: a connection writes to both (key exchange hints, TLS 1.2
+sessions, TLS 1.3 tickets, compressed certificates), and the clone otherwise
+shares only immutable state (provider, verifier, time provider, key log).
+Resumption stays as the builder sets it (Resumption::default()), so every
+input still starts with an empty store. No open upstream PR or issue touches
+fuzz/fuzzers/client.rs (gh search, 2026-11-20); rustls/rustls#2267 and #2294
+(merged) shaped these fuzzers.
+
+diff --git a/fuzz/fuzzers/client.rs b/fuzz/fuzzers/client.rs
+index 9ef3acf..609e194 100644
+--- a/fuzz/fuzzers/client.rs
++++ b/fuzz/fuzzers/client.rs
+@@ -4,18 +4,38 @@ extern crate libfuzzer_sys;
+ extern crate rustls;
+ 
+ use std::io;
+-use std::sync::Arc;
++use std::sync::{Arc, LazyLock};
+ 
++use rustls::client::Resumption;
++use rustls::compress::CompressionCache;
+ use rustls::{ClientConfig, VecInput};
+ 
++// Building the config (and parsing the verifier's trust anchor) does not depend on the
++// input, so do it once, from a static constructor (before the first input).
++static CONFIG: LazyLock<ClientConfig> = LazyLock::new(|| {
++    ClientConfig::builder(rustls_fuzzing_provider::PROVIDER.into())
++        .dangerous()
++        .with_custom_certificate_verifier(rustls_fuzzing_provider::server_verifier())
++        .with_no_client_auth()
++        .unwrap()
++});
++
++#[used]
++#[unsafe(link_section = ".init_array")]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        LazyLock::force(&CONFIG);
++    }
++    init
++};
++
+ fuzz_target!(|data: &[u8]| {
+-    let config = Arc::new(
+-        ClientConfig::builder(rustls_fuzzing_provider::PROVIDER.into())
+-            .dangerous()
+-            .with_custom_certificate_verifier(rustls_fuzzing_provider::server_verifier())
+-            .with_no_client_auth()
+-            .unwrap(),
+-    );
++    // A connection writes to the session store (key exchange hints, sessions, tickets) and
++    // the certificate compression cache, so every input gets fresh ones, as built above.
++    let mut config = CONFIG.clone();
++    config.resumption = Resumption::default();
++    config.cert_compression_cache = Arc::new(CompressionCache::default());
++    let config = Arc::new(config);
+     let hostname = "localhost".try_into().unwrap();
+     let mut client = config
+         .connect(hostname)

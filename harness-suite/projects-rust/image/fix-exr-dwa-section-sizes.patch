@@ -1,0 +1,143 @@
+Subject: [PATCH] exr: validate DWA section sizes against the block
+
+The DWA chunk header declares the uncompressed sizes of its UNKNOWN and RLE
+sections and the AC/DC coefficient counts. They are used directly as zlib
+output size hints (allocated up front), as Huffman output capacities and as
+RLE output sizes, so a tiny chunk can request gigabytes or overflow the
+capacity computation. The C implementation (DwaCompressor_uncompress and
+DwaCompressor_initializeBuffers in OpenEXRCore) rejects counters that cannot
+belong to the block; do the same before decoding any section: unknown and RLE
+raw sizes must fit the block, RLE sizes at most twice the RLE channel bytes,
+and the AC/DC counts at most 63 resp. 1 per 8x8 block of the lossy channels.
+
+Upstream: open issue johannesvollmer/exrs#293 (by joseph-wardle, 2026-10-21) asks for the same validation of DWA section sizes; PR #301 (merged 2026-11-09, unreleased) covers only the zlib sections.
+The AC/RLE counter bounds in this patch are not upstream yet.
+
+diff --git a/src/compression/dwa/mod.rs b/src/compression/dwa/mod.rs
+index d217c58..117c34c 100644
+--- a/src/compression/dwa/mod.rs
++++ b/src/compression/dwa/mod.rs
+@@ -227,6 +227,67 @@ pub fn compress(
+     Ok(out)
+ }
+ 
++/// Reject section sizes that cannot belong to a block of this size before
++/// anything is allocated for them, mirroring the checks of the C decoder
++/// ("DwaCompressor_uncompress" and "DwaCompressor_initializeBuffers").
++/// The counters come straight from the file, and are used as allocation sizes.
++fn validate_section_sizes(
++    header: &DwaHeader,
++    channel_infos: &[ChannelInfo],
++    expected_byte_size: usize,
++) -> Result<()> {
++    let invalid = || Error::invalid("DWA section size does not match block size");
++
++    let mut max_unknown_size = 0_usize;
++    let mut max_rle_size = 0_usize;
++    let mut lossy_block_count = 0_usize;
++
++    for info in channel_infos {
++        let channel_bytes = info
++            .width
++            .checked_mul(info.height)
++            .and_then(|samples| samples.checked_mul(info.bytes_per_sample))
++            .ok_or_else(invalid)?;
++
++        let (total, add) = match info.scheme {
++            CompressorScheme::Unknown => (&mut max_unknown_size, channel_bytes),
++            // RLE, if gone horribly wrong, could double the size of the source data
++            CompressorScheme::Rle => {
++                (&mut max_rle_size, channel_bytes.checked_mul(2).ok_or_else(invalid)?)
++            }
++            CompressorScheme::LossyDct => {
++                let blocks = info
++                    .width
++                    .div_ceil(8)
++                    .checked_mul(info.height.div_ceil(8))
++                    .ok_or_else(invalid)?;
++                (&mut lossy_block_count, blocks)
++            }
++        };
++
++        *total = total.checked_add(add).ok_or_else(invalid)?;
++    }
++
++    let max_ac_count = lossy_block_count.checked_mul(63).ok_or_else(invalid)?;
++
++    let raw_sizes_fit = header
++        .unknown_uncompressed_size
++        .checked_add(header.rle_raw_size)
++        .is_some_and(|raw_size| raw_size <= expected_byte_size);
++
++    if !raw_sizes_fit
++        || header.unknown_uncompressed_size > max_unknown_size
++        || header.rle_raw_size > max_rle_size
++        || header.rle_uncompressed_size > max_rle_size
++        || header.ac_count > max_ac_count
++        || header.dc_count > lossy_block_count
++    {
++        return Err(invalid());
++    }
++
++    Ok(())
++}
++
+ pub fn decompress(
+     channels: &ChannelList,
+     compressed_le: ByteVec,
+@@ -257,6 +318,7 @@ pub fn decompress(
+     };
+ 
+     let (channel_infos, csc_groups) = classify_channels(channels, rectangle, &rules);
++    validate_section_sizes(&header, &channel_infos, expected_byte_size)?;
+ 
+     if channel_infos.iter().any(|info| {
+         info.scheme == CompressorScheme::LossyDct && info.sample_type == SampleType::U32
+diff --git a/src/compression/dwa/tests.rs b/src/compression/dwa/tests.rs
+index 9346ca2..0eb8c8a 100644
+--- a/src/compression/dwa/tests.rs
++++ b/src/compression/dwa/tests.rs
+@@ -60,3 +60,43 @@ fn compress_decompress_rgb_lossy_chunk_is_valid() {
+     assert_eq!(decoded.len(), raw.len());
+     assert!(decoded.iter().any(|&byte| byte != 0));
+ }
++
++/// The section sizes in the chunk header are allocation sizes.
++/// Values that cannot belong to the block must be rejected before
++/// any memory is reserved for them.
++#[test]
++fn decompress_rejects_section_sizes_larger_than_the_block() {
++    // offsets of the little-endian u64 counters in the DWA chunk header
++    const UNKNOWN_UNCOMPRESSED_SIZE: usize = 8;
++    const RLE_UNCOMPRESSED_SIZE: usize = 48;
++    const RLE_RAW_SIZE: usize = 56;
++    const AC_COUNT: usize = 64;
++    const DC_COUNT: usize = 72;
++
++    let channels = ChannelList::new(smallvec![
++        ChannelDescription::named(Text::from("B"), SampleType::F16),
++        ChannelDescription::named(Text::from("G"), SampleType::F16),
++        ChannelDescription::named(Text::from("R"), SampleType::F16),
++        ChannelDescription::named(Text::from("A"), SampleType::F16),
++        ChannelDescription::named(Text::from("Z"), SampleType::F32),
++    ]);
++    let rectangle = bounds(9, 9);
++    let byte_size = 9 * 9 * (4 * 2 + 4);
++    let raw: Vec<u8> = (0..byte_size).map(|index| (index % 7) as u8).collect();
++
++    let compressed = compress(&channels, raw, rectangle, Some(45.0)).unwrap();
++    assert!(decompress(&channels, compressed.clone(), rectangle, byte_size, true).is_ok());
++
++    for counter in
++        [UNKNOWN_UNCOMPRESSED_SIZE, RLE_UNCOMPRESSED_SIZE, RLE_RAW_SIZE, AC_COUNT, DC_COUNT]
++    {
++        let mut tampered = compressed.clone();
++        tampered[counter..counter + 8].copy_from_slice(&(1_u64 << 40).to_le_bytes());
++
++        assert!(
++            decompress(&channels, tampered, rectangle, byte_size, true).is_err(),
++            "counter at offset {} was not validated",
++            counter
++        );
++    }
++}

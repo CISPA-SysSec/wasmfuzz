@@ -1,0 +1,23 @@
+Subject: [PATCH] gix-command: fuzz: don't Debug-format the prepared Command
+
+The prepare fuzzer formatted each of the six std::process::Command values
+it builds per input with `format!("{command:?}")`. That runs std's
+Command/OsString Debug code (escape_debug per character), not gix-command,
+and was most of the time per input. Pass the Result to black_box instead,
+so the Command is still built and observed. No assertion depended on the
+string. No open upstream PR or issue touches gix-command/fuzz (gh search,
+2026-11-20).
+
+diff --git a/gix-command/fuzz/fuzz_targets/prepare.rs b/gix-command/fuzz/fuzz_targets/prepare.rs
+index d038a06..5ea7e2c 100644
+--- a/gix-command/fuzz/fuzz_targets/prepare.rs
++++ b/gix-command/fuzz/fuzz_targets/prepare.rs
+@@ -13,7 +13,7 @@ fn inspect_prepare(command: &str) {
+         gix_command::prepare(command).with_shell().with_quoted_command(),
+     ] {
+         let command = std::process::Command::try_from(prep);
+-        _ = black_box(format!("{command:?}"));
++        _ = black_box(command);
+     }
+ }
+ 

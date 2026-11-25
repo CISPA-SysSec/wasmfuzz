@@ -22,11 +22,15 @@ ninja -C build
 
 # libyuv (C++), placed where sys/libyuv-sys/build.rs looks (libyuv/build/libyuv.a).
 cd "$PROJECT/repo/sys/libyuv-sys/libyuv"
+# libyuv HEAD's CMakeLists prepends -msimd128 -mrelaxed-simd on wasm; wasmfuzz
+# has no SIMD support, so turn both back off and drop the wasm SIMD row kernels.
 cmake -G Ninja -B build \
     -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_FLAGS="$CFLAGS" \
-    -DCMAKE_CXX_FLAGS="$CXXFLAGS"
+    -DLIBYUV_DISABLE_WASMSIMD=ON \
+    -DLIBYUV_DISABLE_RELAXEDSIMD=ON \
+    -DCMAKE_C_FLAGS="$CFLAGS -mno-simd128 -mno-relaxed-simd" \
+    -DCMAKE_CXX_FLAGS="$CXXFLAGS -mno-simd128 -mno-relaxed-simd"
 ninja -C build yuv
 
 # bindgen (dav1d-sys / libyuv-sys build scripts) parses the C headers for the

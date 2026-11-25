@@ -1,0 +1,161 @@
+Hints::readTables() allocates a std::vector<char> of hintsLength +
+hintsLength2, the lengths the linearization dictionary names in /H, before
+it reads the hint tables from the file. Nothing bounds them: a ~1 KB file
+with /H [offset 2000000000] makes it zero-fill a 2 GB buffer (bad_alloc
+abort on the 512 MB wasm heap, 2 GB RSS natively), only for the read to run
+into EOF a few bytes later. PDFDoc::getPage() reaches it through
+checkLinearization() for any document with a /Linearized dictionary.
+
+Refuse hint table lengths larger than the file before allocating: such a
+table cannot be read from it (the substream ends at the end of the base
+stream), so this changes no outcome, only skips the allocation. Regression
+test cpp/tests/poppler-hints-length-test.cpp fails every operator new above
+256 MB.
+
+Not fixed upstream as of d50f45b.
+Upstream: none found (poppler/poppler issues and open MRs searched for
+Hints, hintsLength).
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index df493dbd5..3f71b67cb 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -42,6 +42,10 @@ cpp_add_simpletest(poppler-masked-image-lookup-test poppler-masked-image-lookup-
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-masked-image-lookup-test COMMAND poppler-masked-image-lookup-test)
+ endif()
++cpp_add_simpletest(poppler-hints-length-test poppler-hints-length-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-hints-length-test COMMAND poppler-hints-length-test)
++endif()
+ 
+ if(ENABLE_FUZZER)
+   cpp_add_simpletest(doc_fuzzer ./fuzzing/doc_fuzzer.cc)
+diff --git a/cpp/tests/poppler-hints-length-test.cpp b/cpp/tests/poppler-hints-length-test.cpp
+new file mode 100644
+index 000000000..d13bdfea2
+--- /dev/null
++++ b/cpp/tests/poppler-hints-length-test.cpp
+@@ -0,0 +1,102 @@
++/*
++ * Regression test: Hints::readTables() allocated a buffer of the hint table
++ * lengths the linearization dictionary names (/H [offset length]) before
++ * reading the tables from the file, so a 1 KB document could ask for a 2 GB
++ * (zero-filled) buffer. Lengths the file cannot hold are refused up front now.
++ * Every operator new larger than 256 MB fails in this test.
++ */
++
++#include <GlobalParams.h>
++#include <Object.h>
++#include <PDFDoc.h>
++#include <Stream.h>
++
++#include <cstdio>
++#include <cstdlib>
++#include <iostream>
++#include <memory>
++#include <string>
++#include <vector>
++
++static const size_t allocLimit = 256u << 20;
++
++void *operator new(size_t size)
++{
++    if (size > allocLimit) {
++        fprintf(stderr, "  FAIL: allocation of %zu bytes\n", size);
++        std::_Exit(1);
++    }
++    if (void *p = std::malloc(size ? size : 1)) {
++        return p;
++    }
++    std::abort();
++}
++
++void operator delete(void *p) noexcept
++{
++    std::free(p);
++}
++
++void operator delete(void *p, size_t) noexcept
++{
++    std::free(p);
++}
++
++static std::string build_pdf()
++{
++    // the linearization dictionary must be the first object and /L the file length
++    const std::string linTemplate = "<< /Linearized 1 /L %010zu /H [ 400 2000000000 ] /O 3 /E 400 /N 1 /T 400 >>";
++    const std::vector<std::string> objs = {
++        "", // the linearization dictionary, filled in below
++        "<< /Type /Catalog /Pages 3 0 R >>",
++        "<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
++        "<< /Type /Page /Parent 3 0 R /MediaBox [0 0 10 10] >>",
++    };
++    for (size_t length = 0;;) {
++        char lin[128];
++        snprintf(lin, sizeof(lin), linTemplate.c_str(), length);
++        std::string pdf = "%PDF-1.7\n";
++        std::vector<size_t> offsets;
++        for (size_t i = 0; i < objs.size(); ++i) {
++            offsets.push_back(pdf.size());
++            pdf += std::to_string(i + 1) + " 0 obj\n" + (i == 0 ? std::string(lin) : objs[i]) + "\nendobj\n";
++        }
++        const size_t xrefOffset = pdf.size();
++        pdf += "xref\n0 " + std::to_string(objs.size() + 1) + "\n0000000000 65535 f \n";
++        for (size_t off : offsets) {
++            char entry[32];
++            snprintf(entry, sizeof(entry), "%010zu 00000 n \n", off);
++            pdf += entry;
++        }
++        pdf += "trailer\n<< /Size " + std::to_string(objs.size() + 1) + " /Root 2 0 R >>\nstartxref\n" + std::to_string(xrefOffset) + "\n%%EOF\n";
++        if (pdf.size() == length) {
++            return pdf;
++        }
++        length = pdf.size();
++    }
++}
++
++int main()
++{
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    const std::string pdf = build_pdf();
++    {
++        PDFDoc doc(std::make_unique<MemStream>(pdf.data(), 0, pdf.size(), Object::null()));
++        if (!doc.isOk()) {
++            std::cerr << "failed to load the test document\n";
++            return 1;
++        }
++        if (!doc.isLinearized()) {
++            std::cerr << "  FAIL: test document is not linearized\n";
++            return 1;
++        }
++        if (doc.checkLinearization()) {
++            std::cerr << "  FAIL: hint tables past the end of the file accepted\n";
++            return 1;
++        }
++    }
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/poppler/Hints.cc b/poppler/Hints.cc
+index ecf5eeea3..4292c57b6 100644
+--- a/poppler/Hints.cc
++++ b/poppler/Hints.cc
+@@ -189,6 +189,15 @@ void Hints::readTables(BaseStream *str, Linearization *linearization, XRef *xref
+         return;
+     }
+ 
++    // Both tables are read from the file itself: a length the file cannot hold
++    // runs into EOF below anyway, so don't allocate a buffer for it first
++    // (the linearization dictionary can ask for up to 4 GB here).
++    if (hintsLength > str->getLength() || hintsLength2 > str->getLength()) {
++        error(errSyntaxWarning, -1, "Hints table length in linearization table exceeds the file size");
++        ok = false;
++        return;
++    }
++
+     std::vector<char> buf(bufLength);
+     char *p = buf.data();
+ 

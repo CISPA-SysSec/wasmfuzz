@@ -1,0 +1,27 @@
+Subject: [PATCH] streaming_fuzzer: Size images by the actual group dimension
+
+FromData() bounds the image area assuming 256x256 groups, but the spec can
+set MODULAR_GROUP_SIZE up to 3 (1024x1024 groups). The decoder allocates
+whole groups (plus borders) per channel, so e.g. a 65536x1 image with group
+size 3 needs more than 1 GiB and runs into the tracking memory manager's
+limit (also on 64-bit). Round to the group dimension the encoder will use.
+---
+diff --git a/tools/streaming_fuzzer.cc b/tools/streaming_fuzzer.cc
+index 82b9d976..56f00301 100644
+--- a/tools/streaming_fuzzer.cc
++++ b/tools/streaming_fuzzer.cc
+@@ -171,7 +171,13 @@ struct FuzzSpec {
+     if (modular && slow_predictor) max_size /= 2;
+     if (use_noise || use_photon_noise) max_size /= 1.75;
+     if (sizeof(size_t) == 4) max_size /= 1.5;
+-    constexpr size_t group_dim = 256;
++    // The decoder allocates whole groups, so size the image in units of the
++    // group dimension the encoder will use (128 << shift, default 256).
++    Check(spec.int_options[17].flag ==
++          JXL_ENC_FRAME_SETTING_MODULAR_GROUP_SIZE);
++    int group_size_shift = spec.int_options[17].value;
++    size_t group_dim =
++        group_size_shift < 0 ? 256 : size_t{128} << group_size_shift;
+     uint64_t in_mem_xsize = RoundUpTo(spec.xsize, group_dim);
+     if (in_mem_xsize * spec.ysize > max_size) {
+       spec.ysize = max_size / in_mem_xsize;

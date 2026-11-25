@@ -1,0 +1,72 @@
+Subject: [PATCH] openpgp: Allow any number of signature groups when hashing a CSF message
+
+`Cookie::hash_update_csf` asserted `ngroups == 1 || ngroups == 2`
+(relaxed earlier for csf_sig_group_count_assertion_failure).  Every
+One-Pass-Signature packet with the last flag set pushes a group, so a
+signature block of a cleartext signed message can push any number
+before the message grammar rejects it.  CSF data is only ever hashed
+into the first group, so only require that one exists.
+
+Repro: repro/fix-csf-sig-group-count.txt (csf_verify_from_bytes,
+inline_verify_from_bytes).  The patch adds it as test data.
+---
+diff --git a/openpgp/src/parse/hashed_reader.rs b/openpgp/src/parse/hashed_reader.rs
+index d97ebfc2..d7bf717c 100644
+--- a/openpgp/src/parse/hashed_reader.rs
++++ b/openpgp/src/parse/hashed_reader.rs
+@@ -351,8 +351,11 @@ impl Cookie {
+         // be violated if there are One-Pass-Signature packets in the
+         // signature block.  This doesn't last long though: the
+         // message parser will reject the message because it doesn't
+-        // adhere to the grammar.
+-        assert!(ngroups == 1 || ngroups == /* momentarily */ 2);
++        // adhere to the grammar.  Each One-Pass-Signature packet
++        // with the last flag set pushes a group, so there can be
++        // any number of them.  The data is only ever hashed into
++        // the first group.
++        assert!(ngroups >= 1);
+ 
+         tracer!(TRACE, "Cookie::hash_update_csf", level);
+         t!("Cleartext Signature Framework message");
+diff --git a/openpgp/src/parse/stream.rs b/openpgp/src/parse/stream.rs
+index 82643fd8..26eea970 100644
+--- a/openpgp/src/parse/stream.rs
++++ b/openpgp/src/parse/stream.rs
+@@ -4251,6 +4251,27 @@ xHUDBRY0WIQ+50WENDPP";
+         Ok(())
+     }
+ 
++    /// Like `csf_sig_group_count_assertion_failure`, but the
++    /// signature block pushes three signature groups, which tripped
++    /// the relaxed assertion `ngroups == 1 || ngroups == 2` in
++    /// `Cookie::hash_update_csf`.  (Minimized fuzzer input.)
++    #[test]
++    fn csf_sig_group_count_assertion_failure_3() -> Result<()> {
++        let p = P::new();
++        let m = crate::tests::message("csf-sig-group-count-3.txt");
++
++        let mut h = VHelper::new(0, 0, 0, 0, true, vec![
++            Cert::from_bytes(crate::tests::key("testy.pgp"))?,
++        ]);
++        h.error_out = false;
++        if let Ok(mut v) = VerifierBuilder::from_bytes(m)?
++            .with_policy(&p, None, h)
++        {
++            let _ = io::copy(&mut v, &mut io::sink());
++        }
++        Ok(())
++    }
++
+     /// Tests that the message structure is checked at the end of
+     /// parsing the packet stream.
+     #[test]
+diff --git a/openpgp/tests/data/messages/csf-sig-group-count-3.txt b/openpgp/tests/data/messages/csf-sig-group-count-3.txt
+new file mode 100644
+index 00000000..a42085ea
+--- /dev/null
++++ b/openpgp/tests/data/messages/csf-sig-group-count-3.txt
+@@ -0,0 +1,3 @@
++-----BEGIN PGP SIGNED MESSAGE-----
++---BEGIN PGP SIGNATURE
++igAAARAGAAAAAAAAehoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAF4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPiIhBgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIoAAAD6BgAAAAAAADQeAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAbiIhBgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAASgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIoAAACvBgAAAAAAAC0bAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAABtIiEGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAA===AAAAEND PGP SIGNATURE
+\ No newline at end of file

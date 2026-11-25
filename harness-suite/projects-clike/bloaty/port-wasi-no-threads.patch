@@ -1,0 +1,51 @@
+diff --git a/src/bloaty.cc b/src/bloaty.cc
+index d257cec..0fae6bc 100644
+--- a/src/bloaty.cc
++++ b/src/bloaty.cc
+@@ -2079,25 +2079,34 @@ void Bloaty::ScanAndRollupFiles(const std::vector<std::string>& filenames,
+     regex = std::make_unique<ReImpl>(options_.source_filter());
+   }
+ 
++  auto worker = [this, &index, &filenames](PerThreadData* data) {
++    try {
++      int j;
++      while (index.TryGetNext(&j)) {
++        ScanAndRollupFile(filenames[j], &data->rollup, &data->build_ids);
++      }
++    } catch (const bloaty::Error& e) {
++      index.Abort(e.what());
++    }
++  };
++
+   for (int i = 0; i < num_threads; i++) {
+     thread_data[i].rollup.SetFilterRegex(regex.get());
+ 
+-    threads[i] = std::thread(
+-        [this, &index, &filenames](PerThreadData* data) {
+-          try {
+-            int j;
+-            while (index.TryGetNext(&j)) {
+-              ScanAndRollupFile(filenames[j], &data->rollup, &data->build_ids);
+-            }
+-          } catch (const bloaty::Error& e) {
+-            index.Abort(e.what());
+-          }
+-        },
+-        &thread_data[i]);
++#ifdef __wasi__
++    // WASI has no threads: std::thread's constructor fails (pthread_create
++    // returns ENOTSUP) and aborts.  Run each worker inline instead; the first
++    // one drains the whole index, so the result matches the threaded version.
++    worker(&thread_data[i]);
++#else
++    threads[i] = std::thread(worker, &thread_data[i]);
++#endif
+   }
+ 
+   for (int i = 0; i < num_threads; i++) {
++#ifndef __wasi__
+     threads[i].join();
++#endif
+     PerThreadData* data = &thread_data[i];
+     if (i == 0) {
+       *rollup = std::move(data->rollup);

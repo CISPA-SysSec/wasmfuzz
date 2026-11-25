@@ -1,0 +1,127 @@
+Saturate out-of-range coordinates in splashFloor()/splashCeil().
+
+Device coordinates outside the int range (e.g. a stroke under
+"1 1000000 0 792 1 3 cm") reach splashFloor()/splashCeil(), whose generic
+implementations then do an undefined double -> int conversion (UBSan:
+"SplashMath.h:78:29: runtime error: -4.85405e+11 is outside the range of
+representable values of type 'int'", from Splash::pathAllOutside() <
+fillWithPattern() < strokeWide()). x86-64 yields INT_MIN, wasm saturates.
+Saturate explicitly (NaN -> INT_MIN). With INT_MAX now possible on every host,
+also keep the "+ 1" in SplashClip::testRect()/testSpan() and in
+SplashXPathScanner::addIntersection() from overflowing, and return early from
+Splash::drawSpan() when clipping leaves an empty span, instead of computing a
+pipe position for an out-of-range x0 (Splash.cc:1288 "4 * 2147483647").
+
+No regression test: no input found that fails without the fix other than
+under UBSan. x86-64 converts out-of-range doubles to INT_MIN and wasm32
+saturates, and the repro renders without a fault in the unfixed wasm32 builds
+of all four fuzz targets; a native ASan+UBSan build reports only the
+SplashMath.h conversion above (poppler-pdf, poppler-page_search). The patch
+removes undefined behaviour on these paths.
+
+Not fixed upstream as of 9182fd5.
+Upstream: open umbrella issue poppler/poppler#1764 (by LingMaple, 2026-07-20) covers float-to-int overflows from untrusted doubles; it lists other sites, not Splash::drawSpan or SplashClip::testRect/testSpan.
+
+diff --git a/splash/Splash.cc b/splash/Splash.cc
+index 3d004b9a0..e798a753f 100644
+--- a/splash/Splash.cc
++++ b/splash/Splash.cc
+@@ -1428,6 +1428,11 @@ inline void Splash::drawSpan(SplashPipe *pipe, int x0, int x1, int y, bool noCli
+         if (x1 > state->clip->getXMaxI()) {
+             x1 = state->clip->getXMaxI();
+         }
++        if (x0 > x1) {
++            // span lies entirely outside the clip; don't compute a pipe
++            // position for a (possibly far out of range) x0
++            return;
++        }
+         pipeSetXY(pipe, x0, y);
+         for (x = x0; x <= x1; ++x) {
+             if (state->clip->test(x, y)) {
+diff --git a/splash/SplashClip.cc b/splash/SplashClip.cc
+index 384bba5d5..eac984f28 100644
+--- a/splash/SplashClip.cc
++++ b/splash/SplashClip.cc
+@@ -252,10 +252,10 @@ SplashClipResult SplashClip::testRect(int rectXMin, int rectYMin, int rectXMax,
+     // against the clipping region:
+     //     x = [xMin, xMax)                (note: clipping coords are fp)
+     //     y = [yMin, yMax)
+-    if (static_cast<double>(rectXMax + 1) <= xMin || static_cast<double>(rectXMin) >= xMax || static_cast<double>(rectYMax + 1) <= yMin || static_cast<double>(rectYMin) >= yMax) {
++    if ((static_cast<double>(rectXMax) + 1) <= xMin || static_cast<double>(rectXMin) >= xMax || (static_cast<double>(rectYMax) + 1) <= yMin || static_cast<double>(rectYMin) >= yMax) {
+         return splashClipAllOutside;
+     }
+-    if (static_cast<double>(rectXMin) >= xMin && static_cast<double>(rectXMax + 1) <= xMax && static_cast<double>(rectYMin) >= yMin && static_cast<double>(rectYMax + 1) <= yMax && scanners.empty()) {
++    if (static_cast<double>(rectXMin) >= xMin && (static_cast<double>(rectXMax) + 1) <= xMax && static_cast<double>(rectYMin) >= yMin && (static_cast<double>(rectYMax) + 1) <= yMax && scanners.empty()) {
+         return splashClipAllInside;
+     }
+     return splashClipPartial;
+@@ -269,10 +269,10 @@ SplashClipResult SplashClip::testSpan(int spanXMin, int spanXMax, int spanY)
+     // against the clipping region:
+     //     x = [xMin, xMax)                (note: clipping coords are fp)
+     //     y = [yMin, yMax)
+-    if (static_cast<double>(spanXMax + 1) <= xMin || static_cast<double>(spanXMin) >= xMax || static_cast<double>(spanY + 1) <= yMin || static_cast<double>(spanY) >= yMax) {
++    if ((static_cast<double>(spanXMax) + 1) <= xMin || static_cast<double>(spanXMin) >= xMax || (static_cast<double>(spanY) + 1) <= yMin || static_cast<double>(spanY) >= yMax) {
+         return splashClipAllOutside;
+     }
+-    if (static_cast<double>(spanXMin) < xMin || static_cast<double>(spanXMax + 1) > xMax || static_cast<double>(spanY) < yMin || static_cast<double>(spanY + 1) > yMax) {
++    if (static_cast<double>(spanXMin) < xMin || (static_cast<double>(spanXMax) + 1) > xMax || static_cast<double>(spanY) < yMin || (static_cast<double>(spanY) + 1) > yMax) {
+         return splashClipPartial;
+     }
+     if (antialias) {
+diff --git a/splash/SplashMath.h b/splash/SplashMath.h
+index 9d60c4119..f641a842b 100644
+--- a/splash/SplashMath.h
++++ b/splash/SplashMath.h
+@@ -25,6 +25,7 @@
+ 
+ #include "poppler-config.h"
+ 
++#include <climits>
+ #include <cmath>
+ #include "SplashTypes.h"
+ 
+@@ -72,10 +73,12 @@ static inline int splashFloor(double x)
+     __asm fldcw WORD PTR oldCW;
+     return result;
+ #else
++    // saturate instead of an undefined out-of-range conversion (NaN -> INT_MIN)
+     if (x > 0) {
+-        return static_cast<int>(x);
++        return x < static_cast<double>(INT_MAX) ? static_cast<int>(x) : INT_MAX;
+     }
+-    return static_cast<int>(floor(x));
++    const double f = floor(x);
++    return f > static_cast<double>(INT_MIN) ? static_cast<int>(f) : INT_MIN;
+ 
+ #endif
+ }
+@@ -119,7 +122,12 @@ static inline int splashCeil(double x)
+     __asm fldcw WORD PTR oldCW;
+     return result;
+ #else
+-    return static_cast<int>(ceil(x));
++    // saturate instead of an undefined out-of-range conversion (NaN -> INT_MIN)
++    const double c = ceil(x);
++    if (c >= static_cast<double>(INT_MAX)) {
++        return INT_MAX;
++    }
++    return c > static_cast<double>(INT_MIN) ? static_cast<int>(c) : INT_MIN;
+ #endif
+ }
+ 
+diff --git a/splash/SplashXPathScanner.cc b/splash/SplashXPathScanner.cc
+index 52f257046..7266cf509 100644
+--- a/splash/SplashXPathScanner.cc
++++ b/splash/SplashXPathScanner.cc
+@@ -317,9 +317,9 @@ inline void SplashXPathScanner::addIntersection(double segYMin, int y, int x0, i
+     } else {
+         auto &last = line.back();
+         // Check if last and new overlap/touch
+-        if ((last.x1 + 1) < intersect.x0) {
++        if ((static_cast<long long>(last.x1) + 1) < intersect.x0) {
+             line.push_back(intersect);
+-        } else if (last.x0 > (intersect.x1 + 1)) {
++        } else if (last.x0 > (static_cast<long long>(intersect.x1) + 1)) {
+             line.push_back(intersect);
+         } else {
+             last.count += intersect.count;

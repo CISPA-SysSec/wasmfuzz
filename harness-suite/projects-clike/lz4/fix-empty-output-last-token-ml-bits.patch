@@ -1,0 +1,74 @@
+Accept a lone last token with any matchlength bits when the output buffer is empty.
+
+The block format (doc/lz4_Block_format.md, "End of block conditions", since d60bbaec for #1630)
+says the matchlength bits of the last token are unused: encoders set them to 0, decoders ignore
+them. LZ4_decompress_generic() does so in its decoding loops (a 1-byte block 0x01 decodes to 0
+bytes with dstCapacity >= 1), but its outputSize == 0 shortcut only accepts the token 0x00 and
+returns -1 for 0x01..0x0F. Since LZ4_decompress_incomplete() (4f78fe8e, #2136) this is
+reachable from valid blocks: it leaves the block's last sequence to the regular decoder, so when
+the sequences before it fill the output, the rest is that token alone, decoded into zero
+capacity. ossfuzz/decompress_fuzzer.c then fails
+`(whole < 0) == (rest < 0)` (decompress_fuzzer.c:90) for a 22-byte input: an 18-byte block
+(14 literals, an 18-byte match, last token 0x01) decoding to 32 bytes, with dstCapacity 32.
+Fix: the shortcut accepts any lone token without literals (token >> ML_BITS == 0), as the loops do.
+
+Test: tests/unit/unittest_lz4.c lz4.decompress_incomplete_lastTokenMatchLength (that block
+decoded whole, then incomplete + rest; and tokens 0x00..0x0F into zero capacity). Without the
+fix it fails (rest: -1 != 0); with it all 207 unit tests pass.
+Not fixed upstream as of 4590271.
+
+Upstream: not reported; not fixed as of 707de20 (related: #1630, closed by doc commit d60bbaec;
+no open lz4/lz4 issue or PR on this, searched 2026-11-24).
+
+diff --git a/lib/lz4.c b/lib/lz4.c
+index 7cf5f947..c8a7fa20 100644
+--- a/lib/lz4.c
++++ b/lib/lz4.c
+@@ -2267,7 +2267,7 @@ LZ4_decompress_generic(
+         if (unlikely(outputSize==0)) {
+             /* Empty output buffer */
+             if (partialDecoding) return 0;
+-            if ((srcSize==1) && (*ip==0)) return 0;   /* empty block */
++            if ((srcSize==1) && ((*ip >> ML_BITS)==0)) return 0;   /* empty block : last token without literals (its matchlength bits are unused) */
+             return (srcSize > 1) ? -2 : -1;   /* -2 : output buffer too small */
+         }
+         if (unlikely(srcSize<=0)) { return -1; }
+diff --git a/tests/unit/unittest_lz4.c b/tests/unit/unittest_lz4.c
+index 25bb4842..fad7b9ed 100644
+--- a/tests/unit/unittest_lz4.c
++++ b/tests/unit/unittest_lz4.c
+@@ -268,7 +268,7 @@ TEST(decompress_safe_partial_usingDict_srcSizeBeyondBlock)
+ /*-************************************
+ *  Decoding edge cases
+ **************************************/
+-/* zero capacity : only an empty block (a single token 0) succeeds, or partial decoding of nothing */
++/* zero capacity : only an empty block (a single token without literals) succeeds, or partial decoding of nothing */
+ TEST(decompress_safe_zeroCapacity)
+ {
+     static const char empty[2] = { 0, 0 };
+@@ -1373,3 +1373,25 @@ TEST(decompress_incomplete_errors)
+     ASSERT_EQ(LZ4_decompress_incomplete((const char*)block, decoded, &size, 0, NULL, 0), 0);
+     ASSERT_EQ(size, 0);
+ }
++
++/* the matchlength bits of the last token are unused : when the sequences before it fill the output,
++ * the rest of the block (that token alone) decodes into zero capacity, as the whole block does */
++TEST(decompress_incomplete_lastTokenMatchLength)
++{
++    const unsigned char* const literals = (const unsigned char*)UT_fixedNoise(64);
++    unsigned char block[64];
++    char* const decoded = (char*)UT_malloc(DECODED_CAPACITY);
++    size_t const n = writeSequence(block, literals, 14, 8, 18);
++    int size = (int)n + 1;
++    int r;
++    block[n] = 0x01;   /* last token : no literal, matchlength bits set */
++    ASSERT_EQ(LZ4_decompress_safe((const char*)block, decoded, size, 32), 32);
++    r = LZ4_decompress_incomplete((const char*)block, decoded, &size, 32, NULL, 0);
++    ASSERT_EQ(r, 32);
++    ASSERT_EQ(size, (int)n);
++    ASSERT_EQ(LZ4_decompress_safe_usingDict((const char*)block + n, decoded + r, 1, 0, decoded, r), 0);
++    for (r = 0; r <= 15; r++) {
++        char const token[1] = { (char)r };
++        ASSERT_EQ(LZ4_decompress_safe(token, decoded, 1, 0), 0);
++    }
++}

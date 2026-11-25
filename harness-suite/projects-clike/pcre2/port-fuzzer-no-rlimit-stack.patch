@@ -1,5 +1,5 @@
 diff --git a/src/pcre2_fuzzsupport.c b/src/pcre2_fuzzsupport.c
-index 5706965..0443d2c 100644
+index 71f9d5e..36daede 100644
 --- a/src/pcre2_fuzzsupport.c
 +++ b/src/pcre2_fuzzsupport.c
 @@ -61,8 +61,10 @@ Further updates March/April/May 2024 by PH
@@ -13,15 +13,15 @@ index 5706965..0443d2c 100644
  
  #define STACK_SIZE_MB  256
  #define JIT_SIZE_LIMIT (200 * 1024)
-@@ -289,6 +291,7 @@ int LLVMFuzzerTestOneInput(unsigned char *, size_t);
+@@ -286,6 +288,7 @@ int LLVMFuzzerTestOneInput(unsigned char *, size_t);
  int
  LLVMFuzzerInitialize(int *argc, char ***argv)
  {
 +#if !defined(__wasi__)
-   int rc;
    struct rlimit rlim;
    getrlimit(RLIMIT_STACK, &rlim);
-@@ -305,6 +308,7 @@ LLVMFuzzerInitialize(int *argc, char ***argv)
+   rlim.rlim_cur = STACK_SIZE_MB * 1024 * 1024;
+@@ -301,6 +304,7 @@ LLVMFuzzerInitialize(int *argc, char ***argv)
      fprintf(stderr, "Failed to expand stack size\n");
      _exit(1);
    }

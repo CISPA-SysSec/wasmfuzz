@@ -1,0 +1,264 @@
+Clamp SplashClip coordinates before converting them to integer bounds.
+
+xMaxI/yMaxI are computed as splashCeil(v) - 1. For a clip coordinate outside the
+int range (here a W clip under "1 1000000 0 792 1 3 cm" gave yMax = -4.06e11)
+the double -> int conversion is undefined (UBSan: "SplashMath.h:122:29: runtime
+error: -4.0608e+11 is outside the range of representable values of type 'int'");
+x86 and wasm both yield INT_MIN, and the "- 1" wraps it to INT_MAX, so an empty
+clip became unbounded. SplashClip::clipToPath() then built a SplashXPathScanner
+over ~760M rows: std::length_error from allIntersections.resize() on wasm32,
+a ~18 GB allocation on 64-bit. Also check the antialiased yMaxAA multiplication
+for overflow, like yMinAA already is.
+
+Regression test cpp/tests/poppler-splashclip-bounds-test.cpp renders a page
+whose first clip lies at y ~ 5e9 and fails every operator new above 256 MB
+(1.9 GB without the fix).
+
+Not fixed upstream as of d828315.
+Upstream: open umbrella issue poppler/poppler#1764 (by LingMaple, 2026-07-20) covers float-to-int overflows; merged !2325 (2026-08-08, in the pin) fixed SplashClip::clipToPath only.
+The SplashClip constructor/resetToRect casts fixed here are not covered upstream.
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 4883d760..0fac448a 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -39,3 +39,7 @@ cpp_add_simpletest(poppler-memstream-substream-test poppler-memstream-substream-
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-memstream-substream-test COMMAND poppler-memstream-substream-test)
+ endif()
++cpp_add_simpletest(poppler-splashclip-bounds-test poppler-splashclip-bounds-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-splashclip-bounds-test COMMAND poppler-splashclip-bounds-test)
++endif()
+diff --git a/cpp/tests/poppler-splashclip-bounds-test.cpp b/cpp/tests/poppler-splashclip-bounds-test.cpp
+new file mode 100644
+index 00000000..c6fbc75f
+--- /dev/null
++++ b/cpp/tests/poppler-splashclip-bounds-test.cpp
+@@ -0,0 +1,89 @@
++/*
++ * Regression test: SplashClip computed its integer bounds as splashFloor(v)
++ * and splashCeil(v) - 1 without bounding v. Under the matrix below the first
++ * clip rectangle lies at y ~ 5e9, outside the int range; the conversion and
++ * the "- 1" overflowed, the bounds of the clip wrapped around, and
++ * clipToPath() for the second clip path set up a SplashXPathScanner with one
++ * row per pixel between bounds tens of millions of rows apart. Every operator
++ * new larger than 256 MB fails in this test.
++ */
++
++#include <poppler-document.h>
++#include <poppler-page.h>
++#include <poppler-page-renderer.h>
++
++#include <cstdio>
++#include <cstdlib>
++#include <iostream>
++#include <memory>
++#include <string>
++#include <vector>
++
++static const size_t allocLimit = 256u << 20;
++
++void *operator new(size_t size)
++{
++    if (size > allocLimit) {
++        fprintf(stderr, "  FAIL: allocation of %zu bytes\n", size);
++        std::_Exit(1);
++    }
++    if (void *p = std::malloc(size ? size : 1)) {
++        return p;
++    }
++    std::abort();
++}
++
++void operator delete(void *p) noexcept
++{
++    std::free(p);
++}
++
++void operator delete(void *p, size_t) noexcept
++{
++    std::free(p);
++}
++
++static std::string stream_obj(const std::string &data)
++{
++    return "<< /Length " + std::to_string(data.size()) + " >>\nstream\n" + data + "\nendstream";
++}
++
++static std::string build_pdf(const std::string &content)
++{
++    const std::vector<std::string> objs = {
++        "<< /Type /Catalog /Pages 2 0 R >>",
++        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
++        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
++        stream_obj(content),
++    };
++    std::string pdf = "%PDF-1.7\n";
++    std::vector<size_t> offsets;
++    for (size_t i = 0; i < objs.size(); ++i) {
++        offsets.push_back(pdf.size());
++        pdf += std::to_string(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
++    }
++    const size_t xrefOffset = pdf.size();
++    pdf += "xref\n0 " + std::to_string(objs.size() + 1) + "\n0000000000 65535 f \n";
++    for (size_t off : offsets) {
++        char line[21];
++        snprintf(line, sizeof(line), "%010zu 00000 n \n", off);
++        pdf += line;
++    }
++    pdf += "trailer\n<< /Size " + std::to_string(objs.size() + 1) + " /Root 1 0 R >>\nstartxref\n" + std::to_string(xrefOffset) + "\n%%EOF\n";
++    return pdf;
++}
++
++int main()
++{
++    const std::string pdf = build_pdf("0 80000000 0 7 1 3 cm 62 1 0 5 re W n -1 0 5 5 re W n");
++    std::unique_ptr<poppler::document> doc(poppler::document::load_from_raw_data(pdf.data(), pdf.size()));
++    if (!doc || doc->pages() != 1) {
++        std::cerr << "failed to load the test document\n";
++        return 1;
++    }
++    std::unique_ptr<poppler::page> page(doc->create_page(0));
++    poppler::page_renderer renderer;
++    renderer.render_page(page.get());
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/splash/SplashClip.cc b/splash/SplashClip.cc
+index 4a2a340..38825eb 100644
+--- a/splash/SplashClip.cc
++++ b/splash/SplashClip.cc
+@@ -23,6 +23,7 @@
+ #include <config.h>
+ 
+ #include <algorithm>
++#include <climits>
+ #include "goo/GooCheckedOps.h"
+ #include "SplashErrorCodes.h"
+ #include "SplashMath.h"
+@@ -36,6 +37,22 @@
+ // SplashClip
+ //------------------------------------------------------------------------
+ 
++namespace {
++// splashFloor/splashCeil of a value outside the int range is undefined (and in practice gives
++// INT_MIN, which the "- 1" of the max bounds then wraps to INT_MAX, turning an empty clip into
++// an unbounded one), so clamp coordinates into a range where the integer bounds cannot overflow
++double clampCoord(double v)
++{
++    if (!(v > INT_MIN + 1.0)) {
++        return INT_MIN + 1.0;
++    }
++    if (!(v < INT_MAX)) {
++        return INT_MAX;
++    }
++    return v;
++}
++}
++
+ SplashClip::SplashClip(double x0, double y0, double x1, double y1, bool antialiasA)
+ {
+     antialias = antialiasA;
+@@ -53,10 +70,10 @@ SplashClip::SplashClip(double x0, double y0, double x1, double y1, bool antialia
+         yMin = y1;
+         yMax = y0;
+     }
+-    xMinI = splashFloor(xMin);
+-    yMinI = splashFloor(yMin);
+-    xMaxI = splashCeil(xMax) - 1;
+-    yMaxI = splashCeil(yMax) - 1;
++    xMinI = splashFloor(clampCoord(xMin));
++    yMinI = splashFloor(clampCoord(yMin));
++    xMaxI = splashCeil(clampCoord(xMax)) - 1;
++    yMaxI = splashCeil(clampCoord(yMax)) - 1;
+ }
+ 
+ SplashClip::SplashClip(const SplashClip *clip, PrivateTag /*unused*/)
+@@ -91,10 +108,10 @@ void SplashClip::resetToRect(double x0, double y0, double x1, double y1)
+         yMin = y1;
+         yMax = y0;
+     }
+-    xMinI = splashFloor(xMin);
+-    yMinI = splashFloor(yMin);
+-    xMaxI = splashCeil(xMax) - 1;
+-    yMaxI = splashCeil(yMax) - 1;
++    xMinI = splashFloor(clampCoord(xMin));
++    yMinI = splashFloor(clampCoord(yMin));
++    xMaxI = splashCeil(clampCoord(xMax)) - 1;
++    yMaxI = splashCeil(clampCoord(yMax)) - 1;
+ }
+ 
+ SplashError SplashClip::clipToRect(double x0, double y0, double x1, double y1)
+@@ -102,39 +119,39 @@ SplashError SplashClip::clipToRect(double x0, double y0, double x1, double y1)
+     if (x0 < x1) {
+         if (x0 > xMin) {
+             xMin = x0;
+-            xMinI = splashFloor(xMin);
++            xMinI = splashFloor(clampCoord(xMin));
+         }
+         if (x1 < xMax) {
+             xMax = x1;
+-            xMaxI = splashCeil(xMax) - 1;
++            xMaxI = splashCeil(clampCoord(xMax)) - 1;
+         }
+     } else {
+         if (x1 > xMin) {
+             xMin = x1;
+-            xMinI = splashFloor(xMin);
++            xMinI = splashFloor(clampCoord(xMin));
+         }
+         if (x0 < xMax) {
+             xMax = x0;
+-            xMaxI = splashCeil(xMax) - 1;
++            xMaxI = splashCeil(clampCoord(xMax)) - 1;
+         }
+     }
+     if (y0 < y1) {
+         if (y0 > yMin) {
+             yMin = y0;
+-            yMinI = splashFloor(yMin);
++            yMinI = splashFloor(clampCoord(yMin));
+         }
+         if (y1 < yMax) {
+             yMax = y1;
+-            yMaxI = splashCeil(yMax) - 1;
++            yMaxI = splashCeil(clampCoord(yMax)) - 1;
+         }
+     } else {
+         if (y1 > yMin) {
+             yMin = y1;
+-            yMinI = splashFloor(yMin);
++            yMinI = splashFloor(clampCoord(yMin));
+         }
+         if (y0 < yMax) {
+             yMax = y0;
+-            yMaxI = splashCeil(yMax) - 1;
++            yMaxI = splashCeil(clampCoord(yMax)) - 1;
+         }
+     }
+     return SplashError::NoError;
+@@ -200,8 +217,8 @@ SplashError SplashClip::clipToPath(const SplashPath &path, const std::array<doub
+     if (xPath.length == 0) {
+         xMax = xMin - 1;
+         yMax = yMin - 1;
+-        xMaxI = splashCeil(xMax) - 1;
+-        yMaxI = splashCeil(yMax) - 1;
++        xMaxI = splashCeil(clampCoord(xMax)) - 1;
++        yMaxI = splashCeil(clampCoord(yMax)) - 1;
+ 
+         // check for an axis aligned rectangle
+     } else if (xPath.length == 4 && isRect(xPath.segs[0], xPath.segs[1], xPath.segs[2], xPath.segs[3])) {
+@@ -212,10 +229,10 @@ SplashError SplashClip::clipToPath(const SplashPath &path, const std::array<doub
+     } else {
+         if (antialias) {
+             xPath.aaScale();
+-            if (checkedMultiply(yMinI, splashAASize, &yMinAA)) [[unlikely]] {
++            if (checkedMultiply(yMinI, splashAASize, &yMinAA) || checkedMultiply(yMaxI + 1, splashAASize, &yMaxAA)) [[unlikely]] {
+                 return SplashError::Generic;
+             }
+-            yMaxAA = (yMaxI + 1) * splashAASize - 1;
++            yMaxAA -= 1;
+         } else {
+             yMinAA = yMinI;
+             yMaxAA = yMaxI;

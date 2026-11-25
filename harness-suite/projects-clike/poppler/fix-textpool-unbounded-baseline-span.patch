@@ -1,0 +1,184 @@
+Bound the baseline span of a TextPool.
+
+TextPool::addWord() grows its bucket vector (one bucket per 4 px of baseline)
+until it covers every word's baseline. A word whose baseline lies far away from
+the others therefore sizes the pool from file values alone: here
+"1000000 -100 0 792 792 -1 cm" with a 5 Tf font gives chars whose advance
+(~5e12 px) reaches into the page, so they pass TextPage::addChar()'s page bounds
+check, but whose origins sit at y = -2.45e8 and -9.5e7. The two words need a
+37.5M-bucket pool: 300 MB on wasm32 (bad_alloc there, after vector growth),
+600 MB on 64-bit; baselines near the INT_MAX/4 bucket limit would need up to
+2^32 buckets (64 GB). Cap the pool at 2^20 buckets (a 4M px baseline span;
+real pages need a few thousand) and drop words that would exceed it, like the
+existing "wordBaseIdx out of range" check does. Also grow in one step instead
+of 128 buckets per insert(), which was quadratic for pool.begin().
+
+Regression test cpp/tests/poppler-textpool-baseline-test.cpp extracts the text
+of a page with two words ~1.8e8 px of baseline apart and fails every operator
+new above 256 MB.
+
+Not fixed upstream as of d828315.
+Upstream: none found (poppler/poppler issues and MRs searched for TextPool,
+addWord, TextOutputDev).
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 0fac448a..61124536 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -43,3 +43,7 @@ cpp_add_simpletest(poppler-splashclip-bounds-test poppler-splashclip-bounds-test
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-splashclip-bounds-test COMMAND poppler-splashclip-bounds-test)
+ endif()
++cpp_add_simpletest(poppler-textpool-baseline-test poppler-textpool-baseline-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-textpool-baseline-test COMMAND poppler-textpool-baseline-test)
++endif()
+diff --git a/cpp/tests/poppler-textpool-baseline-test.cpp b/cpp/tests/poppler-textpool-baseline-test.cpp
+new file mode 100644
+index 00000000..781985e9
+--- /dev/null
++++ b/cpp/tests/poppler-textpool-baseline-test.cpp
+@@ -0,0 +1,96 @@
++/*
++ * Regression test: TextPool::addWord() grew its bucket vector (one bucket per
++ * 4 px of baseline) until it covered the baseline of every word, so the
++ * distance between two words alone sized the pool. Under the text matrix
++ * below, each zero-width char (character spacing -1) moves the baseline by
++ * 1e8 px, while the huge advance of each char still reaches into the page, so
++ * TextPage::addChar() keeps it: the words "6" and "0" end up ~1.8e8 px apart,
++ * a pool of ~45M buckets. Every operator new larger than 256 MB fails in this
++ * test.
++ */
++
++#include <GlobalParams.h>
++#include <Object.h>
++#include <PDFDoc.h>
++#include <Stream.h>
++#include <TextOutputDev.h>
++
++#include <cstdio>
++#include <cstdlib>
++#include <iostream>
++#include <memory>
++#include <string>
++#include <vector>
++
++static const size_t allocLimit = 256u << 20;
++
++void *operator new(size_t size)
++{
++    if (size > allocLimit) {
++        fprintf(stderr, "  FAIL: allocation of %zu bytes\n", size);
++        std::_Exit(1);
++    }
++    if (void *p = std::malloc(size ? size : 1)) {
++        return p;
++    }
++    std::abort();
++}
++
++void operator delete(void *p) noexcept
++{
++    std::free(p);
++}
++
++void operator delete(void *p, size_t) noexcept
++{
++    std::free(p);
++}
++
++static std::string stream_obj(const std::string &data)
++{
++    return "<< /Length " + std::to_string(data.size()) + " >>\nstream\n" + data + "\nendstream";
++}
++
++static std::string build_pdf(const std::string &content)
++{
++    const std::vector<std::string> objs = {
++        "<< /Type /Catalog /Pages 2 0 R >>",
++        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
++        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
++        stream_obj(content),
++        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
++    };
++    std::string pdf = "%PDF-1.7\n";
++    std::vector<size_t> offsets;
++    for (size_t i = 0; i < objs.size(); ++i) {
++        offsets.push_back(pdf.size());
++        pdf += std::to_string(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
++    }
++    const size_t xrefOffset = pdf.size();
++    pdf += "xref\n0 " + std::to_string(objs.size() + 1) + "\n0000000000 65535 f \n";
++    for (size_t off : offsets) {
++        char line[21];
++        snprintf(line, sizeof(line), "%010zu 00000 n \n", off);
++        pdf += line;
++    }
++    pdf += "trailer\n<< /Size " + std::to_string(objs.size() + 1) + " /Root 1 0 R >>\nstartxref\n" + std::to_string(xrefOffset) + "\n%%EOF\n";
++    return pdf;
++}
++
++int main()
++{
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    const std::string pdf = build_pdf("1000000 -100000000 0 4 4 -200 cm BT /F1 5 Tf -1 Tc (\n\n60) Tj ET");
++    PDFDoc doc(std::make_unique<MemStream>(pdf.data(), 0, pdf.size(), Object::null()));
++    if (!doc.isOk() || doc.getNumPages() != 1) {
++        std::cerr << "failed to load the test document\n";
++        return 1;
++    }
++    TextOutputDev out(nullptr, false, 0, false, false);
++    doc.displayPage(&out, 1, 72, 72, 0, true, false, false);
++    std::unique_ptr<TextPage> text = out.takeText();
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/poppler/TextOutputDev.cc b/poppler/TextOutputDev.cc
+index a1402a72..9cdd8800 100644
+--- a/poppler/TextOutputDev.cc
++++ b/poppler/TextOutputDev.cc
+@@ -92,6 +92,11 @@
+ // this many points.
+ constexpr int textPoolStep = 4;
+ 
++// Maximum number of baseline buckets in a TextPool (i.e. a baseline span of
++// maxTextPoolSize * textPoolStep pixels). Real pages need a few thousand at
++// most; this keeps a stray far-off word from allocating gigabytes.
++constexpr long long maxTextPoolSize = 1 << 20;
++
+ // Inter-character space width which will cause addChar to start a new
+ // word.
+ constexpr double minWordBreakSpace = 0.1;
+@@ -1012,13 +1017,23 @@ void TextPool::addWord(TextWord *word)
+         maxBaseIdx = wordBaseIdx + 128;
+         pool.resize(257);
+     }
+-    while (wordBaseIdx < minBaseIdx) {
+-        pool.insert(pool.begin(), 128, {});
+-        minBaseIdx -= 128;
+-    }
+-    while (wordBaseIdx > maxBaseIdx) {
+-        pool.insert(pool.end(), 128, {});
+-        maxBaseIdx += 128;
++    // grow in 128-bucket steps, but in one go, and refuse to let a word
++    // whose baseline lies far away from all others blow up the pool
++    if (wordBaseIdx < minBaseIdx || wordBaseIdx > maxBaseIdx) {
++        const long long dist = wordBaseIdx < minBaseIdx ? static_cast<long long>(minBaseIdx) - wordBaseIdx : static_cast<long long>(wordBaseIdx) - maxBaseIdx;
++        const long long grow = (dist + 127) / 128 * 128;
++        if (static_cast<long long>(pool.size()) + grow > maxTextPoolSize) [[unlikely]] {
++            error(errSyntaxWarning, -1, "TextPool: word baseline too far away from the others");
++            delete word;
++            return;
++        }
++        if (wordBaseIdx < minBaseIdx) {
++            pool.insert(pool.begin(), static_cast<size_t>(grow), {});
++            minBaseIdx -= static_cast<int>(grow);
++        } else {
++            pool.insert(pool.end(), static_cast<size_t>(grow), {});
++            maxBaseIdx += static_cast<int>(grow);
++        }
+     }
+ 
+     // append the new word

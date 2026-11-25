@@ -1,0 +1,37 @@
+Subject: [PATCH] tests/libfuzzer: run dav2d's one-time init in LLVMFuzzerInitialize
+
+dav2d_open() runs init_internal() through pthread_once() on its first
+call: IBP weights, inter-intra wedge masks, predefined QM tables and the
+Wiener classes (about 8.5M wasm instructions). In the fuzzer that cost
+lands in the first input, so every fresh process / fresh instance pays it
+on its first input, and coverage tools that run each input on a fresh
+instance see a 2.8x higher per-input cost than the persistent fuzzer.
+Open and close one decoder in LLVMFuzzerInitialize() with the same thread
+settings as the per-input path; the per-input dav2d_open() then takes the
+pthread_once fast path, as it already does for every input after the
+first. Same change as the suite's dav1d fuzz-init-tables-once.patch.
+
+Upstream context: dav2d tracks issues and MRs on code.videolan.org, which
+gh cannot search (checked 2026-11-20).
+
+diff --git a/tests/libfuzzer/dav2d_fuzzer.c b/tests/libfuzzer/dav2d_fuzzer.c
+index 4d2b2c1e..ae2f97e0 100644
+--- a/tests/libfuzzer/dav2d_fuzzer.c
++++ b/tests/libfuzzer/dav2d_fuzzer.c
+@@ -84,6 +84,16 @@ int LLVMFuzzerInitialize(int *argc, char ***argv) {
+ 
+     *argc = i;
+ 
++    // dav2d_open() builds the static tables (IBP weights, wedge masks, QM
++    // tables, Wiener classes) on its first call; do that here, not in the
++    // first input.
++    Dav2dSettings settings;
++    Dav2dContext *ctx = NULL;
++    dav2d_default_settings(&settings);
++    settings.max_frame_delay = settings.n_threads = 1;
++    if (dav2d_open(&ctx, &settings) == 0)
++        dav2d_close(&ctx);
++
+     return 0;
+ }
+ 

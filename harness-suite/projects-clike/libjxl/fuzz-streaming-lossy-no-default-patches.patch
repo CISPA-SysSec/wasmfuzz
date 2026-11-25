@@ -1,0 +1,38 @@
+Subject: [PATCH] streaming_fuzzer: Disable default patches and dots for lossy encoding
+
+The streaming encoder never searches for patches or dots (it only falls back
+to the full-frame encoder when they are forced on), while the full-frame
+encoder does at its default settings. For lossy encoding the two outputs then
+legitimately differ by more than the per-sample threshold around the patches,
+while both are about as close to the source (RMS error vs. the source on the
+three fuzzer inputs: 0.062/0.060, 0.205/0.208, 0.009/0.008). Set PATCHES
+and DOTS to 0 when the spec leaves them at the default and the encode is
+lossy. Forcing them on still exercises the patch search (both encodes then
+use the full-frame encoder), and lossless encodes keep the default because
+patches must not change lossless output.
+---
+diff --git a/tools/streaming_fuzzer.cc b/tools/streaming_fuzzer.cc
+index 56f00301..cb0b977e 100644
+--- a/tools/streaming_fuzzer.cc
++++ b/tools/streaming_fuzzer.cc
+@@ -148,6 +148,20 @@ struct FuzzSpec {
+       int_opt.value = u8() % (int_opt.max - int_opt.min + 1) + int_opt.min;
+     }
+ 
++    // The streaming encoder never searches for patches or dots; it only falls
++    // back to the full-frame encoder when they are forced on. Left at the
++    // default, they make the two lossy encodes legitimately different, which
++    // the per-sample threshold below cannot tell from a bug, so turn them off
++    // for lossy encoding. Lossless output must not depend on them, so keep the
++    // default there.
++    Check(spec.int_options[3].flag == JXL_ENC_FRAME_SETTING_DOTS);
++    Check(spec.int_options[4].flag == JXL_ENC_FRAME_SETTING_PATCHES);
++    if (!lossless) {
++      for (size_t i : {3, 4}) {
++        if (spec.int_options[i].value == -1) spec.int_options[i].value = 0;
++      }
++    }
++
+     Check(spec.int_options[15].flag == JXL_ENC_FRAME_SETTING_COLOR_TRANSFORM);
+     if (!lossless || spec.int_options[15].value == 0) {
+       Check(spec.float_options[2].flag ==

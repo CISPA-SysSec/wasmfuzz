@@ -1,0 +1,175 @@
+Clamp the yuv2rgb_X_c table indices to the table range.
+
+yuv2rgb_X_c_template() (libswscale/output.c) indexes table_rV/gU/gV/bU with U/V and the
+luma tables with Y1/Y2. User SwsFilters (sws_getDefaultFilter() blur, sharpen and chroma
+shift, which target_sws_fuzzer feeds since 5253641e62) give vertical taps far outside
+[0, 4096], and hScale does not clip negative samples, so the sums overshoot the 512-entry
+headroom: out-of-bounds pointer reads, then wild reads in yuv2rgb_write() (ASan SEGV /
+heap-buffer-overflow; wasm HeapOutOfBounds) for every packed RGB target. Clamp U/V to the
+table and Y to +-512 when out of range; the tables saturate inside that range, so in-range
+output is unchanged. Adds libswscale/tests/yuv2rgb_overshoot.c (fate-sws-yuv2rgb-overshoot,
+fails under ASan without the fix).
+Not fixed upstream as of 224205649a.
+
+Upstream: none found (code.ffmpeg.org issues/PRs searched for yuv2rgb, sws_getDefaultFilter).
+
+diff --git a/libswscale/Makefile b/libswscale/Makefile
+index 4bd5ff551b..236d39b19c 100644
+--- a/libswscale/Makefile
++++ b/libswscale/Makefile
+@@ -55,5 +55,6 @@ TESTPROGS = colorspace                                                  \
+             sws_ops                                                     \
+             sws_ops_aarch64                                             \
+             unscaled_threaded                                           \
++            yuv2rgb_overshoot                                           \
+ 
+ DEVPROGS = uops_macros_gen                                              \
+diff --git a/libswscale/output.c b/libswscale/output.c
+index 3e9086a310..e8bd799745 100644
+--- a/libswscale/output.c
++++ b/libswscale/output.c
+@@ -1841,6 +1841,21 @@ yuv2rgb_X_c_template(SwsInternal *c, const int16_t *lumFilter,
+             }
+         }
+ 
++        /* Sharpening or shifting SwsFilters give taps outside [0, 4096], and
++         * the horizontal scaler does not clip negative samples, so the sums
++         * can leave the range the lookup tables are built for. The tables
++         * saturate well inside that range, so clamping does not change the
++         * output of in-range samples. */
++        if ((unsigned)(U  + YUVRGB_TABLE_HEADROOM) >= 256 + 2 * YUVRGB_TABLE_HEADROOM ||
++            (unsigned)(V  + YUVRGB_TABLE_HEADROOM) >= 256 + 2 * YUVRGB_TABLE_HEADROOM ||
++            (unsigned)(Y1 + YUVRGB_TABLE_LUMA_HEADROOM) >= 2 * YUVRGB_TABLE_LUMA_HEADROOM ||
++            (unsigned)(Y2 + YUVRGB_TABLE_LUMA_HEADROOM) >= 2 * YUVRGB_TABLE_LUMA_HEADROOM) {
++            U  = av_clip(U,  -YUVRGB_TABLE_HEADROOM, 255 + YUVRGB_TABLE_HEADROOM);
++            V  = av_clip(V,  -YUVRGB_TABLE_HEADROOM, 255 + YUVRGB_TABLE_HEADROOM);
++            Y1 = av_clip(Y1, -YUVRGB_TABLE_LUMA_HEADROOM, YUVRGB_TABLE_LUMA_HEADROOM - 1);
++            Y2 = av_clip(Y2, -YUVRGB_TABLE_LUMA_HEADROOM, YUVRGB_TABLE_LUMA_HEADROOM - 1);
++        }
++
+         r =  c->table_rV[V + YUVRGB_TABLE_HEADROOM];
+         g = (c->table_gU[U + YUVRGB_TABLE_HEADROOM] + c->table_gV[V + YUVRGB_TABLE_HEADROOM]);
+         b =  c->table_bU[U + YUVRGB_TABLE_HEADROOM];
+diff --git a/libswscale/tests/.gitignore b/libswscale/tests/.gitignore
+index b358351617..87d8bab0cf 100644
+--- a/libswscale/tests/.gitignore
++++ b/libswscale/tests/.gitignore
+@@ -7,3 +7,4 @@
+ /sws_ops
+ /sws_ops_aarch64
+ /unscaled_threaded
++/yuv2rgb_overshoot
+diff --git a/libswscale/tests/yuv2rgb_overshoot.c b/libswscale/tests/yuv2rgb_overshoot.c
+new file mode 100644
+index 0000000000..857164b879
+--- /dev/null
++++ b/libswscale/tests/yuv2rgb_overshoot.c
+@@ -0,0 +1,92 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/*
++ * Scale extreme YUV input to packed RGB through a strong user SwsFilter.
++ * The vertical sums then overshoot far beyond 8 bits; the
++ * yuv2rgb lookup tables must not be indexed outside their headroom.
++ * Run under ASan or valgrind to catch out-of-bounds table reads.
++ */
++
++#include <stdio.h>
++
++#include "libavutil/cpu.h"
++#include "libavutil/log.h"
++#include "libavutil/imgutils.h"
++#include "libavutil/mem.h"
++#include "libavutil/pixdesc.h"
++#include "libswscale/swscale.h"
++
++static const enum AVPixelFormat dst_fmts[] = {
++    AV_PIX_FMT_RGB4, AV_PIX_FMT_RGB4_BYTE, AV_PIX_FMT_RGB8, AV_PIX_FMT_RGB444,
++    AV_PIX_FMT_RGB555, AV_PIX_FMT_RGB565, AV_PIX_FMT_RGB24, AV_PIX_FMT_BGR24,
++    AV_PIX_FMT_RGB32, AV_PIX_FMT_RGB32_1, AV_PIX_FMT_X2RGB10, AV_PIX_FMT_X2BGR10,
++};
++
++int main(void)
++{
++    const int src_w = 14, src_h = 13, dst_w = 28, dst_h = 29;
++    uint8_t *src[4] = { NULL }, *dst[4] = { NULL };
++    int src_stride[4], dst_stride[4];
++    SwsFilter *filter;
++    int ret = 0;
++
++    /* The vertical X path is plain C; keep SIMD paths out of the way. */
++    av_force_cpu_flags(0);
++    av_log_set_level(AV_LOG_QUIET);
++
++    filter = sws_getDefaultFilter(28.0f, 0.0f, 1.0f, 0.0f, 90.0f, 0.0f, 0);
++    if (!filter)
++        return 1;
++    if (av_image_alloc(src, src_stride, src_w, src_h, AV_PIX_FMT_YUV420P, 32) < 0)
++        return 1;
++
++    /* checkerboards of the extremes give maximal ringing */
++    for (int p = 0; p < 3; p++) {
++        int w = p ? (src_w + 1) / 2 : src_w, h = p ? (src_h + 1) / 2 : src_h;
++        for (int y = 0; y < h; y++)
++            for (int x = 0; x < w; x++)
++                src[p][y * src_stride[p] + x] = ((x ^ y ^ p) & 1) ? 255 : 0;
++    }
++
++    for (int i = 0; i < FF_ARRAY_ELEMS(dst_fmts); i++) {
++        struct SwsContext *sws;
++
++        if (av_image_alloc(dst, dst_stride, dst_w, dst_h, dst_fmts[i], 32) < 0) {
++            ret = 1;
++            break;
++        }
++        sws = sws_getContext(src_w, src_h, AV_PIX_FMT_YUV420P,
++                             dst_w, dst_h, dst_fmts[i], SWS_GAUSS,
++                             filter, NULL, NULL);
++        if (!sws) {
++            fprintf(stderr, "sws_getContext failed for %s\n",
++                    av_get_pix_fmt_name(dst_fmts[i]));
++            ret = 1;
++        } else {
++            sws_scale(sws, (const uint8_t * const *)src, src_stride, 0, src_h,
++                      dst, dst_stride);
++            sws_freeContext(sws);
++        }
++        av_freep(&dst[0]);
++    }
++
++    av_freep(&src[0]);
++    sws_freeFilter(filter);
++    return ret;
++}
+diff --git a/tests/fate/libswscale.mak b/tests/fate/libswscale.mak
+index 7e6a6712cb..a6c3cc38df 100644
+--- a/tests/fate/libswscale.mak
++++ b/tests/fate/libswscale.mak
+@@ -19,6 +19,11 @@ fate-sws-rgb2rgb-bounds: libswscale/tests/colorspace$(EXESUF)
+ fate-sws-rgb2rgb-bounds: CMD = run libswscale/tests/colorspace$(EXESUF)
+ fate-sws-rgb2rgb-bounds: CMP = null
+ 
++FATE_LIBSWSCALE += fate-sws-yuv2rgb-overshoot
++fate-sws-yuv2rgb-overshoot: libswscale/tests/yuv2rgb_overshoot$(EXESUF)
++fate-sws-yuv2rgb-overshoot: CMD = run libswscale/tests/yuv2rgb_overshoot$(EXESUF)
++fate-sws-yuv2rgb-overshoot: CMP = null
++
+ SWS_SLICE_TEST-$(call DEMDEC, MATROSKA, VP9) += fate-sws-slice-yuv422-12bit-rgb48
+ fate-sws-slice-yuv422-12bit-rgb48: CMD = run tools/scale_slice_test$(EXESUF) $(TARGET_SAMPLES)/vp9-test-vectors/vp93-2-20-12bit-yuv422.webm 150 100 rgb48
+ 

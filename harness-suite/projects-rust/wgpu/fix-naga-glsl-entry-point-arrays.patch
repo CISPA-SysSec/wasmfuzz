@@ -1,0 +1,151 @@
+diff --git a/naga/src/front/glsl/functions.rs b/naga/src/front/glsl/functions.rs
+index 0812f27fe..fb10d5635 100644
+--- a/naga/src/front/glsl/functions.rs
++++ b/naga/src/front/glsl/functions.rs
+@@ -1273,6 +1273,9 @@ impl Frontend {
+                 pointer,
+                 ty,
+                 &mut |ctx, name, pointer, ty, binding| {
++                    if arguments.len() >= MAX_ENTRY_POINT_LOCATIONS {
++                        return Err(entry_point_args_error("Too many entry point inputs"));
++                    }
+                     let idx = arguments.len() as u32;
+ 
+                     arguments.push(FunctionArgument {
+@@ -1288,6 +1291,7 @@ impl Frontend {
+                         .insert(value, crate::proc::ExpressionKind::Runtime);
+                     ctx.body
+                         .push(Statement::Store { pointer, value }, Default::default());
++                    Ok(())
+                 },
+             )?
+         }
+@@ -1303,7 +1307,7 @@ impl Frontend {
+             Default::default(),
+         );
+ 
+-        let mut span = 0;
++        let mut span = 0u32;
+         let mut members = Vec::new();
+         let mut components = Vec::new();
+ 
+@@ -1326,6 +1330,9 @@ impl Frontend {
+                 pointer,
+                 ty,
+                 &mut |ctx, name, pointer, ty, binding| {
++                    if members.len() >= MAX_ENTRY_POINT_LOCATIONS {
++                        return Err(entry_point_args_error("Too many entry point outputs"));
++                    }
+                     members.push(StructMember {
+                         name,
+                         ty,
+@@ -1333,7 +1340,13 @@ impl Frontend {
+                         offset: span,
+                     });
+ 
+-                    span += ctx.module.types[ty].inner.size(ctx.module.to_ctx());
++                    span = ctx.module.types[ty]
++                        .inner
++                        .try_size(ctx.module.to_ctx())
++                        .and_then(|size| span.checked_add(size))
++                        .ok_or_else(|| {
++                            entry_point_args_error("Entry point outputs are too large")
++                        })?;
+ 
+                     let len = ctx.expressions.len();
+                     let load = ctx
+@@ -1345,7 +1358,8 @@ impl Frontend {
+                         Statement::Emit(ctx.expressions.range_from(len)),
+                         Default::default(),
+                     );
+-                    components.push(load)
++                    components.push(load);
++                    Ok(())
+                 },
+             )?
+         }
+@@ -1431,7 +1445,7 @@ impl Context<'_> {
+             Handle<Expression>,
+             Handle<Type>,
+             crate::Binding,
+-        ),
++        ) -> Result<()>,
+     ) -> Result<()> {
+         match self.module.types[ty].inner {
+             // TODO: Better error reporting
+@@ -1465,8 +1479,11 @@ impl Context<'_> {
+                         Span::default(),
+                     )?;
+ 
++                    let location = location.checked_add(index).ok_or_else(|| {
++                        entry_point_args_error("Entry point argument locations overflow")
++                    })?;
+                     let binding = crate::Binding::Location {
+-                        location: location + index,
++                        location,
+                         interpolation,
+                         sampling: None,
+                         blend_src: None,
+@@ -1516,13 +1533,25 @@ impl Context<'_> {
+                     self.arg_type_walker(member.name, binding, member_pointer, member.ty, f)?
+                 }
+             }
+-            _ => f(self, name, pointer, ty, binding),
++            _ => f(self, name, pointer, ty, binding)?,
+         }
+ 
+         Ok(())
+     }
+ }
+ 
++/// Every array element of an entry point input or output becomes its own
++/// argument or struct member, so `out float a[200000000];` would otherwise take
++/// forever (and its locations would overflow).
++const MAX_ENTRY_POINT_LOCATIONS: usize = 1 << 16;
++
++fn entry_point_args_error(msg: &'static str) -> Error {
++    Error {
++        kind: ErrorKind::SemanticError(msg.into()),
++        meta: Span::default(),
++    }
++}
++
+ /// Helper enum containing the type of conversion need for a call
+ #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+ enum Conversion {
+diff --git a/naga/src/front/glsl/parser_tests.rs b/naga/src/front/glsl/parser_tests.rs
+index a47cce3c7..d59861340 100644
+--- a/naga/src/front/glsl/parser_tests.rs
++++ b/naga/src/front/glsl/parser_tests.rs
+@@ -1041,3 +1041,31 @@ fn constant_initializer_type_mismatch() {
+         )
+         .unwrap();
+ }
++
++#[test]
++fn huge_entry_point_array() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: every element of an entry point input or output array
++    // becomes its own argument, so huge arrays never finished (and their
++    // locations overflowed), and the output struct size used `TypeInner::size`,
++    // which panics on a type that is too large.
++    for src in [
++        "out float a[200000000]; void main(){}",
++        "in float a[200000000]; void main(){}",
++        "int main(){} out v { int i[217483247][]; };",
++        "layout(location = 4294967295u) out float a[2]; void main(){}",
++    ] {
++        let result = frontend.parse(&Options::from(ShaderStage::Vertex), src);
++        let errors = result.expect_err(src).errors;
++        assert!(
++            matches!(&errors[0].kind, ErrorKind::SemanticError(msg) if msg.starts_with("Entry point") || msg.starts_with("Too many entry point")),
++            "{src}: {errors:?}"
++        );
++    }
++    frontend
++        .parse(
++            &Options::from(ShaderStage::Fragment),
++            "layout(location = 0) out vec4 o[4]; void main(){}",
++        )
++        .unwrap();
++}

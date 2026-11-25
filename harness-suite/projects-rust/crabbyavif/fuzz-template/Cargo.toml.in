@@ -17,6 +17,11 @@ path = ".."
 default-features = false
 features = ["dav1d", "libyuv", "capi"]
 
+# Only for the static constructor that runs dav1d's one-time init (fuzz_targets/decode.rs).
+[dependencies.dav1d-sys]
+path = "../sys/dav1d-sys"
+features = ["dav1d"]
+
 [workspace]
 members = ["."]
 

@@ -1,3 +1,5 @@
+Upstream: open umbrella issue gfx-rs/wgpu#7687 (by 0x64617061, 2025-05-12) lists LayoutError unwrap panics for oversize types; this patch fixes the GLSL parse_array_specifier site. No fix yet.
+
 diff --git a/naga/src/front/glsl/parser/types.rs b/naga/src/front/glsl/parser/types.rs
 index 3eef187..a3c4570 100644
 --- a/naga/src/front/glsl/parser/types.rs

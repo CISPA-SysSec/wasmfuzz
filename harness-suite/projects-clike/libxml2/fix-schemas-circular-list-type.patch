@@ -1,0 +1,206 @@
+Subject: [PATCH] schemas: Detect circular list types
+
+A simple type can reach itself through the item type of a list, e.g.
+a restriction of a union whose member is a list of the restricted type.
+The existing circularity checks only follow base types and union member
+types, so such a schema was accepted and validating a value recursed
+through xmlSchemaVCheckCVCSimpleType until the stack overflowed.
+
+Report src-st-props-correct-2 ("The list type definition is circular")
+for list types whose item type reaches the list again.
+
+Found with the schema fuzzer (stack overflow in the
+xmlSchemaVCheckCVCSimpleType recursion). Reproducer:
+repro/fix-schemas-circular-list-type.bin.
+---
+diff --git a/result/schemas/listcirc_0_0.err b/result/schemas/listcirc_0_0.err
+new file mode 100644
+index 000000000..41ba450b8
+--- /dev/null
++++ b/result/schemas/listcirc_0_0.err
+@@ -0,0 +1 @@
++./test/schemas/listcirc_0.xsd:8: element simpleType: Schemas parser error : local list type: The list type definition is circular.
+diff --git a/result/schemas/listcirc_1_0.err b/result/schemas/listcirc_1_0.err
+new file mode 100644
+index 000000000..695a4dcd0
+--- /dev/null
++++ b/result/schemas/listcirc_1_0.err
+@@ -0,0 +1 @@
++./test/schemas/listcirc_1.xsd:6: element simpleType: Schemas parser error : local list type: The list type definition is circular.
+diff --git a/result/schemas/listcirc_2_0.err b/result/schemas/listcirc_2_0.err
+new file mode 100644
+index 000000000..d6f5b2252
+--- /dev/null
++++ b/result/schemas/listcirc_2_0.err
+@@ -0,0 +1 @@
++./test/schemas/listcirc_2.xsd:5: element simpleType: Schemas parser error : list type 'l': The list type definition is circular.
+diff --git a/test/schemas/listcirc_0.xml b/test/schemas/listcirc_0.xml
+new file mode 100644
+index 000000000..4ac377d44
+--- /dev/null
++++ b/test/schemas/listcirc_0.xml
+@@ -0,0 +1 @@
++<doc>0</doc>
+diff --git a/test/schemas/listcirc_0.xsd b/test/schemas/listcirc_0.xsd
+new file mode 100644
+index 000000000..a794298de
+--- /dev/null
++++ b/test/schemas/listcirc_0.xsd
+@@ -0,0 +1,17 @@
++<?xml version="1.0"?>
++<!-- The list item type reaches the list again through a union. -->
++<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
++  <xs:simpleType name="a">
++    <xs:restriction>
++      <xs:simpleType>
++        <xs:union>
++          <xs:simpleType>
++            <xs:list itemType="a"/>
++          </xs:simpleType>
++        </xs:union>
++      </xs:simpleType>
++      <xs:enumeration value="0"/>
++    </xs:restriction>
++  </xs:simpleType>
++  <xs:element name="doc" type="a"/>
++</xs:schema>
+diff --git a/test/schemas/listcirc_1.xsd b/test/schemas/listcirc_1.xsd
+new file mode 100644
+index 000000000..282ab3c78
+--- /dev/null
++++ b/test/schemas/listcirc_1.xsd
+@@ -0,0 +1,17 @@
++<?xml version="1.0"?>
++<!-- The list item type reaches the list again through a union. -->
++<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
++  <xs:simpleType name="b">
++    <xs:union>
++      <xs:simpleType>
++        <xs:list itemType="b"/>
++      </xs:simpleType>
++    </xs:union>
++  </xs:simpleType>
++  <xs:simpleType name="a">
++    <xs:restriction base="b">
++      <xs:enumeration value="0"/>
++    </xs:restriction>
++  </xs:simpleType>
++  <xs:element name="doc" type="a"/>
++</xs:schema>
+diff --git a/test/schemas/listcirc_2.xsd b/test/schemas/listcirc_2.xsd
+new file mode 100644
+index 000000000..0a4da4c03
+--- /dev/null
++++ b/test/schemas/listcirc_2.xsd
+@@ -0,0 +1,17 @@
++<?xml version="1.0"?>
++<!-- The list type comes first, its item type is fixed up while it is
++     still being processed. -->
++<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
++  <xs:simpleType name="l">
++    <xs:list itemType="x"/>
++  </xs:simpleType>
++  <xs:simpleType name="x">
++    <xs:restriction base="u">
++      <xs:enumeration value="0"/>
++    </xs:restriction>
++  </xs:simpleType>
++  <xs:simpleType name="u">
++    <xs:union memberTypes="l"/>
++  </xs:simpleType>
++  <xs:element name="doc" type="l"/>
++</xs:schema>
+diff --git a/xmlschemas.c b/xmlschemas.c
+index 2acd9aea7..95ef9a05e 100644
+--- a/xmlschemas.c
++++ b/xmlschemas.c
+@@ -14723,6 +14723,80 @@ xmlSchemaCheckUnionTypeDefCircular(xmlSchemaParserCtxtPtr pctxt,
+ 	type->memberTypes));
+ }
+ 
++/*
++* Returns 1 if `target` can be reached from `type` by following the
++* base type, the member types and the list item type, 0 otherwise.
++* Visited types are marked, xmlSchemaUnmarkSimpleTypeGraph() must be
++* called afterwards.
++*/
++static int
++xmlSchemaSimpleTypeReaches(xmlSchemaTypePtr type, xmlSchemaTypePtr target)
++{
++    xmlSchemaTypeLinkPtr link;
++
++    while ((type != NULL) && (type->type == XML_SCHEMA_TYPE_SIMPLE)) {
++	if (type == target)
++	    return(1);
++	if (type->flags & XML_SCHEMAS_TYPE_MARKED)
++	    return(0);
++	type->flags |= XML_SCHEMAS_TYPE_MARKED;
++	for (link = type->memberTypes; link != NULL; link = link->next) {
++	    if (xmlSchemaSimpleTypeReaches(link->type, target))
++		return(1);
++	}
++	if ((WXS_IS_LIST(type)) &&
++	    (xmlSchemaSimpleTypeReaches(type->subtypes, target)))
++	    return(1);
++	type = type->baseType;
++    }
++    return(0);
++}
++
++static void
++xmlSchemaUnmarkSimpleTypeGraph(xmlSchemaTypePtr type)
++{
++    xmlSchemaTypeLinkPtr link;
++
++    while ((type != NULL) && (type->type == XML_SCHEMA_TYPE_SIMPLE) &&
++	   (type->flags & XML_SCHEMAS_TYPE_MARKED)) {
++	type->flags ^= XML_SCHEMAS_TYPE_MARKED;
++	for (link = type->memberTypes; link != NULL; link = link->next)
++	    xmlSchemaUnmarkSimpleTypeGraph(link->type);
++	if (WXS_IS_LIST(type))
++	    xmlSchemaUnmarkSimpleTypeGraph(type->subtypes);
++	type = type->baseType;
++    }
++}
++
++/*
++* A list type must not be reachable from its own item type, for
++* example a = restriction of union(list of a). Such a type violates
++* cos-st-restricts 2.1, but that is only checked during the fixup, which
++* already validates facet values against the circular type and recurses
++* without bound in xmlSchemaVCheckCVCSimpleType(). Base type and union
++* member cycles are caught by the checks above; every other cycle runs
++* through a list item type. Needs the variety to be computed.
++*/
++static int
++xmlSchemaCheckListTypeDefCircular(xmlSchemaParserCtxtPtr pctxt,
++				  xmlSchemaTypePtr type)
++{
++    int circular;
++
++    if ((! WXS_IS_LIST(type)) || (type->subtypes == NULL))
++	return(0);
++    circular = xmlSchemaSimpleTypeReaches(type->subtypes, type);
++    xmlSchemaUnmarkSimpleTypeGraph(type->subtypes);
++    if (circular) {
++	xmlSchemaPCustomErr(pctxt,
++	    XML_SCHEMAP_ST_PROPS_CORRECT_2,
++	    WXS_BASIC_CAST type, NULL,
++	    "The list type definition is circular", NULL);
++	return(XML_SCHEMAP_ST_PROPS_CORRECT_2);
++    }
++    return(0);
++}
++
+ /**
+  * Resolves type definition references
+  *
+@@ -20646,6 +20720,8 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+ 			(xmlSchemaTypePtr) item);
+ 		    FIXHFAILURE;
+ 		}
++		xmlSchemaCheckListTypeDefCircular(pctxt,
++		    (xmlSchemaTypePtr) item);
+ 		break;
+ 	    default:
+ 		break;

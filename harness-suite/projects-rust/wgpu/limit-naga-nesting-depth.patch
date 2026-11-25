@@ -1,0 +1,353 @@
+Upstream: open umbrella issue gfx-rs/wgpu#7687 (by 0x64617061, 2025-05-12) lists glsl_parser and ir stack overflows from unbounded recursion, which this depth limit prevents. No fix yet.
+
+diff --git a/naga/src/front/glsl/context.rs b/naga/src/front/glsl/context.rs
+index d3e3f58d3..7cdce9d9c 100644
+--- a/naga/src/front/glsl/context.rs
++++ b/naga/src/front/glsl/context.rs
+@@ -80,6 +80,8 @@ pub(crate) struct Context<'a> {
+     pub body: Block,
+     pub module: &'a mut crate::Module,
+     pub is_const: bool,
++    /// Nesting depth of [`Self::lower_inner`] calls.
++    lower_depth: u32,
+     /// Tracks the expression kind of `Expression`s residing in `self.expressions`
+     pub local_expression_kind_tracker: crate::proc::ExpressionKindTracker,
+     /// Tracks the expression kind of `Expression`s residing in `self.module.global_expressions`
+@@ -112,6 +114,7 @@ impl<'a> Context<'a> {
+             body: Block::new(),
+             module,
+             is_const: false,
++            lower_depth: 0,
+             local_expression_kind_tracker: crate::proc::ExpressionKindTracker::new(),
+             global_expression_kind_tracker,
+         };
+@@ -547,6 +550,28 @@ impl<'a> Context<'a> {
+         frontend: &mut Frontend,
+         expr: Handle<HirExpr>,
+         pos: ExprPos,
++    ) -> Result<(Option<Handle<Expression>>, Span)> {
++        // Binary chains like `x + x + x + ...` are parsed iteratively, but are
++        // lowered recursively, once per operator; bound that recursion.
++        const MAX_LOWER_DEPTH: u32 = 512;
++        if self.lower_depth >= MAX_LOWER_DEPTH {
++            return Err(Error {
++                kind: ErrorKind::SemanticError("Expression nesting limit exceeded".into()),
++                meta: stmt.hir_exprs[expr].meta,
++            });
++        }
++        self.lower_depth += 1;
++        let result = self.lower_inner_impl(stmt, frontend, expr, pos);
++        self.lower_depth -= 1;
++        result
++    }
++
++    fn lower_inner_impl(
++        &mut self,
++        stmt: &StmtContext,
++        frontend: &mut Frontend,
++        expr: Handle<HirExpr>,
++        pos: ExprPos,
+     ) -> Result<(Option<Handle<Expression>>, Span)> {
+         let HirExpr { ref kind, meta } = stmt.hir_exprs[expr];
+ 
+diff --git a/naga/src/front/glsl/parser.rs b/naga/src/front/glsl/parser.rs
+index 959a9b8e6..b84e48b46 100644
+--- a/naga/src/front/glsl/parser.rs
++++ b/naga/src/front/glsl/parser.rs
+@@ -26,15 +26,40 @@ pub struct ParsingContext<'source> {
+     /// Used to store tokens already consumed by the parser but that need to be backtracked
+     backtracked_token: Option<Token>,
+     last_meta: Span,
++    /// Nesting depth of the recursive statement and expression rules.
++    depth: u32,
+ }
+ 
++/// The statement and expression rules recurse once per nesting level, so
++/// `{{{{...` or `~~~~x` would otherwise overflow the stack.
++const MAX_NESTING_DEPTH: u32 = 256;
++
+ impl<'source> ParsingContext<'source> {
+     pub fn new(lexer: Lexer<'source>) -> Self {
+         ParsingContext {
+             lexer: lexer.peekable(),
+             backtracked_token: None,
+             last_meta: Span::default(),
++            depth: 0,
++        }
++    }
++
++    /// Runs `f` one nesting level deeper, failing past [`MAX_NESTING_DEPTH`].
++    fn nested<T>(
++        &mut self,
++        frontend: &mut Frontend,
++        f: impl FnOnce(&mut Self, &mut Frontend) -> Result<T>,
++    ) -> Result<T> {
++        if self.depth >= MAX_NESTING_DEPTH {
++            return Err(Error {
++                kind: ErrorKind::SemanticError("Nesting limit exceeded".into()),
++                meta: self.last_meta,
++            });
+         }
++        self.depth += 1;
++        let result = f(self, frontend);
++        self.depth -= 1;
++        result
+     }
+ 
+     /// Helper method for backtracking from a consumed token
+diff --git a/naga/src/front/glsl/parser/declarations.rs b/naga/src/front/glsl/parser/declarations.rs
+index 01a4730ea..865b28c9a 100644
+--- a/naga/src/front/glsl/parser/declarations.rs
++++ b/naga/src/front/glsl/parser/declarations.rs
+@@ -99,6 +99,17 @@ impl ParsingContext<'_> {
+         frontend: &mut Frontend,
+         ty: Handle<Type>,
+         ctx: &mut Context,
++    ) -> Result<(Handle<Expression>, Span)> {
++        self.nested(frontend, |this, frontend| {
++            this.parse_initializer_inner(frontend, ty, ctx)
++        })
++    }
++
++    fn parse_initializer_inner(
++        &mut self,
++        frontend: &mut Frontend,
++        ty: Handle<Type>,
++        ctx: &mut Context,
+     ) -> Result<(Handle<Expression>, Span)> {
+         // initializer:
+         //     assignment_expression
+diff --git a/naga/src/front/glsl/parser/expressions.rs b/naga/src/front/glsl/parser/expressions.rs
+index 8fdb989d6..22230c029 100644
+--- a/naga/src/front/glsl/parser/expressions.rs
++++ b/naga/src/front/glsl/parser/expressions.rs
+@@ -290,6 +290,17 @@ impl ParsingContext<'_> {
+         frontend: &mut Frontend,
+         ctx: &mut Context,
+         stmt: &mut StmtContext,
++    ) -> Result<Handle<HirExpr>> {
++        self.nested(frontend, |this, frontend| {
++            this.parse_unary_inner(frontend, ctx, stmt)
++        })
++    }
++
++    fn parse_unary_inner(
++        &mut self,
++        frontend: &mut Frontend,
++        ctx: &mut Context,
++        stmt: &mut StmtContext,
+     ) -> Result<Handle<HirExpr>> {
+         Ok(match self.expect_peek(frontend)?.value {
+             TokenValue::Plus | TokenValue::Dash | TokenValue::Bang | TokenValue::Tilde => {
+@@ -441,6 +452,17 @@ impl ParsingContext<'_> {
+         frontend: &mut Frontend,
+         ctx: &mut Context,
+         stmt: &mut StmtContext,
++    ) -> Result<Handle<HirExpr>> {
++        self.nested(frontend, |this, frontend| {
++            this.parse_assignment_inner(frontend, ctx, stmt)
++        })
++    }
++
++    fn parse_assignment_inner(
++        &mut self,
++        frontend: &mut Frontend,
++        ctx: &mut Context,
++        stmt: &mut StmtContext,
+     ) -> Result<Handle<HirExpr>> {
+         let tgt = self.parse_unary(frontend, ctx, stmt)?;
+         let mut meta = stmt.hir_exprs[tgt].meta;
+diff --git a/naga/src/front/glsl/parser/functions.rs b/naga/src/front/glsl/parser/functions.rs
+index 441e99130..522384318 100644
+--- a/naga/src/front/glsl/parser/functions.rs
++++ b/naga/src/front/glsl/parser/functions.rs
+@@ -44,6 +44,18 @@ impl ParsingContext<'_> {
+         ctx: &mut Context,
+         terminator: &mut Option<usize>,
+         is_inside_loop: bool,
++    ) -> Result<Option<Span>> {
++        self.nested(frontend, |this, frontend| {
++            this.parse_statement_inner(frontend, ctx, terminator, is_inside_loop)
++        })
++    }
++
++    fn parse_statement_inner(
++        &mut self,
++        frontend: &mut Frontend,
++        ctx: &mut Context,
++        terminator: &mut Option<usize>,
++        is_inside_loop: bool,
+     ) -> Result<Option<Span>> {
+         // Type qualifiers always identify a declaration statement
+         if self.peek_type_qualifier(frontend) {
+diff --git a/naga/src/front/glsl/parser_tests.rs b/naga/src/front/glsl/parser_tests.rs
+index d59861340..a4cce24ea 100644
+--- a/naga/src/front/glsl/parser_tests.rs
++++ b/naga/src/front/glsl/parser_tests.rs
+@@ -1069,3 +1069,51 @@ fn huge_entry_point_array() {
+         )
+         .unwrap();
+ }
++
++#[test]
++fn deep_nesting_is_error_not_stack_overflow() {
++    // Unoptimized frames are much larger, so give the limits room; without
++    // them, 100k levels overflow any stack.
++    std::thread::Builder::new()
++        .stack_size(64 << 20)
++        .spawn(deep_nesting)
++        .unwrap()
++        .join()
++        .unwrap();
++}
++
++fn deep_nesting() {
++    // Fuzz finding (wasm32 guest with a 1 MiB stack): the recursive descent
++    // parser and the expression lowering recurse once per nesting level, and
++    // a few hundred nested blocks or a few thousand unary operators overflowed
++    // the stack.
++    use alloc::format;
++    let n = 100_000;
++    for src in [
++        format!("void main() {}{}", "{".repeat(n), "}".repeat(n)),
++        format!("const int a = {}1; void main(){{}}", "~".repeat(n)),
++        format!("const int a = {}1{}; void main(){{}}", "(".repeat(n), ")".repeat(n)),
++        format!("const int a = 1{}; void main(){{}}", "+1".repeat(n)),
++        format!("void main() {{ int a; a{}; }}", "=a".repeat(n)),
++        format!("int a = {}1{}; void main(){{}}", "{".repeat(n), "}".repeat(n)),
++    ] {
++        let mut frontend = Frontend::default();
++        let result = frontend.parse(&Options::from(ShaderStage::Vertex), &src);
++        let errors = result.expect_err(&src[..40]).errors;
++        assert!(
++            matches!(&errors[0].kind, ErrorKind::SemanticError(msg) if msg.contains("esting limit exceeded")),
++            "{}: {errors:?}",
++            &src[..40]
++        );
++    }
++    let mut frontend = Frontend::default();
++    let src = format!(
++        "void main() {}{}{}",
++        "{".repeat(100),
++        format!("int a = 1{};", "+1".repeat(300)),
++        "}".repeat(100)
++    );
++    frontend
++        .parse(&Options::from(ShaderStage::Vertex), &src)
++        .unwrap();
++}
+diff --git a/naga/src/front/wgsl/error.rs b/naga/src/front/wgsl/error.rs
+index d013f79bb..7256a992e 100644
+--- a/naga/src/front/wgsl/error.rs
++++ b/naga/src/front/wgsl/error.rs
+@@ -547,6 +547,10 @@ pub(crate) enum Error<'a> {
+         span: Span,
+         limit: u8,
+     },
++    ExceededLimitForNestedExpressions {
++        span: Span,
++        limit: u32,
++    },
+     PipelineConstantIDValue(Span),
+     NotBool(Span),
+     ConstAssertFailed(Span),
+@@ -1492,6 +1496,11 @@ impl<'a> Error<'a> {
+                 notes: vec![format!("nesting limit is currently set to {limit}").into()],
+                 message: "brace nesting limit reached".into(),
+             },
++            Error::ExceededLimitForNestedExpressions { span, limit } => ParseError {
++                labels: vec![(*span, "limit reached at this expression".into())],
++                notes: vec![format!("nesting limit is currently set to {limit}").into()],
++                message: "expression nesting limit reached".into(),
++            },
+             Error::DirectiveAfterFirstGlobalDecl { directive_span } => ParseError {
+                 labels: vec![(
+                     *directive_span,
+diff --git a/naga/src/front/wgsl/lower/mod.rs b/naga/src/front/wgsl/lower/mod.rs
+index e726eb207..2cd4eff75 100644
+--- a/naga/src/front/wgsl/lower/mod.rs
++++ b/naga/src/front/wgsl/lower/mod.rs
+@@ -1285,11 +1285,21 @@ impl From<bool> for MustUse {
+ 
+ pub struct Lowerer<'source, 'temp> {
+     index: &'temp Index<'source>,
++    /// Nesting depth of [`Self::expression_for_reference`] calls.
++    expression_depth: u32,
+ }
+ 
++/// Lowering recurses once per nesting level of an expression, and the parser
++/// builds chains like `~~~~x` or `x + x + x + ...` iteratively, so their depth
++/// is unbounded; past this depth the lowering would overflow the stack.
++const MAX_EXPRESSION_DEPTH: u32 = 1024;
++
+ impl<'source, 'temp> Lowerer<'source, 'temp> {
+     pub const fn new(index: &'temp Index<'source>) -> Self {
+-        Self { index }
++        Self {
++            index,
++            expression_depth: 0,
++        }
+     }
+ 
+     pub fn lower(&mut self, tu: ast::TranslationUnit<'source>) -> Result<'source, ir::Module> {
+@@ -2445,6 +2455,23 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
+         &mut self,
+         expr: Handle<ast::Expression<'source>>,
+         ctx: &mut ExpressionContext<'source, '_, '_>,
++    ) -> Result<'source, Typed<Handle<ir::Expression>>> {
++        if self.expression_depth >= MAX_EXPRESSION_DEPTH {
++            return Err(Box::new(Error::ExceededLimitForNestedExpressions {
++                span: ctx.ast_expressions.get_span(expr),
++                limit: MAX_EXPRESSION_DEPTH,
++            }));
++        }
++        self.expression_depth += 1;
++        let result = self.expression_for_reference_inner(expr, ctx);
++        self.expression_depth -= 1;
++        result
++    }
++
++    fn expression_for_reference_inner(
++        &mut self,
++        expr: Handle<ast::Expression<'source>>,
++        ctx: &mut ExpressionContext<'source, '_, '_>,
+     ) -> Result<'source, Typed<Handle<ir::Expression>>> {
+         let span = ctx.ast_expressions.get_span(expr);
+         let expr = &ctx.ast_expressions[expr];
+diff --git a/naga/tests/naga/wgsl_errors.rs b/naga/tests/naga/wgsl_errors.rs
+index 98598f81f..2991b369f 100644
+--- a/naga/tests/naga/wgsl_errors.rs
++++ b/naga/tests/naga/wgsl_errors.rs
+@@ -7179,3 +7179,32 @@ fn large_array_zero_value_is_limited() {
+     assert!(result.is_err());
+     naga::front::wgsl::parse_str("var<private> b = array<i32, 1024>();").unwrap();
+ }
++
++#[test]
++fn deep_expression_nesting_is_error_not_stack_overflow() {
++    // Unoptimized frames are much larger, so give the limit room; without it,
++    // 100k levels overflow any stack.
++    std::thread::Builder::new()
++        .stack_size(64 << 20)
++        .spawn(deep_expression_nesting)
++        .unwrap()
++        .join()
++        .unwrap();
++}
++
++fn deep_expression_nesting() {
++    // Fuzz finding (wasm32 guest with a 1 MiB stack): unary and binary
++    // operator chains are parsed iteratively but lowered recursively, so
++    // `~~~~...1` or `1+1+...` a few thousand operators long overflowed the
++    // stack.
++    let n = 100_000;
++    for src in [
++        format!("const a = {}1;", "~".repeat(n)),
++        format!("const a = 1{};", "+1".repeat(n)),
++        format!("fn f() {{ var x = 1; x = x{}; }}", "*x".repeat(n)),
++    ] {
++        let err = naga::front::wgsl::parse_str(&src).expect_err(&src[..20]);
++        assert_eq!(err.message(), "expression nesting limit reached");
++    }
++    naga::front::wgsl::parse_str(&format!("const a = 1{};", "+1".repeat(1000))).unwrap();
++}

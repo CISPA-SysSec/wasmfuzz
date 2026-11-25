@@ -1,0 +1,111 @@
+Saturate the end position in ff_jpegxl_collect_codestream_header() instead of letting it wrap.
+
+pos is an int64_t, and a box with a 64-bit size (size == 1) adds an attacker-chosen uint64_t
+to it. FFMIN(pos, INT_MAX) then returns a negative or wrapped value that is truncated to int,
+e.g. 0 for a jxlp box of size 0xbd000000ffffffef after 21 bytes of boxes. jpegxl_parse() uses
+the result as the end of the image (ctx->next), emits a zero-length frame and consumes nothing,
+and parse_packet() (libavformat/demux.c) calls the parser again with the same data forever:
+ffprobe hangs on a 49-byte file. Clamp pos to INT_MAX, which the parser already treats as
+"the image continues past this buffer".
+Includes the FATE test fate-jpegxl-parse (libavcodec/tests/jpegxl_parse.c).
+Not fixed upstream as of 224205649a; the related 47605bb2cd (ffmpeg PR 25511) fixed special
+box sizes in skip_boxes() only.
+
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+index f12ad9c..4757093 100644
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -1402,6 +1402,7 @@ TESTPROGS-$(CONFIG_CELP_MATH)             += celp_math
+ TESTPROGS-$(CONFIG_ENCODERS)              += hw_base_encode
+ TESTPROGS-$(CONFIG_GOLOMB)                += golomb
+ TESTPROGS-$(CONFIG_IDCTDSP)               += dct
++TESTPROGS-$(CONFIG_JPEGXL_PARSER)         += jpegxl_parse
+ TESTPROGS-$(CONFIG_DXV_ENCODER)           += hashtable
+ TESTPROGS-$(CONFIG_MJPEG_ENCODER)         += mjpegenc_huffman
+ TESTPROGS-$(CONFIG_MPEGAUDIOHEADER)       += mpegaudiodecheader
+diff --git a/libavcodec/jpegxl_parse.c b/libavcodec/jpegxl_parse.c
+index 47b831e..5888042 100644
+--- a/libavcodec/jpegxl_parse.c
++++ b/libavcodec/jpegxl_parse.c
+@@ -502,6 +502,8 @@ int ff_jpegxl_collect_codestream_header(const uint8_t *input_buffer, int input_l
+          */
+         if (!size)
+             size = bytestream2_get_bytes_left(&gb);
++        else if (size > INT_MAX - head_size - pos)
++            pos = INT_MAX; /* the box ends beyond anything we can index */
+         else
+             pos += size + head_size;
+ 
+diff --git a/libavcodec/tests/jpegxl_parse.c b/libavcodec/tests/jpegxl_parse.c
+new file mode 100644
+index 0000000..52aecee
+--- /dev/null
++++ b/libavcodec/tests/jpegxl_parse.c
+@@ -0,0 +1,51 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <stdio.h>
++
++#include "libavutil/intreadwrite.h"
++#include "libavcodec/jpegxl_parse.h"
++
++/*
++ * A container whose jxlp box declares a 64-bit size close to 2^64: the box end
++ * must not wrap around to a position at or before the box itself (a returned
++ * 0 made the jpegxl parser emit empty frames forever).
++ */
++static const uint8_t huge_jxlp_box[] = {
++    0x00, 0x00, 0x00, 0x0c, 'J',  'X',  'L',  ' ',  0x0d, 0x0a, 0x87, 0x0a,
++    0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x01, 'j',  'x',  'l',  'p',
++    0xbd, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xef,
++    0x00, 0x00, 0x00, 0x00, 0xff, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++};
++
++int main(void)
++{
++    uint8_t buf[4096];
++    int copied = 0;
++    int ret = ff_jpegxl_collect_codestream_header(huge_jxlp_box, sizeof(huge_jxlp_box),
++                                                  buf, sizeof(buf) - 64, &copied);
++
++    printf("huge jxlp box: ret=%d copied=%d\n", ret, copied);
++    /* the jxlp box starts at offset 21; anything that ends there or earlier is a wrap */
++    if (ret >= 0 && ret <= 21) {
++        fprintf(stderr, "box end %d wrapped around\n", ret);
++        return 1;
++    }
++    return 0;
++}
+diff --git a/tests/fate/libavcodec.mak b/tests/fate/libavcodec.mak
+index 2e2dabc..20a987e 100644
+--- a/tests/fate/libavcodec.mak
++++ b/tests/fate/libavcodec.mak
+@@ -98,6 +98,11 @@ fate-h265-levels: libavcodec/tests/h265_levels$(EXESUF)
+ fate-h265-levels: CMD = run libavcodec/tests/h265_levels$(EXESUF)
+ fate-h265-levels: REF = /dev/null
+ 
++FATE_LIBAVCODEC-$(CONFIG_JPEGXL_PARSER) += fate-jpegxl-parse
++fate-jpegxl-parse: libavcodec/tests/jpegxl_parse$(EXESUF)
++fate-jpegxl-parse: CMD = run libavcodec/tests/jpegxl_parse$(EXESUF)
++fate-jpegxl-parse: CMP = null
++
+ FATE_LIBAVCODEC-$(CONFIG_MPEGVIDEO) += fate-mpeg12framerate
+ fate-mpeg12framerate: libavcodec/tests/mpeg12framerate$(EXESUF)
+ fate-mpeg12framerate: CMD = run libavcodec/tests/mpeg12framerate$(EXESUF)

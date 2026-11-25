@@ -1,0 +1,218 @@
+Disable TIP opfl and refinemv when a TIP reference is scaled.
+
+AVM's is_optflow_refinement_enabled() and is_refinemv_allowed() return 0 for TIP blocks when
+either TIP reference has a different size than the current frame. dav2d's tip_pred() and its
+derive_lowest_px() counterpart did not check this and called mc_opfl() with a scaled
+reference (assertion refp size == cur size, recon_tmpl.c:1737; mc_opfl() has no scaled path).
+Adds tests/test_tip_scaled_refine.c.
+Not fixed upstream as of 74bfb0ac; no MR found (2026-11-24).
+
+diff --git a/src/decode.c b/src/decode.c
+index 5c6703f8..ccc60972 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -888,11 +888,16 @@ static void derive_lowest_px(Dav2dTaskContext *const t,
+             (f->frame_hdr->tip.frame_mode == DAV2D_TIP_FRAME_AS_REF ||
+              f->frame_hdr->tip.subpel_filter == DAV2D_FILTER_8TAP_SHARP);
+         const union refpair ref = f->rf.tip.ref;
++        // keep in sync with tip_pred()
++        const int tip_scaled = f->svc[ref.ref[0]][0].scale ||
++                               f->svc[ref.ref[1]][0].scale;
+         const int refine = opfl && f->frame_hdr->tip.frame_mode == DAV2D_TIP_FRAME_AS_REF &&
++                           !tip_scaled &&
+                            f->refdist[ref.ref[0]] == -f->refdist[ref.ref[1]];
+         const int step = 2 << (f->frame_hdr->tip.frame_mode == DAV2D_TIP_FRAME_AS_OUTPUT ? !opfl :
+                                ((!opfl && imin(bw4, bh4) >= 4) || b->bs == BS_256x256));
+-        opfl &= !!f->seq_hdr->opfl_refine && f->frame_hdr->has_bothside_refs;
++        opfl &= !!f->seq_hdr->opfl_refine && f->frame_hdr->has_bothside_refs &&
++                !tip_scaled;
+ 
+         const ptrdiff_t t_stride = f->rf.rp_stride;
+         const int x4e = t->bx >> 6, bx4 = t->bx & 63;
+diff --git a/src/recon_tmpl.c b/src/recon_tmpl.c
+index f86fbed1..0a7702ba 100644
+--- a/src/recon_tmpl.c
++++ b/src/recon_tmpl.c
+@@ -2199,13 +2199,19 @@ static int tip_pred(Dav2dTaskContext *const t,
+     const int is_bidir = b->cwp_idx != 16;
+     const union refpair ref = is_bidir ? f->rf.tip.ref :
+         (union refpair) { .pair = f->rf.tip.ref.ref[0] * 0x101 };
++    // like AVM is_optflow_refinement_enabled() / is_refinemv_allowed(), no
++    // opfl or refinemv if either TIP reference is scaled (mc_opfl() and the
++    // refinemv search don't support scaled references)
++    const int tip_scaled = f->svc[f->rf.tip.ref.ref[0]][0].scale ||
++                           f->svc[f->rf.tip.ref.ref[1]][0].scale;
+     const int refine = opfl && f->frame_hdr->tip.frame_mode == DAV2D_TIP_FRAME_AS_REF &&
+-                       f->seq_hdr->refine_mv &&
++                       f->seq_hdr->refine_mv && !tip_scaled &&
+                        f->refdist[ref.ref[0]] == -f->refdist[ref.ref[1]];
+     const int step = 2 << (f->frame_hdr->tip.frame_mode == DAV2D_TIP_FRAME_AS_OUTPUT ?
+                            !opfl :
+                            ((!opfl && imin(bw4, bh4) >= 4) || b->bs == BS_256x256));
+-    opfl &= !!f->seq_hdr->opfl_refine && f->frame_hdr->has_bothside_refs;
++    opfl &= !!f->seq_hdr->opfl_refine && f->frame_hdr->has_bothside_refs &&
++            !tip_scaled;
+     ptrdiff_t off_y = 0;
+     uint8_t *const mask = t->scratch.seg_mask;
+     const int bacp = f->seq_hdr->imp_msk_bld && b->cwp_idx == 8 &&
+diff --git a/tests/meson.build b/tests/meson.build
+index c0fb562e..ab841f54 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -145,6 +145,16 @@ test_intrabc_dv_validity = executable('test_intrabc_dv_validity',
+ test('test_intrabc_dv_validity', test_intrabc_dv_validity, suite: 'dav2d',
+      env: ['ASAN_OPTIONS=detect_leaks=0'])
+ 
++test_tip_scaled_refine = executable('test_tip_scaled_refine',
++    'test_tip_scaled_refine.c',
++    include_directories: dav2d_inc_dirs,
++    link_with: libdav2d,
++    dependencies: [thread_dependency],
++    build_by_default: true,
++)
++test('test_tip_scaled_refine', test_tip_scaled_refine, suite: 'dav2d',
++     env: ['ASAN_OPTIONS=detect_leaks=0'])
++
+ # fuzzing binaries
+ subdir('libfuzzer')
+ 
+diff --git a/tests/test_tip_scaled_refine.c b/tests/test_tip_scaled_refine.c
+new file mode 100644
+index 00000000..66db2823
+--- /dev/null
++++ b/tests/test_tip_scaled_refine.c
+@@ -0,0 +1,134 @@
++/*
++ * Copyright © 2026, VideoLAN and dav2d authors
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++ *
++ * 1. Redistributions of source code must retain the above copyright notice, this
++ *    list of conditions and the following disclaimer.
++ *
++ * 2. Redistributions in binary form must reproduce the above copyright notice,
++ *    this list of conditions and the following disclaimer in the documentation
++ *    and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
++ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++
++#include <errno.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++
++#include <dav2d/dav2d.h>
++
++/*
++ * TIP frame (tip frame_mode 2) whose TIP references are 1x1 while the frame
++ * is 3x1: AVM disables TIP optical-flow and refinemv for scaled references,
++ * dav2d called mc_opfl() with the scaled reference (assertion 'refp->p.p.w
++ * == f->cur.p.p.w && ...' in mc_opfl).
++ */
++static const uint8_t k_input0[] = {
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x91, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x62, 0xf2,
++    0xec, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x05,
++    0x61, 0x0d, 0x40, 0x11, 0x00, 0x01, 0x00, 0x00, 0xfa, 0x00, 0x00, 0xe5,
++    0x1a, 0x3c, 0x2b, 0x2b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x14, 0x12, 0xd9, 0xd1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x14, 0x16,
++    0xd9, 0x00, 0x2e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0xbb, 0x00,
++    0xbc, 0xfc, 0x00, 0x91, 0x2e, 0xb0, 0x00, 0x00, 0x00,
++};
++
++static unsigned r32le(const uint8_t *const p) {
++    return ((unsigned)p[3] << 24) | (p[2] << 16) | (p[1] << 8) | p[0];
++}
++
++/* Decode an IVF stream the way tests/libfuzzer/dav2d_fuzzer.c does. */
++static int decode_ivf(const uint8_t *const data, const size_t size) {
++    Dav2dSettings settings = { 0 };
++    Dav2dContext *ctx = NULL;
++    Dav2dPicture pic;
++    const uint8_t *ptr = data + 32;
++    int have_seq_hdr = 0, err;
++
++    dav2d_default_settings(&settings);
++    settings.max_frame_delay = settings.n_threads = 1;
++    settings.frame_size_limit = 4096 * 4096;
++    if (dav2d_open(&ctx, &settings) < 0)
++        return 1;
++
++    while (ptr <= data + size - 12) {
++        Dav2dData buf;
++        uint8_t *p;
++        const size_t frame_size = r32le(ptr);
++        ptr += 12;
++        if (frame_size > size || ptr > data + size - frame_size)
++            break;
++        if (!frame_size)
++            continue;
++        if (!have_seq_hdr) {
++            Dav2dSequenceHeader seq;
++            if (dav2d_parse_sequence_header(&seq, ptr, frame_size)) {
++                ptr += frame_size;
++                continue;
++            }
++            have_seq_hdr = 1;
++        }
++        if (!(p = dav2d_data_create(&buf, frame_size)))
++            break;
++        memcpy(p, ptr, frame_size);
++        ptr += frame_size;
++        do {
++            if ((err = dav2d_send_data(ctx, &buf)) < 0 && err != DAV2D_ERR(EAGAIN))
++                break;
++            for (;;) {
++                memset(&pic, 0, sizeof(pic));
++                err = dav2d_get_picture(ctx, &pic);
++                if (err == 0)
++                    dav2d_picture_unref(&pic);
++                else if (err == DAV2D_ERR(EAGAIN))
++                    break;
++                else
++                    goto next_frame;
++            }
++        } while (buf.sz > 0);
++    next_frame:
++        if (buf.sz > 0)
++            dav2d_data_unref(&buf);
++    }
++    dav2d_send_data(ctx, NULL);
++    for (int n = 0; n < 64; n++) {
++        memset(&pic, 0, sizeof(pic));
++        if ((err = dav2d_get_picture(ctx, &pic)) == 0)
++            dav2d_picture_unref(&pic);
++        else if (err == DAV2D_EOF)
++            break;
++    }
++    dav2d_close(&ctx);
++    return 0;
++}
++
++int main(void) {
++    /* Reaching the end without a crash is success; decode errors are OK. */
++    if (decode_ivf(k_input0, sizeof(k_input0))) return 1;
++    return 0;
++}

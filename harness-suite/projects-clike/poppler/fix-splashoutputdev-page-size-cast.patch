@@ -1,0 +1,53 @@
+Saturate the page bitmap size in SplashOutputDev::startPage().
+
+A huge MediaBox (times the DPI) gives page sizes beyond the int range, and
+static_cast<int>(width + 0.5) is undefined (UBSan: "SplashOutputDev.cc:1326:30:
+runtime error: 7.92889e+13 is outside the range of representable values of type
+'int'"). Saturate to [1, INT_MAX]; the SplashBitmap allocation then fails and
+startPage() falls back to its existing 1x1 bitmap.
+
+No regression test: the conversion is undefined, but no host behaves
+differently with the fix. x86-64 gives INT_MIN, which the old "w <= 0" check
+turned into a 1-pixel bitmap; wasm32 saturates to INT_MAX, the value this
+patch now returns, and the SplashBitmap allocation fails softly either way
+("Bogus memory allocation size"). The repro runs without a fault in the
+unfixed wasm32 builds of all four fuzz targets; a native ASan+UBSan build
+reports only the conversion above (poppler-pdf, poppler-page_search).
+
+Not fixed upstream as of 9182fd5.
+Upstream: open umbrella issue poppler/poppler#1764 (by LingMaple, 2026-07-20); open MR !2413 (by rogo1337, 2026-10-24) fixes the same overflow class in SplashOutputDev::beginType3Char, not startPage.
+
+diff --git a/poppler/SplashOutputDev.cc b/poppler/SplashOutputDev.cc
+index 357b3f5e2..7ff86a37c 100644
+--- a/poppler/SplashOutputDev.cc
++++ b/poppler/SplashOutputDev.cc
+@@ -1319,14 +1319,21 @@ void SplashOutputDev::startPage(int /*pageNum*/, GfxState *state, XRef *xrefA)
+     xref = xrefA;
+     if (state) {
+         setupScreenParams(state->getHDPI(), state->getVDPI());
+-        w = static_cast<int>(state->getPageWidth() + 0.5);
+-        if (w <= 0) {
+-            w = 1;
+-        }
+-        h = static_cast<int>(state->getPageHeight() + 0.5);
+-        if (h <= 0) {
+-            h = 1;
+-        }
++        // page sizes in device space can exceed the int range (huge
++        // MediaBox times DPI); saturate instead of an undefined cast,
++        // the bitmap allocation below then falls back to 1x1
++        const auto toBitmapDim = [](double v) -> int {
++            v += 0.5;
++            if (!(v >= 1)) {
++                return 1;
++            }
++            if (v >= static_cast<double>(INT_MAX)) {
++                return INT_MAX;
++            }
++            return static_cast<int>(v);
++        };
++        w = toBitmapDim(state->getPageWidth());
++        h = toBitmapDim(state->getPageHeight());
+     } else {
+         w = h = 1;
+     }

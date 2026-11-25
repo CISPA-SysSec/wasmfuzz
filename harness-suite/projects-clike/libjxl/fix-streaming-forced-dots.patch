@@ -1,0 +1,83 @@
+Subject: [PATCH] encoder: Disable streaming encoding when dots are forced on
+
+CanDoStreamingEncoding() falls back to the full-frame encoder when noise or
+patches are forced on, because the streaming path skips them, but not when
+dots are forced on. With DOTS=1 the default (buffering 0) encoder applies the
+dot dictionary and the streaming encoder silently ignores it, so the two
+produce different images (with gaborish or photon noise the difference is
+visible even in lossless mode). Treat forced dots like forced patches.
+Since libjxl#5158 (12e4bf40) lossless modular with forced Gaborish no longer
+streams, so the reproducer and the original lossless test pass without this
+fix; the test now uses a lossy VarDCT encode, which still differs.
+
+Found with the streaming fuzzer ("Check(outlier_count == 0)", streaming vs
+non-streaming output mismatch).
+Reproducer: repro/fix-streaming-forced-dots.bin (streaming_fuzzer input).
+Test: JxlTest.StreamingForcedDotsSamePixels.
+---
+diff --git a/lib/jxl/enc_frame.cc b/lib/jxl/enc_frame.cc
+index 5ccb7ef7..36385a33 100644
+--- a/lib/jxl/enc_frame.cc
++++ b/lib/jxl/enc_frame.cc
+@@ -1846,7 +1846,10 @@ bool CanDoStreamingEncoding(const CompressParams& cparams,
+   if (frame_data.IsJPEG()) {
+     return false;
+   }
+-  if (cparams.noise == Override::kOn || cparams.patches == Override::kOn) {
++  // Streaming skips noise estimation and the patch/dot dictionary search, so
++  // honour an explicit request for any of them with the full-frame encoder.
++  if (cparams.noise == Override::kOn || cparams.patches == Override::kOn ||
++      cparams.dots == Override::kOn) {
+     return false;
+   }
+   if (cparams.modular_mode && cparams.gaborish == Override::kOn) {
+diff --git a/lib/jxl/jxl_test.cc b/lib/jxl/jxl_test.cc
+index e348f8e2..37bea701 100644
+--- a/lib/jxl/jxl_test.cc
++++ b/lib/jxl/jxl_test.cc
+@@ -1983,5 +1983,45 @@ JXL_GTEST_INSTANTIATE_TEST_SUITE_P(
+     JxlStreamingTest, JxlStreamingEncodingTest,
+     testing::ValuesIn(StreamingEncodingTestParam::All()));
+ 
++TEST(JxlTest, StreamingForcedDotsSamePixels) {
++  // Sparse bright pixels that the dot detector picks up.
++  const size_t xsize = 5905;
++  const size_t ysize = 4;
++  TestImage image;
++  ASSERT_TRUE(image.SetDimensions(xsize, ysize));
++  ASSERT_TRUE(image.SetChannels(1));
++  image.SetAllBitDepths(5);
++  image.SetDataType(JXL_TYPE_UINT16).SetEndianness(JXL_LITTLE_ENDIAN);
++  JXL_TEST_ASSIGN_OR_DIE(auto frame, image.AddFrame());
++  frame.ZeroFill();
++  ASSERT_EQ(image.ppf().frames[0].color.stride, xsize * 2);
++  uint16_t* pixels =
++      reinterpret_cast<uint16_t*>(image.ppf().frames[0].color.pixels());
++  for (size_t x = 0; x + 1 < xsize; x += 64) {
++    pixels[x] = 0x1100;
++    pixels[x + 1] = 0x3c3c;
++  }
++
++  JXLCompressParams cparams;
++  // Lossy VarDCT: since libjxl#5158, lossless modular with forced Gaborish
++  // no longer streams, so it no longer shows the difference.
++  cparams.distance = 1.0;
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_EFFORT, 6);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_DECODING_SPEED, 1);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_DOTS, 1);
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_BUFFERING, 0);
++  extras::JXLDecompressParams dparams;
++
++  ThreadPoolForTests pool(0);
++  PackedPixelFile ppf_out;
++  Roundtrip(image.ppf(), cparams, dparams, pool.get(), &ppf_out);
++
++  cparams.AddOption(JXL_ENC_FRAME_SETTING_BUFFERING, 3);
++  PackedPixelFile ppf_out_streaming;
++  Roundtrip(image.ppf(), cparams, dparams, pool.get(), &ppf_out_streaming);
++
++  EXPECT_TRUE(jxl::test::SamePixels(ppf_out, ppf_out_streaming));
++}
++
+ }  // namespace
+ }  // namespace jxl

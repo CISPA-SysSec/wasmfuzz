@@ -2,7 +2,7 @@ set -e
 
 apt-get update && apt-get install -y unzip
 
-git clone-rev.sh https://github.com/google/bloaty.git "$PROJECT/repo" f1a83e63f36beb628dcf022e1201a2eb391a22a6 --recursive
+git clone-rev.sh https://github.com/google/bloaty.git "$PROJECT/repo" ccb49b0be3d5bc0dd156bcf16f1515726c395ec5 --recursive
 
 git -C "$PROJECT/repo/third_party/zlib" checkout 767c4c947852e143f582c85f14cf573411df1b35
 
@@ -10,7 +10,9 @@ git -C "$PROJECT/repo" apply ../port-build-and-wasi.patch
 git -C "$PROJECT/repo/third_party/abseil-cpp" apply ../../../port-absl-examine-stack.patch
 git -C "$PROJECT/repo/third_party/zlib" apply ../../../port-zlib-static.patch
 git -C "$PROJECT/repo" apply ../port-wasi-exceptions.patch
+git -C "$PROJECT/repo" apply ../port-wasi-no-threads.patch
 git -C "$PROJECT/repo" apply ../fix-demumble-missing-stdlib.patch
+git -C "$PROJECT/repo" apply ../fix-strictsubstr-32bit-size-truncation.patch
 
 # Build a host protoc matching the bundled protobuf; a mismatched release binary
 # generates headers that are incompatible with bloaty's pinned submodule.

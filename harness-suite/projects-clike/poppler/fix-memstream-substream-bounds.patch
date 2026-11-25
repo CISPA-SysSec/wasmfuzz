@@ -1,0 +1,115 @@
+Keep BaseMemStream::makeSubStream() inside the buffer.
+
+makeSubStream() stored an unchecked start offset, so bufPtr = buf + startA
+pointed outside the buffer for a startxref beyond the end of the file (e.g.
+"startxref 4294967295"). On 64-bit hosts that pointer is past bufEnd and the
+stream reads as empty, but on 32-bit hosts buf + 4294967295 wraps to buf - 1:
+the xref parser reads one byte before the buffer and, because setPos() clamps
+to the same bogus start, re-parses the file from there endlessly, creating
+LZW filter chains until the guest runs out of memory (bad_alloc in
+Stream::makeFilter < Parser::makeStream < XRef::readXRef). A negative start
+would read before the buffer on any host. Map out-of-range starts to an empty
+stream at the end of the buffer.
+
+Regression test cpp/tests/poppler-memstream-substream-test.cpp makes
+substreams of a 3-byte MemStream at offsets -1 (where buf + 4294967295 points
+on 32-bit hosts), 4 and 4294967295; without the fix the ones at -1 read the
+byte in front of the buffer.
+
+Not fixed upstream as of 9182fd5.
+Upstream: none found (poppler/poppler issues and MRs searched for
+makeSubStream, MemStream, startxref).
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 3f065428..4883d760 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -35,3 +35,7 @@ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-xref-copy-failure-test COMMAND poppler-xref-copy-failure-test)
+   set_tests_properties(poppler-xref-copy-failure-test PROPERTIES SKIP_RETURN_CODE 77)
+ endif()
++cpp_add_simpletest(poppler-memstream-substream-test poppler-memstream-substream-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-memstream-substream-test COMMAND poppler-memstream-substream-test)
++endif()
+diff --git a/cpp/tests/poppler-memstream-substream-test.cpp b/cpp/tests/poppler-memstream-substream-test.cpp
+new file mode 100644
+index 00000000..18482a4b
+--- /dev/null
++++ b/cpp/tests/poppler-memstream-substream-test.cpp
+@@ -0,0 +1,59 @@
++/*
++ * Regression test: BaseMemStream::makeSubStream() stored an unchecked start
++ * offset, so a substream for an offset outside the buffer pointed outside it.
++ * A bogus startxref such as 4294967295 makes XRef do exactly that; on 32-bit
++ * hosts buf + 4294967295 wraps to buf - 1, and the xref parser then read the
++ * byte before the buffer and reparsed the file from there forever. Start
++ * offsets outside the buffer now give an empty stream.
++ *
++ * The test puts a marker byte in front of the stream's buffer, so reading
++ * before the buffer is caught without memory errors. On 64-bit hosts the
++ * wrapped pointer of a 32-bit host is reproduced by a start offset of -1.
++ */
++
++#include <Object.h>
++#include <Stream.h>
++
++#include <iostream>
++#include <memory>
++#include <string>
++
++static int check(BaseStream &str, Goffset start, bool limited, Goffset length)
++{
++    std::unique_ptr<Stream> sub = str.makeSubStream(start, limited, length, Object::null());
++    if (!sub->rewind()) {
++        return 0;
++    }
++    const int c = sub->getChar();
++    if (c != EOF) {
++        std::cerr << "  FAIL: substream at " << start << (limited ? " (limited)" : "") << " reads 0x" << std::hex << c << std::dec << "\n";
++        return 1;
++    }
++    return 0;
++}
++
++int main()
++{
++    // the marker byte 'X' lies in front of the stream's buffer "abc"
++    static const char data[] = "Xabc";
++    MemStream str(data + 1, 0, 3, Object::null());
++
++    int failures = 0;
++    failures += check(str, -1, false, 0);
++    failures += check(str, -1, true, 2);
++    failures += check(str, 4, false, 0);
++    failures += check(str, 4294967295LL, false, 0);
++
++    // offsets inside the buffer still work
++    std::unique_ptr<Stream> sub = str.makeSubStream(1, true, 1, Object::null());
++    if (!sub->rewind() || sub->getChar() != 'b' || sub->getChar() != EOF) {
++        std::cerr << "  FAIL: substream at 1 (limited to 1 byte) is not \"b\"\n";
++        ++failures;
++    }
++
++    if (failures) {
++        return 1;
++    }
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/poppler/Stream.h b/poppler/Stream.h
+index d714972e..1de3631f 100644
+--- a/poppler/Stream.h
++++ b/poppler/Stream.h
+@@ -672,6 +672,11 @@ public:
+     {
+         Goffset newLength;
+ 
++        // buf + startA must stay inside the buffer (an out-of-range offset, e.g. a bogus
++        // startxref, gives an empty stream)
++        if (startA < 0 || startA > start + length) {
++            startA = start + length;
++        }
+         if (!limited || startA + lengthA > start + length) {
+             newLength = start + length - startA;
+         } else {

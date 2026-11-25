@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/m4b/goblin.git "$PROJECT/repo" 24a62600a4a75c145c08ec9dd82964acf1bb833b
+git clone-rev.sh https://github.com/m4b/goblin.git "$PROJECT/repo" cc6beec889d74680d8f77626f508cb9d949dfc23
 git -C "$PROJECT/repo" apply "$PROJECT/fix-32-bit-overflows.patch"

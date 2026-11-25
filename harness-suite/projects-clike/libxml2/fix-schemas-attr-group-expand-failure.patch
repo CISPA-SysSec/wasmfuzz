@@ -1,0 +1,135 @@
+Subject: [PATCH] schemas: Stop when expanding attribute group references fails
+
+xmlSchemaFixupComponents ignored the result of
+xmlSchemaAttributeGroupExpandRefs. If the expansion fails, e.g. because
+xmlSchemaItemListInsert hits a malloc failure while inserting the attribute
+uses of a referenced group, the group is already flagged as expanded but its
+attribute use list still contains XML_SCHEMA_EXTRA_QNAMEREF items. The
+following xmlSchemaCheckAGPropsCorrect then reads these QName references as
+xmlSchemaAttributeUse and dereferences garbage in
+xmlSchemaIsDerivedFromBuiltInType. The memory error is raised without a
+context, so pctxt->nberrors does not stop the fixup either. Report an internal
+error like xmlSchemaFixupTypeAttributeUses does for the same failure, so that
+FIXHFAILURE ends the fixup.
+
+Found with the schema fuzzer's malloc failure injection (SEGV in
+xmlSchemaIsDerivedFromBuiltInType < xmlSchemaCheckAGPropsCorrect, attribute
+group referencing another group several times). Regression test
+testSchemaAttrGroupRefOom in testparser.c, which fails each allocation of the
+schema parser in turn.
+
+Not fixed upstream as of 21c8223.
+Upstream: no report of this crash found. The closed, unmerged merge request
+GNOME/libxml2!454 (2026-09-03, "xmlschemas: Fix NULL deref and silent wrong
+verdicts on malloc failure") handled unreported malloc failures in the same
+area (xmlSchemaExpandAttributeGroupRefs, xmlSchemaFixupTypeAttributeUses),
+but not this unchecked return value.
+---
+diff --git a/testparser.c b/testparser.c
+index 4e71c8ea..e1a119dd 100644
+--- a/testparser.c
++++ b/testparser.c
+@@ -305,6 +305,69 @@ testCtxtInputGetters(void) {
+     return err;
+ }
+ 
++#ifdef LIBXML_SCHEMAS_ENABLED
++static int
++testSchemaAttrGroupRefOom(void) {
++    /*
++     * Make each allocation of the schema parser fail in turn. A failure
++     * while expanding the first attribute group reference of "b" must
++     * not leave the second one in the attribute uses.
++     */
++    const char schemaContent[] =
++        "<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'>\n"
++        " <xs:attributeGroup name='a'>\n"
++        "  <xs:attribute name='a1'/><xs:attribute name='a2'/>\n"
++        "  <xs:attribute name='a3'/><xs:attribute name='a4'/>\n"
++        "  <xs:attribute name='a5'/><xs:attribute name='a6'/>\n"
++        " </xs:attributeGroup>\n"
++        " <xs:attributeGroup name='c'>\n"
++        "  <xs:attribute name='c1'/>\n"
++        " </xs:attributeGroup>\n"
++        " <xs:attributeGroup name='b'>\n"
++        "  <xs:attributeGroup ref='a'/>\n"
++        "  <xs:attributeGroup ref='c'/>\n"
++        " </xs:attributeGroup>\n"
++        "</xs:schema>\n";
++    xmlFreeFunc freeFunc;
++    xmlMallocFunc mallocFunc;
++    xmlReallocFunc reallocFunc;
++    xmlStrdupFunc strdupFunc;
++    int err = 0;
++
++    xmlMemGet(&freeFunc, &mallocFunc, &reallocFunc, &strdupFunc);
++
++    for (testFailAllocNum = 1; ; testFailAllocNum++) {
++        xmlSchemaParserCtxtPtr pctxt;
++        xmlSchemaPtr schema;
++        int failed;
++
++        testFailAllocCount = 0;
++        xmlMemSetup(free, testFailMalloc, testFailRealloc, testFailStrdup);
++        pctxt = xmlSchemaNewMemParserCtxt(schemaContent,
++                                          sizeof(schemaContent) - 1);
++        if (pctxt != NULL) {
++            xmlSchemaSetParserStructuredErrors(pctxt, testIgnoreError, NULL);
++            schema = xmlSchemaParse(pctxt);
++            xmlSchemaFreeParserCtxt(pctxt);
++        } else {
++            schema = NULL;
++        }
++        xmlMemSetup(freeFunc, mallocFunc, reallocFunc, strdupFunc);
++        failed = (testFailAllocCount >= testFailAllocNum);
++
++        if ((!failed) && (schema == NULL)) {
++            fprintf(stderr, "testSchemaAttrGroupRefOom: parse failed\n");
++            err = 1;
++        }
++        xmlSchemaFree(schema);
++        if ((err) || (!failed))
++            break;
++    }
++
++    return(err);
++}
++#endif /* LIBXML_SCHEMAS_ENABLED */
++
+ #ifdef LIBXML_VALID_ENABLED
+ static void
+ testSwitchDtdExtSubset(void *vctxt, const xmlChar *name ATTRIBUTE_UNUSED,
+@@ -2108,6 +2171,9 @@ main(void) {
+     err |= testWriterClose();
+ #endif
+     err |= testBuildRelativeUri();
++#ifdef LIBXML_SCHEMAS_ENABLED
++    err |= testSchemaAttrGroupRefOom();
++#endif
+ #if defined(LIBXML_WINPATH_ENABLED)
+     err |= testWindowsUri();
+ #endif
+diff --git a/xmlschemas.c b/xmlschemas.c
+index fd4d7fe2..f5594f1d 100644
+--- a/xmlschemas.c
++++ b/xmlschemas.c
+@@ -20679,8 +20679,17 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+ 		if ((! WXS_ATTR_GROUP_EXPANDED(item)) &&
+ 		    WXS_ATTR_GROUP_HAS_REFS(item))
+ 		{
+-		    xmlSchemaAttributeGroupExpandRefs(pctxt,
+-			WXS_ATTR_GROUP_CAST item);
++		    /*
++		    * On failure (e.g. malloc failure while inserting the
++		    * referenced attribute uses), unexpanded references remain
++		    * in the attribute uses and must not reach
++		    * xmlSchemaCheckAGPropsCorrect().
++		    */
++		    if (xmlSchemaAttributeGroupExpandRefs(pctxt,
++			    WXS_ATTR_GROUP_CAST item) == -1) {
++			PERROR_INT("xmlSchemaFixupComponents",
++			    "failed to expand attribute group references");
++		    }
+ 		    FIXHFAILURE;
+ 		}
+ 		break;

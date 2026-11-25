@@ -1,3 +1,5 @@
+Upstream: open umbrella issue gfx-rs/wgpu#7687 (by 0x64617061, 2025-05-12) lists the same spv_parser index-out-of-bounds on short OpExecutionMode LocalSize operands (front/spv/mod.rs). No fix yet.
+
 diff --git a/naga/src/front/spv/mod.rs b/naga/src/front/spv/mod.rs
 --- a/naga/src/front/spv/mod.rs
 +++ b/naga/src/front/spv/mod.rs

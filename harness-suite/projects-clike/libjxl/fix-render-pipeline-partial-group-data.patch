@@ -1,0 +1,109 @@
+Subject: [PATCH] render_pipeline: Keep thread buffers all or nothing
+
+LowMemoryRenderPipeline::PrepareForThreadsInternal() appended the input
+buffers of a thread to group_data_ first and then allocated its channels.
+When an allocation failed (memory cap), the next call started at
+group_data_.size() and never allocated the missing channels, so the decoder
+later wrote group data into empty planes (a JXL_DASSERT in debug builds, an
+out-of-bounds write otherwise, e.g. in the noise stage's RandomImage).
+Allocate all channels of a thread before adding them.
+
+Found with djxl_fuzzer (allocation failure during a flush).
+Test: RenderPipelineTest.PrepareForThreadsAfterFailedAllocation.
+
+diff --git a/lib/jxl/render_pipeline/low_memory_render_pipeline.cc b/lib/jxl/render_pipeline/low_memory_render_pipeline.cc
+index 3cd1f170..20f4eb87 100644
+--- a/lib/jxl/render_pipeline/low_memory_render_pipeline.cc
++++ b/lib/jxl/render_pipeline/low_memory_render_pipeline.cc
+@@ -461,16 +461,19 @@ Status LowMemoryRenderPipeline::PrepareForThreadsInternal(size_t num,
+   use_group_ids_ = use_group_ids;
+   size_t num_buffers = use_group_ids_ ? frame_dimensions_.num_groups : num;
+   for (size_t t = group_data_.size(); t < num_buffers; t++) {
+-    group_data_.emplace_back();
+-    group_data_[t].resize(shifts.size());
++    // Only add the buffers of a thread (or group) once all its channels are
++    // allocated: after a failed allocation, the next call starts at
++    // group_data_.size() and would never allocate the missing channels.
++    std::vector<ImageF> data(shifts.size());
+     for (size_t c = 0; c < shifts.size(); c++) {
+       JXL_ASSIGN_OR_RETURN(
+-          group_data_[t][c],
++          data[c],
+           ImageF::Create(memory_manager_,
+                          GroupInputXSize(c) + group_data_x_border_ * 2,
+                          GroupInputYSize(c) + group_data_y_border_ * 2,
+                          kRenderPipelineXOffset));
+     }
++    group_data_.emplace_back(std::move(data));
+   }
+   // TODO(veluca): avoid reallocating buffers if not needed.
+   stage_data_.resize(num);
+diff --git a/lib/jxl/render_pipeline/render_pipeline_test.cc b/lib/jxl/render_pipeline/render_pipeline_test.cc
+index 3a7e76a1..880bca7c 100644
+--- a/lib/jxl/render_pipeline/render_pipeline_test.cc
++++ b/lib/jxl/render_pipeline/render_pipeline_test.cc
+@@ -13,6 +13,7 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdio>
++#include <cstdlib>
+ #include <memory>
+ #include <ostream>
+ #include <sstream>
+@@ -156,6 +157,56 @@ TEST(RenderPipelineTest, CallAllGroups) {
+   EXPECT_EQ(pipeline->PassesWithAllInput(), 1u);
+ }
+ 
++// A failed allocation in PrepareForThreads must not leave the input buffers of
++// a thread partially allocated: the next call skipped them, and the decoder
++// then wrote group data into empty planes.
++TEST(RenderPipelineTest, PrepareForThreadsAfterFailedAllocation) {
++  struct FailingAllocator {
++    size_t num_allocs = 0;
++    size_t fail_at = 0;  // 0: never fail.
++  };
++  constexpr size_t kNumThreads = 2;
++  constexpr size_t kNumChannels = 3;
++  for (size_t fail_at = 1;; ++fail_at) {
++    FailingAllocator state;
++    JxlMemoryManager memory_manager;
++    memory_manager.opaque = &state;
++    memory_manager.alloc = [](void* opaque, size_t size) -> void* {
++      auto* s = static_cast<FailingAllocator*>(opaque);
++      if (s->fail_at != 0 && ++s->num_allocs == s->fail_at) return nullptr;
++      return malloc(size);
++    };
++    memory_manager.free = [](void* opaque, void* address) { free(address); };
++    RenderPipeline::Builder builder(&memory_manager, kNumChannels);
++    ASSERT_TRUE(builder.AddStage(jxl::make_unique<Check0FinalStage>()));
++    FrameDimensions frame_dimensions;
++    frame_dimensions.Set(/*xsize_px=*/256, /*ysize_px=*/256,
++                         /*group_size_shift=*/0,
++                         /*max_hshift=*/0, /*max_vshift=*/0,
++                         /*modular_mode=*/false, /*upsampling=*/1);
++    JXL_TEST_ASSIGN_OR_DIE(auto pipeline,
++                           std::move(builder).Finalize(frame_dimensions));
++    state.fail_at = fail_at;
++    bool prepared = static_cast<bool>(
++        pipeline->PrepareForThreads(kNumThreads, /*use_group_ids=*/false));
++    state.fail_at = 0;
++    // Stop once PrepareForThreads makes fewer than `fail_at` allocations.
++    if (prepared) break;
++    ASSERT_TRUE(
++        pipeline->PrepareForThreads(kNumThreads, /*use_group_ids=*/false));
++    for (size_t t = 0; t < kNumThreads; t++) {
++      auto input_buffers = pipeline->GetInputBuffers(0, t);
++      for (size_t c = 0; c < kNumChannels; c++) {
++        const auto& buffer = input_buffers.GetBuffer(c);
++        EXPECT_LE(buffer.second.x1(), buffer.first->xsize())
++            << "fail_at " << fail_at << " thread " << t << " channel " << c;
++        EXPECT_LE(buffer.second.y1(), buffer.first->ysize())
++            << "fail_at " << fail_at << " thread " << t << " channel " << c;
++      }
++    }
++  }
++}
++
+ TEST(RenderPipelineTest, BuildFast) {
+   JxlMemoryManager* memory_manager = jxl::test::MemoryManager();
+   RenderPipeline::Builder builder(memory_manager, /*num_c=*/1);

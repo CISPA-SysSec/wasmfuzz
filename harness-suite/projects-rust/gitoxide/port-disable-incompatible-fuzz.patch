@@ -1,5 +1,12 @@
+Keep gix-pack's fuzz crate out of the suite build (build-rust-harness.py picks up crates
+with cargo-fuzz metadata). Its bins include `index_file`, the same name as gix-index's
+fuzz bin, and the suite names modules <project>-<bin>, so both would become
+gitoxide-index_file. (The original reason, from the suite's initial commit, is not
+recorded.)
+Upstream: none (suite-specific build selection).
+
 diff --git a/gix-pack/fuzz/Cargo.toml b/gix-pack/fuzz/Cargo.toml
-index 3a9f42add..f0bda9700 100644
+index 251cc86..45b323a 100644
 --- a/gix-pack/fuzz/Cargo.toml
 +++ b/gix-pack/fuzz/Cargo.toml
 @@ -5,7 +5,6 @@ publish = false
@@ -9,4 +16,4 @@ index 3a9f42add..f0bda9700 100644
 -cargo-fuzz = true
  
  [dependencies]
- anyhow = "1.0.100"
+ gix-utils = { version = "^0.5.3", path = "../../gix-utils", features = ["progress"] }

@@ -1,0 +1,81 @@
+Subject: [PATCH] streaming_fuzzer: Allow approximate lossless Gaborish and lossy seams
+
+Two differences between the full-frame and the streaming encode that the
+per-sample threshold cannot tell from a bug:
+- With Gaborish forced on, a lossless encode is only approximately lossless
+  (approximate inverse Gaborish, rounded to the bit depth); both outputs can
+  be most of a step away from the source, so at 1-2 bits they differ by one
+  step. Allow one step at the bit depth for such samples.
+- The streaming encoder sees one DC group at a time, so lossy heuristics
+  (adaptive quantization, invisible pixel simplification) decide differently
+  next to a DC group border. Skip samples within 8 pixels of one for lossy
+  encodes.
+
+Since libjxl#5158 (12e4bf40) lossless modular with forced Gaborish never
+streams, so both encodes take the full-frame path and the first allowance is
+probably dead (its reproducer passes without this patch at 12e4bf40); the
+seam allowance is still needed.
+
+diff --git a/tools/streaming_fuzzer.cc b/tools/streaming_fuzzer.cc
+index cb0b977e..b6b95ad0 100644
+--- a/tools/streaming_fuzzer.cc
++++ b/tools/streaming_fuzzer.cc
+@@ -14,6 +14,7 @@
+ #include <jxl/types.h>
+ 
+ #include <array>
++#include <cmath>
+ #include <cstdint>
+ #include <cstdio>
+ #include <cstdlib>
+@@ -422,12 +423,49 @@ void Run(const FuzzSpec& spec) {
+                                       0.0625f, 0.0625f, 0.0625f, 0.10f, 0.10f};
+   float threshold = kThreshold[effort];
+ 
++  bool lossless = (spec.distance == 0.0f);
++  // Gaborish forced on makes a lossless encode only approximately lossless:
++  // the encoder applies an approximate inverse Gaborish and rounds it to the
++  // bit depth, so each output can be most of a step away from the source, and
++  // the two encoders (only the full-frame one subtracts patches first) can end
++  // up one step apart. At low bit depths, that step is larger than the
++  // threshold, so also allow one step at the bit depth.
++  Check(spec.int_options[6].flag == JXL_ENC_FRAME_SETTING_GABORISH);
++  bool lossless_gaborish = lossless && spec.int_options[6].value == 1;
++  float max_val = static_cast<float>((1u << spec.bit_depth) - 1);
++  // The streaming encoder sees one DC group at a time, so lossy heuristics
++  // (adaptive quantization, invisible pixel simplification, ...) can decide
++  // differently next to a DC group border: skip those samples.
++  Check(spec.int_options[7].flag == JXL_ENC_FRAME_SETTING_MODULAR);
++  Check(spec.int_options[17].flag ==
++        JXL_ENC_FRAME_SETTING_MODULAR_GROUP_SIZE);
++  int group_size_shift = spec.int_options[17].value;
++  size_t group_dim = (spec.int_options[7].value == 1 && group_size_shift >= 0)
++                         ? size_t{128} << group_size_shift
++                         : 256;
++  size_t dc_group_dim = group_dim * 8;
++  constexpr size_t kSeamBorder = 8;
++  const auto near_seam = [&](size_t v) {
++    return v + kSeamBorder >= dc_group_dim &&
++           (v + kSeamBorder) % dc_group_dim < 2 * kSeamBorder;
++  };
++
+   int outlier_count = 0;
+   for (size_t i = 0; i < dec_default.size(); ++i) {
++    size_t pixel = i / 3;
++    if (!lossless && (near_seam(pixel % spec.xsize) ||
++                      near_seam(pixel / spec.xsize))) {
++      continue;
++    }
+     float d1 = Clamp1(dec_default[i], 0.0f, 1.0f);
+     float d2 = Clamp1(dec_streaming[i], 0.0f, 1.0f);
+     float abs_diff = std::abs(d1 - d2);
+-    if (abs_diff > threshold) outlier_count++;
++    if (abs_diff <= threshold) continue;
++    if (lossless_gaborish &&
++        std::abs(std::round(d1 * max_val) - std::round(d2 * max_val)) <= 1) {
++      continue;
++    }
++    outlier_count++;
+   }
+   if (false) {
+     fprintf(stderr, "Number of outlier values: %d / %d\n", outlier_count,

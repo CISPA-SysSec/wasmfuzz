@@ -1,0 +1,68 @@
+diff --git a/symphonia-metadata/src/embedded/vorbis.rs b/symphonia-metadata/src/embedded/vorbis.rs
+index 4d9e0bf..500a149 100644
+--- a/symphonia-metadata/src/embedded/vorbis.rs
++++ b/symphonia-metadata/src/embedded/vorbis.rs
+@@ -202,7 +202,7 @@ fn parse_chapter_timestamp(time: &str) -> Result<Time> {
+ 
+     /// Parse an unsigned number containing atleast 1 digit from a string slice, and return the
+     /// number as an `u32` with the number of digits.
+-    fn parse_unsigned_num(buf: &str, trim_leading: bool) -> Result<(u32, u8)> {
++    fn parse_unsigned_num(buf: &str, trim_leading: bool) -> Result<(u32, usize)> {
+         // The string slice is empty. This is an error.
+         if buf.is_empty() {
+             return Err(FMT_ERR);
+@@ -228,7 +228,7 @@ fn parse_chapter_timestamp(time: &str) -> Result<Time> {
+                     }
+                     _ => None,
+                 })
+-                .map(|num| (num, buf.len() as u8))
++                .map(|num| (num, buf.len()))
+                 .ok_or(FMT_ERR)
+         }
+     }
+@@ -250,8 +250,13 @@ fn parse_chapter_timestamp(time: &str) -> Result<Time> {
+     let (s, _) = parse_unsigned_num(s_str, true)?;
+     // This is the numerator portion of fractional seconds.
+     let (frac_s_numer, frac_s_digits) = parse_unsigned_num(frac_s_str, false)?;
+-    // The number of digits in the numerator indicates the denominator.
+-    let ns = (1_000_000_000 * u64::from(frac_s_numer)) / 10u64.pow(u32::from(frac_s_digits));
++    // The number of digits in the numerator indicates the denominator. Leading zeros are
++    // significant, so the denominator may not fit in an u64. Since the numerator is an u32, the
++    // fraction is then less than 1 ns.
++    let ns = u32::try_from(frac_s_digits)
++        .ok()
++        .and_then(|digits| 10u64.checked_pow(digits))
++        .map_or(0, |denom| (1_000_000_000 * u64::from(frac_s_numer)) / denom);
+ 
+     Time::from_hhmmss(
+         h,
+@@ -581,4 +586,29 @@ mod tests {
+         assert!(parse_chapter_timestamp("00:00:60.000").is_err());
+         assert!(parse_chapter_timestamp("00:00:256.000").is_err());
+     }
++
++    #[test]
++    fn verify_parse_chapter_timestamp_long_fraction() {
++        use super::parse_chapter_timestamp;
++
++        let ts = |zeros: usize, digit: &str| format!("00:00:01.{}{}", "0".repeat(zeros), digit);
++        let one_sec = Time::from_hhmmss(0, 0, 1, 0).unwrap();
++
++        // Fractions with leading zeros: the denominator exceeds u64 (10^20 and up, and 10^64
++        // wraps to 0 in u64), the digit count exceeds u8, but the fraction is below 1 ns.
++        assert_eq!(parse_chapter_timestamp(&ts(9, "1")).unwrap(), one_sec);
++        assert_eq!(parse_chapter_timestamp(&ts(19, "1")).unwrap(), one_sec);
++        assert_eq!(parse_chapter_timestamp(&ts(63, "1")).unwrap(), one_sec);
++        assert_eq!(parse_chapter_timestamp(&ts(256, "1")).unwrap(), one_sec);
++        assert_eq!(parse_chapter_timestamp(&ts(300, "4294967295")).unwrap(), one_sec);
++        // Insignificant trailing zeros are still trimmed.
++        assert_eq!(
++            parse_chapter_timestamp(&format!("00:00:01.5{}", "0".repeat(100))).unwrap(),
++            Time::from_hhmmss(0, 0, 1, 500_000_000).unwrap()
++        );
++        assert_eq!(
++            parse_chapter_timestamp(&ts(8, "1")).unwrap(),
++            Time::from_hhmmss(0, 0, 1, 1).unwrap()
++        );
++    }
+ }

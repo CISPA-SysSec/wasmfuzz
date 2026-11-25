@@ -1,0 +1,57 @@
+Search each base-font directory only once in GlobalParams::setupBaseFonts().
+
+findFontFile() calls setupBaseFonts(POPPLER_FONTSDIR) on every font lookup.
+Without the base-14 font files installed, every call tried to open all 14 fonts
+in the given directory and in each of the five displayFontDirs again, and
+logged "No display font" for each. Remember the directories already searched
+and return early for them; a font missing from all of them stays missing.
+
+No regression test: this is a performance fix and changes no result. For the
+repro (one page using 16 fonts), the wasm32 poppler-pdf fuzz target runs ~15.5M
+instructions with the fix and ~281M without (native ASan build: 0.22 s vs
+0.67 s). poppler-page_search also needs more than 20M without the fix and less
+with it; poppler-doc and poppler-page_label stay below 20M either way.
+
+Not fixed upstream as of 9182fd5.
+Upstream: none found (poppler/poppler issues and MRs searched for
+setupBaseFonts, findFontFile, base fonts).
+
+diff --git a/poppler/GlobalParams.cc b/poppler/GlobalParams.cc
+index ad43d0f..3f82902 100644
+--- a/poppler/GlobalParams.cc
++++ b/poppler/GlobalParams.cc
+@@ -1374,6 +1374,12 @@ void GlobalParams::setupBaseFonts(const char *dir)
+     FILE *f;
+     int i, j;
+ 
++    // findFontFile() calls this for every font lookup; without the base fonts installed,
++    // each call probed all 14 fonts in every directory again
++    if (!baseFontDirsSearched.insert(dir ? dir : "").second) {
++        return;
++    }
++
+     for (i = 0; displayFontTab[i].name; ++i) {
+         if (fontFiles.count(displayFontTab[i].name) > 0) {
+             continue;
+diff --git a/poppler/GlobalParams.h b/poppler/GlobalParams.h
+index 47217e3..b6bfe8e 100644
+--- a/poppler/GlobalParams.h
++++ b/poppler/GlobalParams.h
+@@ -46,6 +46,7 @@
+ #include "UnicodeMap.h"
+ #include "Error.h"
+ #include <unordered_map>
++#include <unordered_set>
+ #include <string>
+ #include <memory>
+ #include "PopplerMutex.h"
+@@ -208,6 +209,9 @@ private:
+ #endif
+     // font files: font name mapped to path
+     std::unordered_map<std::string, std::string> fontFiles;
++    // directories setupBaseFonts() has already searched: a font missing from all of
++    // them stays missing, so later lookups don't search them again
++    std::unordered_set<std::string> baseFontDirsSearched;
+     SysFontList *sysFonts; // system fonts
+     std::string textEncoding; // encoding (unicodeMap) to use for text
+                               //   output

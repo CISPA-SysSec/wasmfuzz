@@ -1,0 +1,296 @@
+SplashOutputDev builds a lookup table with 1 << BitsPerComponent entries for
+one-component images, and GfxImageColorMap accepts up to 30 bits.
+drawImage() allocates it with gmallocn_checkoverflow() and renders without
+the table when that fails; drawMaskedImage() used gmallocn(), which aborts
+("Bogus memory allocation size") once n * 3 or n * 4 overflows int. Use the
+checked allocation there too. drawSoftMaskedImage() allocated the soft mask's
+table (1 GB for 30 bits, abort when that fails) although ImageStream pixels
+are bytes and the table is never indexed past 255: cap it at 256 entries.
+
+Not fixed upstream as of d828315.
+Upstream: none found (poppler/poppler issues and MRs searched for
+drawMaskedImage, "lookup table", "Bogus memory allocation size").
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index a53f4744e..df493dbd5 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -38,6 +38,10 @@ cpp_add_simpletest(poppler-splashbitmap-alpha-test poppler-splashbitmap-alpha-te
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-splashbitmap-alpha-test COMMAND poppler-splashbitmap-alpha-test)
+ endif()
++cpp_add_simpletest(poppler-masked-image-lookup-test poppler-masked-image-lookup-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-masked-image-lookup-test COMMAND poppler-masked-image-lookup-test)
++endif()
+ 
+ if(ENABLE_FUZZER)
+   cpp_add_simpletest(doc_fuzzer ./fuzzing/doc_fuzzer.cc)
+diff --git a/cpp/tests/poppler-masked-image-lookup-test.cpp b/cpp/tests/poppler-masked-image-lookup-test.cpp
+new file mode 100644
+index 000000000..683722131
+--- /dev/null
++++ b/cpp/tests/poppler-masked-image-lookup-test.cpp
+@@ -0,0 +1,149 @@
++/*
++ * Regression test: SplashOutputDev builds a colour lookup table with
++ * 1 << BitsPerComponent entries for one-component images. GfxImageColorMap
++ * accepts up to 30 bits, so the table can need more than INT_MAX bytes.
++ * drawImage() allocates it with gmallocn_checkoverflow() and renders without
++ * the table when that fails; drawMaskedImage() used gmallocn() and aborted
++ * ("Bogus memory allocation size"). drawSoftMaskedImage() allocated the soft
++ * mask's table (1 GB for 30 bits) with gmalloc(), which aborts when the
++ * allocation fails, although ImageStream pixels are bytes and the table is
++ * never indexed past 255.
++ *
++ * Page 1: a 30-bit gray image with a stencil /Mask (drawMaskedImage()).
++ * Page 2: an 8-bit image with a 30-bit gray /SMask (drawSoftMaskedImage()).
++ * Page 2 caps the address space (RLIMIT_AS) so that the 1 GB allocation fails,
++ * which does not work under AddressSanitizer: it is skipped there.
++ */
++
++#include <poppler-document.h>
++#include <poppler-image.h>
++#include <poppler-page.h>
++#include <poppler-page-renderer.h>
++
++#include <cstdio>
++#include <iostream>
++#include <memory>
++#include <string>
++#include <vector>
++
++#if defined(__has_feature)
++#    if __has_feature(address_sanitizer)
++#        define POPPLER_TEST_ASAN 1
++#    endif
++#endif
++#if defined(__SANITIZE_ADDRESS__)
++#    define POPPLER_TEST_ASAN 1
++#endif
++
++#ifdef __linux__
++#    include <sys/resource.h>
++#    include <unistd.h>
++#endif
++
++static std::string stream_obj(const std::string &dict, const std::string &data)
++{
++    return "<< " + dict + " /Length " + std::to_string(data.size()) + " >>\nstream\n" + data + "\nendstream";
++}
++
++static std::string build_pdf()
++{
++    const std::string content = "q 20 0 0 20 0 0 cm /Im1 Do Q";
++    const std::vector<std::string> objs = {
++        "<< /Type /Catalog /Pages 2 0 R >>",
++        "<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>",
++        // page 1: 30-bit image with a stencil mask
++        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>",
++        stream_obj("", content),
++        stream_obj("/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 30 /Mask 6 0 R", std::string(16, '\x55')),
++        stream_obj("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ImageMask true", std::string(1, '\x00')),
++        // page 2: 8-bit image with a 30-bit soft mask
++        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Resources << /XObject << /Im1 8 0 R >> >> /Contents 4 0 R >>",
++        stream_obj("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 9 0 R", std::string(1, '\x80')),
++        stream_obj("/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 30", std::string(16, '\xaa')),
++    };
++    std::string pdf = "%PDF-1.7\n";
++    std::vector<size_t> offsets;
++    for (size_t i = 0; i < objs.size(); ++i) {
++        offsets.push_back(pdf.size());
++        pdf += std::to_string(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
++    }
++    const size_t xrefOffset = pdf.size();
++    pdf += "xref\n0 " + std::to_string(objs.size() + 1) + "\n0000000000 65535 f \n";
++    for (size_t off : offsets) {
++        char line[21];
++        snprintf(line, sizeof(line), "%010zu 00000 n \n", off);
++        pdf += line;
++    }
++    pdf += "trailer\n<< /Size " + std::to_string(objs.size() + 1) + " /Root 1 0 R >>\nstartxref\n" + std::to_string(xrefOffset) + "\n%%EOF\n";
++    return pdf;
++}
++
++static bool render(poppler::document *doc, int index)
++{
++    std::unique_ptr<poppler::page> page(doc->create_page(index));
++    if (!page) {
++        std::cerr << "  FAIL: no page " << index + 1 << "\n";
++        return false;
++    }
++    poppler::page_renderer renderer;
++    const poppler::image img = renderer.render_page(page.get());
++    if (!img.is_valid()) {
++        std::cerr << "  FAIL: page " << index + 1 << " did not render\n";
++        return false;
++    }
++    return true;
++}
++
++static bool cap_address_space()
++{
++#if defined(__linux__) && !defined(POPPLER_TEST_ASAN)
++    // current address space + 512 MB: the 1 GB soft mask table cannot be allocated
++    FILE *f = fopen("/proc/self/statm", "r");
++    unsigned long pages = 0;
++    if (!f || fscanf(f, "%lu", &pages) != 1) {
++        if (f) {
++            fclose(f);
++        }
++        return false;
++    }
++    fclose(f);
++    const rlim_t limit = static_cast<rlim_t>(pages) * sysconf(_SC_PAGESIZE) + (512UL << 20);
++    struct rlimit rl;
++    if (getrlimit(RLIMIT_AS, &rl) != 0) {
++        return false;
++    }
++    if (rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < limit) {
++        return true;
++    }
++    rl.rlim_cur = limit;
++    return setrlimit(RLIMIT_AS, &rl) == 0;
++#else
++    return false;
++#endif
++}
++
++int main()
++{
++    poppler::set_debug_error_function([](const std::string &, void *) {}, nullptr);
++    const std::string pdf = build_pdf();
++    std::unique_ptr<poppler::document> doc(poppler::document::load_from_raw_data(pdf.data(), static_cast<int>(pdf.size())));
++    if (!doc || doc->pages() != 2) {
++        std::cerr << "failed to load the test document\n";
++        return 1;
++    }
++
++    int failures = 0;
++    failures += !render(doc.get(), 0);
++    if (cap_address_space()) {
++        failures += !render(doc.get(), 1);
++    } else {
++        std::cout << "page 2 (soft mask) skipped: cannot cap the address space\n";
++    }
++
++    if (failures) {
++        std::cerr << failures << " failure(s)\n";
++        return 1;
++    }
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/poppler/SplashOutputDev.cc b/poppler/SplashOutputDev.cc
+index 598da4e00..65592cd55 100644
+--- a/poppler/SplashOutputDev.cc
++++ b/poppler/SplashOutputDev.cc
+@@ -3554,53 +3554,63 @@ void SplashOutputDev::drawMaskedImage(GfxState *state, Object *ref, Stream *str,
+             switch (colorMode) {
+             case splashModeMono1:
+             case splashModeMono8:
+-                imgData.lookup = static_cast<SplashColorPtr>(gmalloc(n));
+-                for (i = 0; i < n; ++i) {
+-                    pix = static_cast<unsigned char>(i);
+-                    colorMap->getGray(&pix, &gray);
+-                    imgData.lookup[i] = colToByte(gray);
++                imgData.lookup = static_cast<SplashColorPtr>(gmalloc_checkoverflow(n));
++                if (imgData.lookup != nullptr) [[likely]] {
++                    for (i = 0; i < n; ++i) {
++                        pix = static_cast<unsigned char>(i);
++                        colorMap->getGray(&pix, &gray);
++                        imgData.lookup[i] = colToByte(gray);
++                    }
+                 }
+                 break;
+             case splashModeRGB8:
+             case splashModeBGR8:
+-                imgData.lookup = static_cast<SplashColorPtr>(gmallocn(n, 3));
+-                for (i = 0; i < n; ++i) {
+-                    pix = static_cast<unsigned char>(i);
+-                    colorMap->getRGB(&pix, &rgb);
+-                    imgData.lookup[3 * i] = colToByte(rgb.r);
+-                    imgData.lookup[3 * i + 1] = colToByte(rgb.g);
+-                    imgData.lookup[3 * i + 2] = colToByte(rgb.b);
++                imgData.lookup = static_cast<SplashColorPtr>(gmallocn_checkoverflow(n, 3));
++                if (imgData.lookup != nullptr) [[likely]] {
++                    for (i = 0; i < n; ++i) {
++                        pix = static_cast<unsigned char>(i);
++                        colorMap->getRGB(&pix, &rgb);
++                        imgData.lookup[3 * i] = colToByte(rgb.r);
++                        imgData.lookup[3 * i + 1] = colToByte(rgb.g);
++                        imgData.lookup[3 * i + 2] = colToByte(rgb.b);
++                    }
+                 }
+                 break;
+             case splashModeXBGR8:
+-                imgData.lookup = static_cast<SplashColorPtr>(gmallocn(n, 4));
+-                for (i = 0; i < n; ++i) {
+-                    pix = static_cast<unsigned char>(i);
+-                    colorMap->getRGB(&pix, &rgb);
+-                    imgData.lookup[4 * i] = colToByte(rgb.r);
+-                    imgData.lookup[4 * i + 1] = colToByte(rgb.g);
+-                    imgData.lookup[4 * i + 2] = colToByte(rgb.b);
+-                    imgData.lookup[4 * i + 3] = 255;
++                imgData.lookup = static_cast<SplashColorPtr>(gmallocn_checkoverflow(n, 4));
++                if (imgData.lookup != nullptr) [[likely]] {
++                    for (i = 0; i < n; ++i) {
++                        pix = static_cast<unsigned char>(i);
++                        colorMap->getRGB(&pix, &rgb);
++                        imgData.lookup[4 * i] = colToByte(rgb.r);
++                        imgData.lookup[4 * i + 1] = colToByte(rgb.g);
++                        imgData.lookup[4 * i + 2] = colToByte(rgb.b);
++                        imgData.lookup[4 * i + 3] = 255;
++                    }
+                 }
+                 break;
+             case splashModeCMYK8:
+-                imgData.lookup = static_cast<SplashColorPtr>(gmallocn(n, 4));
+-                for (i = 0; i < n; ++i) {
+-                    pix = static_cast<unsigned char>(i);
+-                    colorMap->getCMYK(&pix, &cmyk);
+-                    imgData.lookup[4 * i] = colToByte(cmyk.c);
+-                    imgData.lookup[4 * i + 1] = colToByte(cmyk.m);
+-                    imgData.lookup[4 * i + 2] = colToByte(cmyk.y);
+-                    imgData.lookup[4 * i + 3] = colToByte(cmyk.k);
++                imgData.lookup = static_cast<SplashColorPtr>(gmallocn_checkoverflow(n, 4));
++                if (imgData.lookup != nullptr) [[likely]] {
++                    for (i = 0; i < n; ++i) {
++                        pix = static_cast<unsigned char>(i);
++                        colorMap->getCMYK(&pix, &cmyk);
++                        imgData.lookup[4 * i] = colToByte(cmyk.c);
++                        imgData.lookup[4 * i + 1] = colToByte(cmyk.m);
++                        imgData.lookup[4 * i + 2] = colToByte(cmyk.y);
++                        imgData.lookup[4 * i + 3] = colToByte(cmyk.k);
++                    }
+                 }
+                 break;
+             case splashModeDeviceN8:
+-                imgData.lookup = static_cast<SplashColorPtr>(gmallocn(n, SPOT_NCOMPS + 4));
+-                for (i = 0; i < n; ++i) {
+-                    pix = static_cast<unsigned char>(i);
+-                    colorMap->getDeviceN(&pix, &deviceN);
+-                    for (int cp = 0; cp < SPOT_NCOMPS + 4; cp++) {
+-                        imgData.lookup[(SPOT_NCOMPS + 4) * i + cp] = colToByte(deviceN.c[cp]);
++                imgData.lookup = static_cast<SplashColorPtr>(gmallocn_checkoverflow(n, SPOT_NCOMPS + 4));
++                if (imgData.lookup != nullptr) [[likely]] {
++                    for (i = 0; i < n; ++i) {
++                        pix = static_cast<unsigned char>(i);
++                        colorMap->getDeviceN(&pix, &deviceN);
++                        for (int cp = 0; cp < SPOT_NCOMPS + 4; cp++) {
++                            imgData.lookup[(SPOT_NCOMPS + 4) * i + cp] = colToByte(deviceN.c[cp]);
++                        }
+                     }
+                 }
+                 break;
+@@ -3682,7 +3692,9 @@ void SplashOutputDev::drawSoftMaskedImage(GfxState *state, Object * /* ref */, S
+     imgMaskData.height = maskHeight;
+     imgMaskData.y = 0;
+     imgMaskData.maskColorMap = nullptr;
+-    const unsigned imgMaskDataLookupSize = 1 << maskColorMap->getBits();
++    // ImageStream delivers one byte per component, so the table is never
++    // indexed past 255; 1 << bits entries would be up to 1 GB (30 bits)
++    const unsigned imgMaskDataLookupSize = 1 << std::min(maskColorMap->getBits(), 8);
+     imgMaskData.lookup = static_cast<SplashColorPtr>(gmalloc(imgMaskDataLookupSize));
+     for (unsigned i = 0; i < imgMaskDataLookupSize; ++i) {
+         pix = static_cast<unsigned char>(i);

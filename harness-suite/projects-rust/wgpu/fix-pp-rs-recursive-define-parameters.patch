@@ -1,0 +1,83 @@
+diff --git a/src/pp.rs b/src/pp.rs
+index 313d0f2..c16b22a 100644
+--- a/src/pp.rs
++++ b/src/pp.rs
+@@ -673,8 +673,14 @@ struct MacroProcessor {
+ 
+     peeked: Option<Step<Token>>,
+     define_line: u32,
++    // Nesting depth of define parameter expansions, see expand_parameter.
++    parameter_depth: u32,
+ }
+ 
++// Each nested parameter expansion recurses on the native stack, so mutually
++// referencing defines in arguments could otherwise overflow it.
++const MAX_PARAMETER_DEPTH: u32 = 32;
++
+ impl MacroProcessor {
+     fn start_define_invocation(
+         &mut self,
+@@ -752,7 +758,7 @@ impl MacroProcessor {
+                 for parameter in parameters {
+                     invocation
+                         .parameters
+-                        .push(self.expand_parameter(lexer, parameter)?);
++                        .push(self.expand_parameter(lexer, parameter, lparen_location)?);
+                 }
+             }
+ 
+@@ -833,7 +839,19 @@ impl MacroProcessor {
+         }
+     }
+ 
+-    fn expand_parameter(&self, lexer: &mut dyn MeLexer, parameter: Vec<Token>) -> Step<Vec<Token>> {
++    fn expand_parameter(
++        &self,
++        lexer: &mut dyn MeLexer,
++        parameter: Vec<Token>,
++        location: Location,
++    ) -> Step<Vec<Token>> {
++        if self.parameter_depth >= MAX_PARAMETER_DEPTH {
++            return Err(StepExit::Error((
++                PreprocessorError::RecursionLimitReached,
++                location,
++            )));
++        }
++
+         struct ExpandParameterLexer<'a> {
+             parent_lexer: &'a dyn MeLexer,
+             expander: &'a MacroProcessor,
+@@ -871,7 +889,10 @@ impl MacroProcessor {
+             position: 0,
+         };
+ 
+-        let mut processor: MacroProcessor = Default::default();
++        let mut processor = MacroProcessor {
++            parameter_depth: self.parameter_depth + 1,
++            ..Default::default()
++        };
+         let mut expanded_parameters = Default::default();
+         loop {
+             match processor.step(&mut parameter_lexer) {
+diff --git a/src/pp_tests.rs b/src/pp_tests.rs
+index d7f65ff..9804665 100644
+--- a/src/pp_tests.rs
++++ b/src/pp_tests.rs
+@@ -1411,3 +1411,17 @@ fn add_define() {
+     let mut pp = Preprocessor::new("#if~f>>~f");
+     while let Some(_) = pp.next() {}
+ }
++
++#[test]
++fn recursive_define_in_parameter() {
++    // Each expansion of `v` starts an invocation of `O` whose argument contains `v` again,
++    // which used to recurse until the stack overflowed.
++    check_preprocessing_error(
++        "#define v O((v)\n#define O(o)\nv)",
++        PreprocessorError::RecursionLimitReached,
++    );
++    check_preprocessed_result(
++        "#define F(x) x\nF(F(F(F(F(F(F(F(1))))))))",
++        "1",
++    );
++}

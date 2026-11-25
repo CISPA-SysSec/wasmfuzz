@@ -1,0 +1,209 @@
+Return no data for tar entries that have no body, and read the GNU realsize field and the old
+GNU sparse map only for sparse ('S') entries.
+
+The tar reader zeroes entry_bytes_remaining for devices, FIFOs, symlinks and directories
+(including "regular" entries whose name ends in '/'), and for old-style/GNU hard links whose
+size field it ignores, but keeps disk_size = the header's size field. At the end of the
+(empty) body archive_read_format_tar_read_data() reports EOF at offset disk_size, and
+archive_read_data() pads zeros up to it: a 1.5 KiB FIFO entry with a base-256 size of 2^40
+hands the caller 1 TiB of zeros (entry_limit allows up to 2^60). header_gnutar() also takes
+realsize and the sparse map from every GNU header, so a regular entry with one data byte and a
+large realsize or sparse offset does the same. The oss-fuzz harnesses read every body with
+archive_read_data(), so these inputs time out (186 of the 189 libarchive hang inputs of the
+2026-11 campaigns; the other 3 are pax GNU.sparse 1.0 files that declare a huge hole, which is
+the format working as designed). Includes test_read_format_tar_nodata_size.
+Not fixed upstream as of 432ab464 (no related issue or PR on 2026-11-20).
+
+diff --git a/Makefile.am b/Makefile.am
+index adda9aec..7a16a314 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -602,6 +602,7 @@ libarchive_test_SOURCES= \
+ 	libarchive/test/test_read_format_tar_empty_pax.c \
+ 	libarchive/test/test_read_format_tar_empty_filename.c \
+ 	libarchive/test/test_read_format_tar_empty_with_gnulabel.c \
++	libarchive/test/test_read_format_tar_nodata_size.c \
+ 	libarchive/test/test_read_format_tar_filename.c \
+ 	libarchive/test/test_read_format_tar_gnu_sparse_map.c \
+ 	libarchive/test/test_read_format_tar_invalid_pax_size.c \
+diff --git a/libarchive/archive_read_support_format_tar.c b/libarchive/archive_read_support_format_tar.c
+index 8b86b97c..e9380d58 100644
+--- a/libarchive/archive_read_support_format_tar.c
++++ b/libarchive/archive_read_support_format_tar.c
+@@ -611,6 +611,14 @@ archive_read_format_tar_read_header(struct archive_read *a,
+ 			}
+ 		}
+ 	}
++	/*
++	 * Entries without a body (devices, FIFOs, directories, hard links
++	 * whose size field is ignored) must not report one: otherwise
++	 * archive_read_data() pads zeros up to the size field at EOF.
++	 */
++	if (r == ARCHIVE_OK && (archive_entry_filetype(entry) != AE_IFREG
++	    || archive_entry_size(entry) == 0))
++		tar->disk_size = 0;
+ 	return (r);
+ }
+ 
+@@ -3211,14 +3219,16 @@ header_gnutar(struct archive_read *a, struct tar *tar,
+ 			archive_entry_set_ctime(entry, t, 0);
+ 	}
+ 
+-	if (header->realsize[0] != 0) {
+-		/* Treat as a synonym for the pax GNU.sparse.realsize attr */
++	if (header->typeflag[0] == 'S' && header->realsize[0] != 0) {
++		/* Treat as a synonym for the pax GNU.sparse.realsize attr;
++		 * the field only has a meaning in old GNU sparse entries */
+ 		tar->GNU_sparse_realsize
+ 		    = tar_atol(header->realsize, sizeof(header->realsize));
+ 		tar->size_fields |= TAR_SIZE_GNU_SPARSE_REALSIZE;
+ 	}
+ 
+-	if (header->sparse[0].offset[0] != 0) {
++	/* Likewise the old GNU sparse map: GNU tar writes it only for 'S'. */
++	if (header->typeflag[0] == 'S' && header->sparse[0].offset[0] != 0) {
+ 		if (gnu_sparse_old_read(a, tar, header, unconsumed)
+ 		    != ARCHIVE_OK)
+ 			return (ARCHIVE_FATAL);
+diff --git a/libarchive/test/CMakeLists.txt b/libarchive/test/CMakeLists.txt
+index 57249cb3..bf56a292 100644
+--- a/libarchive/test/CMakeLists.txt
++++ b/libarchive/test/CMakeLists.txt
+@@ -225,6 +225,7 @@ IF(ENABLE_TEST)
+     test_read_format_tar_empty_filename.c
+     test_read_format_tar_empty_with_gnulabel.c
+     test_read_format_tar_empty_pax.c
++    test_read_format_tar_nodata_size.c
+     test_read_format_tar_filename.c
+     test_read_format_tar_gnu_sparse_map.c
+     test_read_format_tar_invalid_pax_size.c
+diff --git a/libarchive/test/test_read_format_tar_nodata_size.c b/libarchive/test/test_read_format_tar_nodata_size.c
+new file mode 100644
+index 00000000..2387de19
+--- /dev/null
++++ b/libarchive/test/test_read_format_tar_nodata_size.c
+@@ -0,0 +1,124 @@
++/*-
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Copyright (c) 2026 Florian Bauckholt
++ * All rights reserved.
++ */
++#include "test.h"
++
++/*
++ * Tar entries that carry no data (devices, FIFOs, directories, hard links
++ * whose size is ignored) still have a size field.  archive_read_data() must
++ * not return that many zero bytes for them: a 1.5 KiB archive whose FIFO header claims 2^40 bytes used to
++ * make the read loop below return a terabyte of zeros.  The same holds for
++ * the GNU "realsize" field and sparse map of an entry that is not an
++ * old-style sparse ('S') file.
++ */
++
++static void
++set_checksum(char *h)
++{
++	unsigned sum = 0;
++	int i;
++
++	memset(h + 148, ' ', 8);
++	for (i = 0; i < 512; i++)
++		sum += (unsigned char)h[i];
++	snprintf(h + 148, 8, "%06o", sum);
++	h[155] = ' ';
++}
++
++/* Base-256 encoding of a 12-byte numeric field. */
++static void
++set_base256(char *field, int64_t v)
++{
++	int i;
++
++	memset(field, 0, 12);
++	field[0] = (char)0x80;
++	for (i = 11; i > 0; i--, v >>= 8)
++		field[i] = (char)(v & 0xff);
++}
++
++static void
++make_header(char *buff, const char *name, char type, int gnu)
++{
++	memset(buff, 0, 1536);
++	strcpy(buff, name);
++	memcpy(buff + 100, "0000644", 8);
++	buff[156] = type;
++	if (gnu)
++		memcpy(buff + 257, "ustar  ", 8);
++	else
++		memcpy(buff + 257, "ustar\0" "00", 8);
++}
++
++/* Read the first entry's body; return how many bytes came back (capped). */
++static int64_t
++read_body(const char *buff, size_t size)
++{
++	struct archive_entry *ae;
++	struct archive *a;
++	char data[4096];
++	int64_t total = 0;
++	la_ssize_t r;
++
++	assert((a = archive_read_new()) != NULL);
++	assertEqualIntA(a, ARCHIVE_OK, archive_read_support_format_tar(a));
++	assertEqualIntA(a, ARCHIVE_OK, archive_read_open_memory(a, buff, size));
++	assertEqualIntA(a, ARCHIVE_OK, archive_read_next_header(a, &ae));
++	while ((r = archive_read_data(a, data, sizeof(data))) > 0) {
++		total += r;
++		if (total > (1 << 20))
++			break;
++	}
++	assertEqualInt(0, r);
++	assertEqualInt(ARCHIVE_OK, archive_read_free(a));
++	return (total);
++}
++
++DEFINE_TEST(test_read_format_tar_nodata_size)
++{
++	static const char types[] = { '3', '4', '5', '6' };
++	char buff[1536];
++	size_t i;
++
++	for (i = 0; i < sizeof(types); i++) {
++		make_header(buff, "node", types[i], 0);
++		set_base256(buff + 124, (int64_t)1 << 40);
++		set_checksum(buff);
++		failure("typeflag %c", types[i]);
++		assertEqualInt(0, read_body(buff, sizeof(buff)));
++	}
++
++	/* A "regular file" whose name ends in '/' is a directory. */
++	make_header(buff, "dir/", '0', 0);
++	set_base256(buff + 124, (int64_t)1 << 40);
++	set_checksum(buff);
++	assertEqualInt(0, read_body(buff, sizeof(buff)));
++
++	/* An old-style hard link: its size field is ignored. */
++	make_header(buff, "link", '1', 0);
++	memset(buff + 257, 0, 8);
++	strcpy(buff + 157, "node");
++	set_base256(buff + 124, (int64_t)1 << 40);
++	set_checksum(buff);
++	assertEqualInt(0, read_body(buff, sizeof(buff)));
++
++	/* GNU realsize on a regular (non-'S') entry with one byte of data. */
++	make_header(buff, "file", '0', 1);
++	memcpy(buff + 124, "00000000001", 12);
++	set_base256(buff + 483, (int64_t)1 << 40);
++	set_checksum(buff);
++	buff[512] = 'x';
++	assertEqualInt(1, read_body(buff, sizeof(buff)));
++
++	/* An old GNU sparse map on a regular (non-'S') entry. */
++	make_header(buff, "file", '0', 1);
++	memcpy(buff + 124, "00000000001", 12);
++	set_base256(buff + 386, (int64_t)1 << 40);
++	memcpy(buff + 398, "00000000001", 12);
++	set_checksum(buff);
++	buff[512] = 'x';
++	assertEqualInt(1, read_body(buff, sizeof(buff)));
++}

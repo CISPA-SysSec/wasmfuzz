@@ -1,0 +1,368 @@
+Upstream: open umbrella issue gfx-rs/wgpu#7687 (by 0x64617061, 2025-05-12) lists glsl_parser panics in proc/constant_evaluator.rs and front/mod.rs for malformed constructors, which may overlap this patch. No fix yet.
+
+The const_assert hunks (NonConst condition such as `const_assert ~~vec2();` hit unreachable!) were dropped at the 11-24 bump: upstream fixed them identically in 3d2deb9d9 (gfx-rs/wgpu#10897). The remaining fixes are not fixed upstream as of 1edb79d1.
+
+diff --git a/naga/src/front/glsl/context.rs b/naga/src/front/glsl/context.rs
+index 13f4a1c..39ddd9f 100644
+--- a/naga/src/front/glsl/context.rs
++++ b/naga/src/front/glsl/context.rs
+@@ -559,11 +559,15 @@ impl<'a> Context<'a> {
+                     // Don't try to generate `AccessIndex` if in a LHS position, since it
+                     // wouldn't produce a pointer.
+                     ExprPos::Lhs => None,
+-                    _ => self
+-                        .module
+-                        .to_ctx()
+-                        .get_const_val_from(index, &self.expressions)
+-                        .ok(),
++                    // in a const context `index` lives in the global arena (see `Index`)
++                    _ => {
++                        let arena = if self.is_const {
++                            &self.module.global_expressions
++                        } else {
++                            &self.expressions
++                        };
++                        self.module.to_ctx().get_const_val_from(index, arena).ok()
++                    }
+                 };
+ 
+                 let base = self
+diff --git a/naga/src/front/glsl/functions.rs b/naga/src/front/glsl/functions.rs
+index 0dff409..a618794 100644
+--- a/naga/src/front/glsl/functions.rs
++++ b/naga/src/front/glsl/functions.rs
+@@ -445,6 +445,21 @@ impl Frontend {
+                     }
+                 }
+ 
++                // a partial or empty column list would build a matrix with missing columns
++                let expected = columns as usize * rows as usize;
++                if flattened.len() != expected {
++                    return Err(Error {
++                        kind: ErrorKind::SemanticError(
++                            format!(
++                                "Matrix constructor expects {expected} components, found {}",
++                                flattened.len()
++                            )
++                            .into(),
++                        ),
++                        meta,
++                    });
++                }
++
+                 let ty = ctx.module.types.insert(
+                     Type {
+                         name: None,
+diff --git a/naga/src/front/glsl/parser_tests.rs b/naga/src/front/glsl/parser_tests.rs
+index cfc2d84..850aa4f 100644
+--- a/naga/src/front/glsl/parser_tests.rs
++++ b/naga/src/front/glsl/parser_tests.rs
+@@ -872,3 +872,36 @@ fn huge_array_type_is_error_not_panic() {
+         "expected a parse error for an oversize array type, got {result:?}"
+     );
+ }
++
++#[test]
++fn matrix_constructor_component_count() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: `mat3()` built a matrix with no columns, and constant
++    // folding `mat3() * vec3(5)` unwrapped an empty dot product.
++    for src in [
++        "const vec3 v = mat3() * vec3(5); void main(){}",
++        "const mat2 m = mat2(1.0, 2.0, 3.0) * mat2(1.0); void main(){}",
++    ] {
++        let result = frontend.parse(&Options::from(ShaderStage::Vertex), src);
++        let errors = result.expect_err(src).errors;
++        assert!(
++            matches!(&errors[0].kind, ErrorKind::SemanticError(msg) if msg.starts_with("Matrix constructor expects")),
++            "{src}: {errors:?}"
++        );
++    }
++}
++
++#[test]
++fn constant_index_in_const_context() {
++    let mut frontend = Frontend::default();
++    // Fuzz finding: lowering an index in a const context looked the
++    // (global) index expression up in the function's expression arena.
++    for src in [
++        "const int b = int[3](1, 2, 3)[1]; void main(){}",
++        "int x[int[](1, 2)[1]]; void main(){}",
++    ] {
++        frontend
++            .parse(&Options::from(ShaderStage::Vertex), src)
++            .unwrap_or_else(|e| panic!("{src}: {e:?}"));
++    }
++}
+diff --git a/naga/src/front/wgsl/lower/mod.rs b/naga/src/front/wgsl/lower/mod.rs
+index cd8155e..0722f60 100644
+--- a/naga/src/front/wgsl/lower/mod.rs
++++ b/naga/src/front/wgsl/lower/mod.rs
+@@ -553,7 +553,11 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
+                     .get_const_val_from(handle, &ctx.function.expressions)
+             }
+             ExpressionContextType::Constant(Some(ref ctx)) => {
+-                assert!(ctx.local_expression_kind_tracker.is_const(handle));
++                // Usually const here, but not if a `let` already bound the
++                // expression (`const a = 6i; let y = a; const k = a[a];`).
++                if !ctx.local_expression_kind_tracker.is_const(handle) {
++                    return Err(proc::ConstValueError::NonConst);
++                }
+                 self.module
+                     .to_ctx()
+                     .get_const_val_from(handle, &ctx.function.expressions)
+diff --git a/naga/src/proc/constant_evaluator.rs b/naga/src/proc/constant_evaluator.rs
+index 724706e..6c2fa34 100644
+--- a/naga/src/proc/constant_evaluator.rs
++++ b/naga/src/proc/constant_evaluator.rs
+@@ -13,7 +13,7 @@ use core::iter;
+ 
+ use arrayvec::ArrayVec;
+ use half::f16;
+-use num_traits::{real::Real, FromPrimitive, One, ToPrimitive, Zero};
++use num_traits::{real::Real, FromPrimitive, One, Zero};
+ 
+ use crate::{
+     arena::{Arena, Handle, HandleVec, UniqueArena},
+@@ -1531,7 +1531,10 @@ impl<'a> ConstantEvaluator<'a> {
+                     span,
+                     [arg, arg1.unwrap(), arg2.unwrap()],
+                     |e, low, high| {
+-                        if low > high {
++                        // `!(low <= high)` also rejects NaN bounds, which make
++                        // `f64::clamp` and `f16::clamp` panic
++                        let ordered = low <= high;
++                        if !ordered {
+                             Err(ConstantEvaluatorError::InvalidClamp)
+                         } else {
+                             Ok([e.clamp(low, high)])
+@@ -2452,6 +2455,18 @@ impl<'a> ConstantEvaluator<'a> {
+                 size: ArraySize::Constant(size),
+                 ..
+             } => {
++                // Expanding the zero value allocates one handle per element:
++                // reject types the layouter finds too large (like `cast_array`)
++                // before `array<T, 4294967295>()` exhausts memory.
++                let mut layouter = core::mem::take(self.layouter);
++                let layout = layouter.update(self.to_ctx());
++                *self.layouter = layouter;
++                if let Err(err) = layout {
++                    let crate::proc::LayoutErrorInner::TooLarge = err.inner else {
++                        unreachable!("unexpected layout error: {err:?}");
++                    };
++                    return Err(ConstantEvaluatorError::TypeTooLarge(err.ty));
++                }
+                 let el = self.eval_zero_value_impl(base, span)?;
+                 let expr = Expression::Compose {
+                     ty,
+@@ -2524,7 +2539,7 @@ impl<'a> ConstantEvaluator<'a> {
+                         Literal::I32(v) => v as u16,
+                         Literal::U32(v) => v as u16,
+                         Literal::F32(v) => v.clamp(u16::MIN as f32, u16::MAX as f32) as u16,
+-                        Literal::F16(v) => f16::to_u16(&v.max(f16::ZERO)).unwrap(),
++                        Literal::F16(v) => f16::to_f32(v).clamp(u16::MIN as f32, u16::MAX as f32) as u16,
+                         Literal::Bool(v) => v as u16,
+                         Literal::F64(_) | Literal::I64(_) | Literal::U64(_) => {
+                             return make_error();
+@@ -2538,7 +2553,8 @@ impl<'a> ConstantEvaluator<'a> {
+                         Literal::I32(v) => v,
+                         Literal::U32(v) => v as i32,
+                         Literal::F32(v) => v.clamp(i32::min_float(), i32::max_float()) as i32,
+-                        Literal::F16(v) => f16::to_i32(&v).unwrap(), //Only None on NaN or Inf
++                        // saturating like F32 (an overflowed f16 is infinite; NaN becomes 0)
++                        Literal::F16(v) => f16::to_f32(v).clamp(i32::min_float(), i32::max_float()) as i32,
+                         Literal::Bool(v) => v as i32,
+                         Literal::F64(_) | Literal::I64(_) | Literal::U64(_) => {
+                             return make_error();
+@@ -2553,7 +2569,7 @@ impl<'a> ConstantEvaluator<'a> {
+                         Literal::U32(v) => v,
+                         Literal::F32(v) => v.clamp(u32::min_float(), u32::max_float()) as u32,
+                         // max(0) avoids None due to negative, therefore only None on NaN or Inf
+-                        Literal::F16(v) => f16::to_u32(&v.max(f16::ZERO)).unwrap(),
++                        Literal::F16(v) => f16::to_f32(v).clamp(u32::min_float(), u32::max_float()) as u32,
+                         Literal::Bool(v) => v as u32,
+                         Literal::F64(_) | Literal::I64(_) | Literal::U64(_) => {
+                             return make_error();
+@@ -2571,7 +2587,7 @@ impl<'a> ConstantEvaluator<'a> {
+                         Literal::F64(v) => v.clamp(i64::min_float(), i64::max_float()) as i64,
+                         Literal::I64(v) => v,
+                         Literal::U64(v) => v as i64,
+-                        Literal::F16(v) => f16::to_i64(&v).unwrap(), //Only None on NaN or Inf
++                        Literal::F16(v) => f16::to_f32(v).clamp(i64::min_float(), i64::max_float()) as i64,
+                         Literal::AbstractInt(v) => i64::try_from_abstract(v)?,
+                         Literal::AbstractFloat(v) => i64::try_from_abstract(v)?,
+                     }),
+@@ -2586,7 +2602,7 @@ impl<'a> ConstantEvaluator<'a> {
+                         Literal::I64(v) => v as u64,
+                         Literal::U64(v) => v,
+                         // max(0) avoids None due to negative, therefore only None on NaN or Inf
+-                        Literal::F16(v) => f16::to_u64(&v.max(f16::ZERO)).unwrap(),
++                        Literal::F16(v) => f16::to_f32(v).clamp(u64::min_float(), u64::max_float()) as u64,
+                         Literal::AbstractInt(v) => u64::try_from_abstract(v)?,
+                         Literal::AbstractFloat(v) => u64::try_from_abstract(v)?,
+                     }),
+@@ -3731,18 +3747,18 @@ impl<'a> ConstantEvaluator<'a> {
+                     components: ref accept_components,
+                 },
+             ) => {
+-                let ty_deets = |ty| {
+-                    self.types[ty]
+-                        .inner
+-                        .vector_size_and_scalar()
+-                        .map(|(size, scalar)| {
+-                            (size.expect("expected vector type, not scalar type"), scalar)
+-                        })
++                // `None` for a `Compose` that isn't a vector
++                let ty_deets = |ty| match self.types[ty].inner.vector_size_and_scalar() {
++                    Some((Some(size), scalar)) => Some((size, scalar)),
++                    _ => None,
+                 };
+ 
+                 let expected_vec_size = {
+-                    let [(reject_vec_size, _), (accept_vec_size, _)] =
+-                        [reject_ty, accept_ty].map(|ty| ty_deets(ty).unwrap());
++                    let [Some((reject_vec_size, _)), Some((accept_vec_size, _))] =
++                        [reject_ty, accept_ty].map(ty_deets)
++                    else {
++                        return Err(ConstantEvaluatorError::SelectAcceptRejectTypeMismatch);
++                    };
+ 
+                     if reject_vec_size != accept_vec_size {
+                         return Err(ConstantEvaluatorError::SelectVecRejectAcceptSizeMismatch {
+@@ -3753,6 +3769,15 @@ impl<'a> ConstantEvaluator<'a> {
+                     reject_vec_size
+                 };
+ 
++                // A vector `Compose` can have vector components (`vec3(1, vec2())`)
++                // and splats, so select between the flattened scalar components.
++                let flatten = |ty, components: &[Handle<Expression>]| {
++                    crate::proc::flatten_compose(ty, components, self.expressions, self.types)
++                        .collect::<Vec<_>>()
++                };
++                let reject_components = flatten(reject_ty, reject_components);
++                let accept_components = flatten(accept_ty, accept_components);
++
+                 let condition_components = match self.expressions[condition] {
+                     Expression::Literal(Literal::Bool(condition)) => {
+                         vec![condition; (expected_vec_size as u8).into()]
+@@ -3771,30 +3796,37 @@ impl<'a> ConstantEvaluator<'a> {
+                         if condition_vec_size != expected_vec_size {
+                             return Err(ConstantEvaluatorError::SelectConditionVecSizeMismatch);
+                         }
+-                        condition_components
+-                            .iter()
+-                            .copied()
+-                            .map(|component| match &self.expressions[component] {
+-                                &Expression::Literal(Literal::Bool(condition)) => condition,
+-                                _ => unreachable!(),
++                        flatten(condition_ty, condition_components)
++                            .into_iter()
++                            .map(|component| match self.expressions[component] {
++                                Expression::Literal(Literal::Bool(condition)) => Ok(condition),
++                                _ => Err(ConstantEvaluatorError::SelectConditionNotAVecBool),
+                             })
+-                            .collect()
++                            .collect::<Result<Vec<_>, _>>()?
+                     }
+ 
+                     _ => return Err(ConstantEvaluatorError::SelectConditionNotAVecBool),
+                 };
++                if reject_components.len() != condition_components.len()
++                    || accept_components.len() != condition_components.len()
++                {
++                    return Err(ConstantEvaluatorError::SelectConditionVecSizeMismatch);
++                }
+ 
+                 let evaluated = Expression::Compose {
+                     ty: reject_ty,
+                     components: reject_components
+-                        .clone()
+                         .into_iter()
+-                        .zip(accept_components.clone())
++                        .zip(accept_components)
+                         .zip(condition_components)
+                         .map(|((reject, accept), condition)| {
+-                            let reject_scalar = match &self.expressions[reject] {
+-                                &Expression::Literal(lit) => lit.scalar(),
+-                                _ => unreachable!(),
++                            let reject_scalar = match self.expressions[reject] {
++                                Expression::Literal(lit) => lit.scalar(),
++                                _ => {
++                                    return Err(
++                                        ConstantEvaluatorError::SelectAcceptRejectTypeMismatch,
++                                    )
++                                }
+                             };
+                             select_single_component(self, reject_scalar, reject, accept, condition)
+                         })
+diff --git a/naga/tests/naga/wgsl_errors.rs b/naga/tests/naga/wgsl_errors.rs
+index 49fb55d..04e6d67 100644
+--- a/naga/tests/naga/wgsl_errors.rs
++++ b/naga/tests/naga/wgsl_errors.rs
+@@ -7097,3 +7097,66 @@ fn main() {
+ ",
+     );
+ }
++
++#[test]
++fn f16_infinity_to_int_conversion_does_not_panic() {
++    // Fuzz finding: a u32 too large for f16 converts to an infinite f16, and
++    // converting that to an integer unwrapped `f16::to_i32` (None on NaN/Inf).
++    for ty in ["i32", "u32", "i64", "u64", "u16"] {
++        let src = format!("enable f16; var<private> x = {ty}(f16(4294967293u));");
++        let _ = naga::front::wgsl::parse_str(&src);
++    }
++}
++
++#[test]
++fn clamp_nan_bounds_is_error_not_panic() {
++    // Fuzz finding: `low > high` is false for a NaN bound, and `f64::clamp` /
++    // `f16::clamp` then panicked on the NaN (`inverseSqrt(-5)` is NaN).
++    for src in [
++        "var<private> y = clamp(5, 5, inverseSqrt(-5));",
++        "var<private> y = clamp(5, inverseSqrt(-5), 5);",
++        "const y = clamp(vec2(1.0), vec2(inverseSqrt(-5.0)), vec2(2.0));",
++        "enable f16; var<private> o = clamp(6, tan(f16(~8u)), 3);",
++    ] {
++        let err = naga::front::wgsl::parse_str(src).expect_err(src);
++        assert!(err.message().contains("clamp"), "{src}: {}", err.message());
++    }
++    naga::front::wgsl::parse_str("const_assert clamp(5.0, 1.0, 2.0) == 2.0;").unwrap();
++}
++
++#[test]
++fn select_with_nested_vector_constructors() {
++    // Fuzz finding: const-evaluating `select` assumed every component of a
++    // vector `Compose` was a scalar literal, but `vec3(7, vec2())` has a
++    // vector component.
++    naga::front::wgsl::parse_str(
++        "
++        const b = select(vec3(7, vec2(1, 2)), vec3(4, 5, 6), vec3(true, false, true));
++        const_assert b.x == 4 && b.y == 1 && b.z == 6;
++        const c = select(vec4(vec2(1), 3, 4), vec4(5), vec4(vec2(true), vec2(false)));
++        const_assert c.x == 5 && c.y == 5 && c.z == 3 && c.w == 4;
++        var<private> d = select(vec3(7, vec2()), vec3(), 7 < 7);
++        ",
++    )
++    .unwrap();
++}
++
++#[test]
++fn const_index_by_let_bound_const_is_error_not_panic() {
++    // Fuzz finding: after `let y = a`, the const `a` is no longer tracked as
++    // const, and indexing with it in a const declaration hit an assertion.
++    let src = "fn g() { const a = 6i; let y = a; const k = a[a]; }";
++    assert!(naga::front::wgsl::parse_str(src).is_err());
++}
++
++#[test]
++fn huge_array_zero_value_is_error_not_oom() {
++    // Fuzz finding: constant-evaluating `array<i32, ~4u>()` in an expression
++    // expanded its zero value into ~2^32 component handles.
++    for src in [
++        "var<private> b = array<i32, ~4u>() < 1;",
++        "var<private> b = 6 * array<i32, ~1u>();",
++    ] {
++        assert!(naga::front::wgsl::parse_str(src).is_err(), "{src}");
++    }
++}

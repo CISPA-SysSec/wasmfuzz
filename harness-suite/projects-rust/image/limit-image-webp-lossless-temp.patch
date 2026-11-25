@@ -10,7 +10,8 @@ Three independent changes:
   upstream PR image-rs/image-webp#186.
 - decoder.rs lossless RGB temp buffer (`memory_limit`, `try_reserve_exact`):
   suite-only, for the wasm32 guest. Upstream memory-limit work is
-  image-rs/image-webp#21.
+  image-rs/image-webp#21. Open PR image-rs/image#3135 forwards max_alloc to
+  image-webp; the RGB temp-buffer cap stays suite-only.
 
 --- a/src/decoder.rs
 +++ b/src/decoder.rs

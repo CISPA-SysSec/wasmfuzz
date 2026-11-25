@@ -1,5 +1,5 @@
 set -e
-git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" 075e65d618a323e5cb48c1d8710a2eca25d690c6
+git clone-rev.sh https://github.com/image-rs/image.git "$PROJECT/repo" e70e9fe5073f4b298a33b72993847241a8eaaca6
 git -C "$PROJECT/repo" apply "$PROJECT/fix-ico-bmp-zero-height.patch"
 
 # Pinned to versions resolved by `image` 0.25.9 for the fuzz workspace (`cargo tree -p image -i …`).
@@ -34,3 +34,15 @@ rm -f "$PROJECT/moxcms.crate"
 
 git -C "$PROJECT/repo" apply "$PROJECT/port-vendored-crate-patches.patch"
 git -C "$PROJECT/repo" apply "$PROJECT/fuzz-tiff-limits.patch"
+
+curl -fsSL -o "$PROJECT/exr.crate" https://static.crates.io/crates/exr/1.74.2/download
+mkdir -p "$PROJECT/exr"
+tar -xzf "$PROJECT/exr.crate" -C "$PROJECT/exr" --strip-components=1
+patch -d "$PROJECT/exr" -p1 <"$PROJECT/fix-exr-block-size-overflow.patch"
+patch -d "$PROJECT/exr" -p1 <"$PROJECT/fix-exr-chunk-count-overflow.patch"
+patch -d "$PROJECT/exr" -p1 <"$PROJECT/fix-exr-chunk-alloc-before-read.patch"
+patch -d "$PROJECT/exr" -p1 <"$PROJECT/fix-exr-dwa-section-sizes.patch"
+patch -d "$PROJECT/exr" -p1 <"$PROJECT/fix-exr-dwa-dct-row-buffers.patch"
+rm -f "$PROJECT/exr.crate"
+git -C "$PROJECT/repo" apply "$PROJECT/limit-openexr-block-size.patch"
+git -C "$PROJECT/repo" apply "$PROJECT/limit-openexr-read-buffers.patch"

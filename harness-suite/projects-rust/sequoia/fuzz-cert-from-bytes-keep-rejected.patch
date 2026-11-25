@@ -1,0 +1,35 @@
+Subject: [PATCH] openpgp/fuzz: keep inputs that are not certificates in cert_from_bytes
+
+cert_from_bytes returned Corpus::Reject for inputs that do not parse as a certificate, so
+libFuzzer never added them to the corpus. Return () instead, so they are kept. The previous target body stays as a comment.
+
+diff --git a/openpgp/fuzz/fuzz_targets/cert_from_bytes.rs b/openpgp/fuzz/fuzz_targets/cert_from_bytes.rs
+index 905095d2..00aa6e23 100644
+--- a/openpgp/fuzz/fuzz_targets/cert_from_bytes.rs
++++ b/openpgp/fuzz/fuzz_targets/cert_from_bytes.rs
+@@ -1,6 +1,6 @@
+ #![no_main]
+ 
+-use libfuzzer_sys::{Corpus, fuzz_target};
++use libfuzzer_sys::fuzz_target;
+ 
+ use sequoia_openpgp as openpgp;
+ use openpgp::{
+@@ -8,9 +8,14 @@ use openpgp::{
+     parse::Parse,
+ };
+ 
+-fuzz_target!(|data: &[u8]| -> Corpus {
++fuzz_target!(|data: &[u8]| {
++    let _ = Cert::from_bytes(data);
++});
++/*
++fuzz_target!(|data: &[u8]| -> libfuzzer_sys::Corpus {
+     match Cert::from_bytes(data) {
+-        Ok(_) => Corpus::Keep,
+-        Err(_) => Corpus::Reject,
++        Ok(_) => libfuzzer_sys::Corpus::Keep,
++        Err(_) => libfuzzer_sys::Corpus::Reject,
+     }
+ });
++*/

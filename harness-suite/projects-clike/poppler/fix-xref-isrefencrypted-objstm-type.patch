@@ -1,0 +1,123 @@
+XRef::isRefEncrypted() called getStream() on the object a compressed xref
+entry names as its object stream without checking that it is a stream;
+Object::getStream() aborts on anything else. Reached through
+Dict::lookupEnsureEncryptedIfNeeded() (Catalog /URI) in encrypted files.
+
+Not fixed upstream as of d828315.
+Upstream: none found (poppler/poppler issues and MRs searched for
+isRefEncrypted, "object stream is not a stream").
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 826844189..8465a8be3 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -30,6 +30,10 @@ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-jbig2-expand-test COMMAND poppler-jbig2-expand-test)
+   set_tests_properties(poppler-jbig2-expand-test PROPERTIES SKIP_RETURN_CODE 77)
+ endif()
++cpp_add_simpletest(poppler-xref-objstm-test poppler-xref-objstm-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-xref-objstm-test COMMAND poppler-xref-objstm-test)
++endif()
+ 
+ if(ENABLE_FUZZER)
+   cpp_add_simpletest(doc_fuzzer ./fuzzing/doc_fuzzer.cc)
+diff --git a/cpp/tests/poppler-xref-objstm-test.cpp b/cpp/tests/poppler-xref-objstm-test.cpp
+new file mode 100644
+index 000000000..3bc5a169b
+--- /dev/null
++++ b/cpp/tests/poppler-xref-objstm-test.cpp
+@@ -0,0 +1,78 @@
++/*
++ * Regression test: XRef::isRefEncrypted() called getStream() on whatever
++ * object a compressed xref entry names as its object stream. If that object
++ * is not a stream (here a plain dictionary), Object::getStream() aborts the
++ * process. Dict::lookupEnsureEncryptedIfNeeded() reaches this for every
++ * indirect /URI etc. in encrypted documents.
++ */
++
++#include <GlobalParams.h>
++#include <Object.h>
++#include <PDFDoc.h>
++#include <Stream.h>
++#include <XRef.h>
++
++#include <iostream>
++#include <memory>
++#include <string>
++#include <vector>
++
++static std::string build_pdf()
++{
++    const std::vector<std::string> objs = {
++        "<< /Type /Catalog /Pages 2 0 R >>",
++        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
++        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>",
++        "<< /N 1 /First 4 >>", // named as the object stream of object 5, but not a stream
++    };
++    std::string pdf = "%PDF-1.7\n";
++    std::vector<size_t> offsets;
++    for (size_t i = 0; i < objs.size(); ++i) {
++        offsets.push_back(pdf.size());
++        pdf += std::to_string(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
++    }
++    // cross-reference stream (W [1 4 2]) for objects 0..6; object 5 lives in "object stream" 4
++    const size_t xrefOffset = pdf.size();
++    std::string data;
++    auto entry = [&data](int type, size_t field2, int field3) {
++        data += static_cast<char>(type);
++        for (int shift = 24; shift >= 0; shift -= 8) {
++            data += static_cast<char>((field2 >> shift) & 0xff);
++        }
++        data += static_cast<char>((field3 >> 8) & 0xff);
++        data += static_cast<char>(field3 & 0xff);
++    };
++    entry(0, 0, 0xffff);
++    for (size_t off : offsets) {
++        entry(1, off, 0);
++    }
++    entry(2, 4, 0);
++    entry(1, xrefOffset, 0);
++    pdf += "6 0 obj\n<< /Type /XRef /Size 7 /W [1 4 2] /Root 1 0 R /Length " + std::to_string(data.size()) + " >>\nstream\n" + data + "\nendstream\nendobj\n";
++    pdf += "startxref\n" + std::to_string(xrefOffset) + "\n%%EOF\n";
++    return pdf;
++}
++
++int main()
++{
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    const std::string pdf = build_pdf();
++    PDFDoc doc(std::make_unique<MemStream>(pdf.data(), 0, pdf.size(), Object::null()));
++    if (!doc.isOk()) {
++        std::cerr << "failed to load the test document\n";
++        return 1;
++    }
++    XRef *xref = doc.getXRef();
++    if (xref->isXRefStream() == false || xref->getEntry(5)->type != xrefEntryCompressed) {
++        std::cerr << "  FAIL: object 5 is not a compressed xref entry\n";
++        return 1;
++    }
++    if (xref->isRefEncrypted({ .num = 5, .gen = 0 })) {
++        std::cerr << "  FAIL: object in a broken object stream reported as encrypted\n";
++        return 1;
++    }
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/poppler/XRef.cc b/poppler/XRef.cc
+index a7bad0a57..c40a68292 100644
+--- a/poppler/XRef.cc
++++ b/poppler/XRef.cc
+@@ -1226,6 +1226,10 @@ bool XRef::isRefEncrypted(Ref r)
+             return false;
+         }
+         const Object objStr = fetch(static_cast<int>(e->offset), 0);
++        if (!objStr.isStream()) [[unlikely]] {
++            error(errSyntaxError, -1, "XRef::isRefEncrypted - Compressed object's object stream is not a stream");
++            return false;
++        }
+         return objStr.getStream()->isEncrypted();
+     }
+ 

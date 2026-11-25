@@ -1,14 +1,20 @@
 Subject: [PATCH] ico: reject a BMP height that halves to zero
 
-Open upstream as image-rs/image#3041, the same approach, which maintainers
-declined in favour of Windows behaviour (fall back to the ICONDIR entry size).
-That is image-rs/image#3042, also open. Drop this patch once #3042 lands.
+A BMP inside an ICO stores the doubled height (image plus AND mask). A
+BITMAPINFOHEADER height of 1 halves to 0 rows, and the pixel readers then
+panic on `self.height - 1`. The test added here, a 1x1 32bpp entry with
+height 1, fails without the fix.
+
+Upstream: still present at image HEAD (e70e9fe). image-rs/image#3041 (open)
+takes the same approach; maintainers preferred Windows behaviour (fall back to
+the ICONDIR entry size), which is image-rs/image#3042, also open. Drop this
+patch once #3042 lands.
 
 diff --git a/src/codecs/bmp/decoder.rs b/src/codecs/bmp/decoder.rs
-index 691be7b..c8f4a21 100644
+index cba61ae..bd6f15e 100644
 --- a/src/codecs/bmp/decoder.rs
 +++ b/src/codecs/bmp/decoder.rs
-@@ -1756,6 +1756,9 @@ impl<R: BufRead + Seek> BmpDecoder<R> {
+@@ -1746,6 +1746,9 @@ impl<R: BufRead + Seek> BmpDecoder<R> {
          // The height field in an ICO file is doubled to account for the AND mask
          // (whether or not an AND mask is actually present).
          self.height /= 2;
@@ -18,3 +24,42 @@ index 691be7b..c8f4a21 100644
          Ok(())
      }
  
+diff --git a/src/codecs/ico/decoder.rs b/src/codecs/ico/decoder.rs
+index 1211652..b237d08 100644
+--- a/src/codecs/ico/decoder.rs
++++ b/src/codecs/ico/decoder.rs
+@@ -572,6 +572,34 @@ mod test {
+         assert!(decoder.read_image(&mut buf).is_err());
+     }
+ 
++    // A BMP inside an ICO whose (doubled) height is 1 is 0 rows high after halving;
++    // that used to panic in the pixel readers instead of returning an error.
++    #[test]
++    fn bmp_height_halved_to_zero() {
++        let mut data = vec![
++            0x00, 0x00, 0x01, 0x00, 0x01, 0x00, // ICONDIR: 1 icon
++            0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x20, 0x00, // 1x1, 32bpp
++            0x30, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, // 48 bytes at offset 22
++        ];
++        let mut bmp = [0u8; 40];
++        bmp[0] = 40; // BITMAPINFOHEADER
++        bmp[4] = 1; // width
++        bmp[8] = 1; // height (doubled)
++        bmp[12] = 1; // planes
++        bmp[14] = 32; // bits per pixel
++        data.extend_from_slice(&bmp);
++        data.extend_from_slice(&[0xff; 8]); // one pixel, one mask row
++
++        let decode = || -> ImageResult<()> {
++            let mut decoder = IcoDecoder::new(std::io::Cursor::new(&data))?;
++            let bytes = decoder.prepare_image()?.total_bytes();
++            let mut buf = vec![0; usize::try_from(bytes).unwrap()];
++            decoder.read_image(&mut buf)?;
++            Ok(())
++        };
++        assert!(decode().is_err());
++    }
++
+     #[test]
+     fn dimension_mismatch_strict_vs_lenient() {
+         // Minimal 2x2 32-bit BMP inside an ICO where the directory entry says 3x3.

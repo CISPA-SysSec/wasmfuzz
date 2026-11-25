@@ -1,0 +1,74 @@
+Subject: [PATCH] openpgp: PacketParser::consume: hash from the buffer, don't re-read
+
+`PacketParser::consume(amount)` called `data_hard(amount)` to get the
+bytes for the body hash and `expect`ed it to succeed.  `drop_eof`
+calls `consume(0)` after a short read; the partial body filter maps
+`data_hard(0)` to the inner `data(0)`, and the armor reader returns
+the error it stashed ("Invalid ASCII Armor footer") because it has no
+data buffered, so `consume` panicked.  Data that may be consumed is in
+the buffer by contract; take it from `buffer()`, like
+`HashedReader::consume` does.
+
+Repro: repro/fix-packet-parser-consume-stashed-error.asc
+(decrypt_from_bytes, inline_verify_from_bytes).
+---
+diff --git a/openpgp/src/parse.rs b/openpgp/src/parse.rs
+index 49b01745..4cef9381 100644
+--- a/openpgp/src/parse.rs
++++ b/openpgp/src/parse.rs
+@@ -6053,8 +6053,15 @@ impl<'a> BufferedReader<Cookie> for PacketParser<'a> {
+     fn consume(&mut self, amount: usize) -> &[u8] {
+         // This is awkward.  Juggle mutable references around.
+         if let Some(mut body_hash) = self.body_hash.take() {
+-            let data = self.data_hard(amount)
+-                .expect("It is an error to consume more than data returns");
++            // The caller may only consume data that a previous call
++            // to `data` returned, and that data is in the buffer.
++            // Don't call `self.data_hard(amount)` here: the inner
++            // reader may return an error that it stashed while
++            // returning a short read, even if `amount` bytes (or
++            // zero bytes) are buffered.
++            let data = self.reader.buffer();
++            assert!(data.len() >= amount,
++                    "It is an error to consume more than data returns");
+             body_hash.update(&data[..amount]);
+             self.body_hash = Some(body_hash);
+             self.content_was_read |= amount > 0;
+diff --git a/openpgp/src/parse/stream.rs b/openpgp/src/parse/stream.rs
+index 26eea970..983fad49 100644
+--- a/openpgp/src/parse/stream.rs
++++ b/openpgp/src/parse/stream.rs
+@@ -4272,6 +4272,33 @@ xHUDBRY0WIQ+50WENDPP";
+         Ok(())
+     }
+ 
++    /// `PacketParser::consume` used to call `data_hard(amount)` to
++    /// hash the consumed data.  Here `drop_eof` consumes zero bytes
++    /// after a short read from the armor reader, which had stashed
++    /// an "Invalid ASCII Armor footer" error.  `data_hard(0)`
++    /// returned that error, and `consume` panicked.  (Minimized
++    /// fuzzer input.)
++    #[test]
++    fn packet_parser_consume_stashed_error() -> Result<()> {
++        let p = P::new();
++        let mut m = String::from(
++            "BEGIN PGP MESSAGEyOkAyOkAyOoAyOkAy8EW");
++        m.push_str(&"A".repeat(626));
++        m.push_str("C0a");
++        m.push_str(&"A".repeat(39));
++
++        let mut h = VHelper::new(0, 0, 0, 0, true, vec![
++            Cert::from_bytes(crate::tests::key("testy.pgp"))?,
++        ]);
++        h.error_out = false;
++        if let Ok(mut v) = VerifierBuilder::from_bytes(m.as_bytes())?
++            .with_policy(&p, None, h)
++        {
++            let _ = io::copy(&mut v, &mut io::sink());
++        }
++        Ok(())
++    }
++
+     /// Tests that the message structure is checked at the end of
+     /// parsing the packet stream.
+     #[test]

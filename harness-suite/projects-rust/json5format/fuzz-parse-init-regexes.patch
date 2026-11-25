@@ -1,0 +1,36 @@
+Subject: [PATCH] fuzz: compile the parser regexes before the first input
+
+The parser's regexes are private lazy_statics (src/parser.rs), compiled on
+first use, so the first input of every fresh process paid for compiling all
+of them (about 50x the cost of a typical input). Parse a fixed document that
+uses each of them (line and block comment, single-quoted property name and
+colon, double-quoted string) from a static constructor, so they are compiled
+before the first input. Every input runs the same parser code as before; it
+only no longer sees the one-time regex compilation. Related upstream:
+google/json5format#38 / #47 (open, a fuzz_parse timeout in block comment
+indentation, unrelated to this). Drop this patch if the regexes become
+eagerly built or the fuzz target gets an init hook.
+
+diff --git a/fuzz/fuzz_targets/fuzz_parse.rs b/fuzz/fuzz_targets/fuzz_parse.rs
+index 35e3a7c..eb7764e 100644
+--- a/fuzz/fuzz_targets/fuzz_parse.rs
++++ b/fuzz/fuzz_targets/fuzz_parse.rs
+@@ -3,6 +3,18 @@ use libfuzzer_sys::fuzz_target;
+ use json5format::*;
+ use std::str;
+ 
++// The parser compiles its regexes lazily (private lazy_statics in src/parser.rs), on the
++// first parse. Parse a fixed document that uses every one of them from a static constructor,
++// so they are compiled before the first input instead of during it.
++#[used]
++#[link_section = ".init_array"]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        let _ = ParsedDocument::from_str("// a\n/* b */\n{'c': \"d\"}", None);
++    }
++    init
++};
++
+ fuzz_target!(|data: &[u8]| {
+     if let Ok(utf8) = str::from_utf8(data) {
+         ParsedDocument::from_str(utf8, None);

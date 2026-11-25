@@ -1,0 +1,94 @@
+Subject: [PATCH] parser: Grow input buffer before parsing ExternalID
+
+The pull parser reads memory input in chunks. After a long DOCTYPE name
+followed by a single blank, SKIP_BLANKS doesn't grow the buffer, so the
+"PUBLIC"/"SYSTEM" keyword can straddle the end of the buffered input and
+CMP6 fails. The pull parser then reported "DOCTYPE improperly terminated"
+for a well-formed document that the push parser accepts. GROW at the start
+of xmlParseExternalID, which serves all callers.
+
+Found with the xml fuzzer ("pull/push parser error mismatch: 61 != 0").
+Regression test testExternalIDAtBufferEnd in testparser.c.
+
+Not fixed upstream as of 21c8223.
+Upstream: none found.
+---
+diff --git a/parser.c b/parser.c
+index f5b1fdda9..21af70bbf 100644
+--- a/parser.c
++++ b/parser.c
+@@ -4793,6 +4793,11 @@ xmlParseExternalID(xmlParserCtxt *ctxt, xmlChar **publicId, int strict) {
+     xmlChar *URI = NULL;
+ 
+     *publicId = NULL;
++    /*
++     * The keyword can straddle the end of the buffered input, for
++     * example after a long name followed by a single blank.
++     */
++    GROW;
+     if (CMP6(CUR_PTR, 'S', 'Y', 'S', 'T', 'E', 'M')) {
+         SKIP(6);
+ 	if (SKIP_BLANKS == 0) {
+diff --git a/testparser.c b/testparser.c
+index e9a73c0ba..c818c1e83 100644
+--- a/testparser.c
++++ b/testparser.c
+@@ -479,6 +479,50 @@ testNoBlanks(void) {
+     return err;
+ }
+ 
++static int
++testExternalIDAtBufferEnd(void) {
++    /*
++     * Memory input is read in chunks. Make the PUBLIC/SYSTEM keyword
++     * after a long DOCTYPE name straddle the end of the buffered input.
++     */
++    static const char *const tails[] = {
++        " SYSTEM \"x\"><d/>",
++        " PUBLIC \"p\" \"x\"><d/>",
++    };
++    char buf[5000];
++    size_t i;
++    int nameLen;
++    int err = 0;
++
++    for (i = 0; i < sizeof(tails) / sizeof(tails[0]); i++) {
++        for (nameLen = 3900; nameLen < 4100; nameLen++) {
++            xmlParserCtxtPtr ctxt;
++            xmlDocPtr doc;
++            int len;
++
++            memcpy(buf, "<!DOCTYPE ", 10);
++            memset(buf + 10, 'd', nameLen);
++            len = 10 + nameLen;
++            len += snprintf(buf + len, sizeof(buf) - len, "%s", tails[i]);
++
++            ctxt = xmlNewParserCtxt();
++            doc = xmlCtxtReadMemory(ctxt, buf, len, NULL, NULL,
++                                    XML_PARSE_NOERROR);
++            if ((doc == NULL) || (ctxt->errNo != XML_ERR_OK)) {
++                fprintf(stderr, "testExternalIDAtBufferEnd failed with "
++                        "name length %d: %d\n", nameLen, ctxt->errNo);
++                err = 1;
++            }
++            xmlFreeDoc(doc);
++            xmlFreeParserCtxt(ctxt);
++            if (err)
++                return err;
++        }
++    }
++
++    return err;
++}
++
+ static int
+ testSaveNullEncDoc(const char *xml, const char *expect) {
+     xmlDocPtr doc;
+@@ -1851,6 +1895,7 @@ main(void) {
+     err |= testCtxtParseContent();
+     err |= testParseInNodeContextEntityParent();
+     err |= testNoBlanks();
++    err |= testExternalIDAtBufferEnd();
+     err |= testSaveNullEnc();
+     err |= testDocDumpFormatMemoryEnc();
+ #endif

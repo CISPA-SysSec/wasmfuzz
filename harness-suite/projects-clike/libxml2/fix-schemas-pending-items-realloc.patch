@@ -1,0 +1,203 @@
+Subject: [PATCH] schemas: Don't cache the pending item array in xmlSchemaFixupComponents
+
+xmlSchemaFixupComponents stored con->pending->items in a local variable and
+iterated over it in a series of loops. Some fixup functions add components to
+the pending list: xmlSchemaFixupSimpleTypeStageTwo fixes up the base type of a
+simple type, and if that base is (wrongly) a complex type,
+xmlSchemaFixupComplexType creates a particle and a model group for it, which
+can reallocate the array. The following iterations then read the freed array
+(heap-use-after-free). The complex type loop already reads
+con->pending->items[i] directly; do the same in all loops and drop the cached
+pointer.
+
+Found with the schema fuzzer (heap-use-after-free in xmlSchemaFixupComponents;
+on wasm32 the stale entries trap with an out-of-bounds load). Fuzzing builds
+grow the list one item at a time, so any schema with a simple type restricting
+a mixed complex type triggers it there. Regression test
+test/schemas/pendingrealloc_0.xsd (ten pending components, the default
+initial list size).
+
+Not fixed upstream as of 21c8223.
+Upstream: issue GNOME/libxml2#1104 (Trail of Bits, 2026-04-23) reported this
+use-after-free and proposed the same change; it was closed on 2026-05-29
+without a fix.
+---
+diff --git a/result/schemas/pendingrealloc_0_0.err b/result/schemas/pendingrealloc_0_0.err
+new file mode 100644
+index 0000000..14aa083
+--- /dev/null
++++ b/result/schemas/pendingrealloc_0_0.err
+@@ -0,0 +1 @@
++./test/schemas/pendingrealloc_0.xsd:7: element simpleType: Schemas parser error : simple type 's': The base type 'c' is not a simple type.
+diff --git a/test/schemas/pendingrealloc_0.xml b/test/schemas/pendingrealloc_0.xml
+new file mode 100644
+index 0000000..69d62f2
+--- /dev/null
++++ b/test/schemas/pendingrealloc_0.xml
+@@ -0,0 +1 @@
++<doc/>
+diff --git a/test/schemas/pendingrealloc_0.xsd b/test/schemas/pendingrealloc_0.xsd
+new file mode 100644
+index 0000000..c2f2d50
+--- /dev/null
++++ b/test/schemas/pendingrealloc_0.xsd
+@@ -0,0 +1,17 @@
++<?xml version="1.0"?>
++<!-- The fixup of the simple type "s" fixes up its complex base type "c",
++     which adds a particle and a model group to the pending component list.
++     With ten components pending, this reallocates the list while
++     xmlSchemaFixupComponents iterates over it. -->
++<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
++  <xs:simpleType name="s"><xs:restriction base="c"/></xs:simpleType>
++  <xs:complexType name="c" mixed="true"/>
++  <xs:complexType name="c1"/>
++  <xs:complexType name="c2"/>
++  <xs:complexType name="c3"/>
++  <xs:complexType name="c4"/>
++  <xs:complexType name="c5"/>
++  <xs:complexType name="c6"/>
++  <xs:complexType name="c7"/>
++  <xs:complexType name="c8"/>
++</xs:schema>
+diff --git a/xmlschemas.c b/xmlschemas.c
+index 46259d6..fd4d7fe 100644
+--- a/xmlschemas.c
++++ b/xmlschemas.c
+@@ -20469,7 +20469,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+ 			 xmlSchemaBucketPtr rootBucket)
+ {
+     xmlSchemaConstructionCtxtPtr con = pctxt->constructor;
+-    xmlSchemaTreeItemPtr item, *items;
++    xmlSchemaTreeItemPtr item;
+     int nbItems, i, ret = 0;
+     xmlSchemaBucketPtr oldbucket = con->bucket;
+     xmlSchemaElementPtr elemDecl;
+@@ -20509,7 +20509,12 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     xmlSchemaAddComponents(pctxt, rootBucket);
+ 
+     pctxt->ctxtType = NULL;
+-    items = (xmlSchemaTreeItemPtr *) con->pending->items;
++    /*
++    * Always read the items through con->pending: fixup functions can add
++    * components to the pending list and so reallocate its array, e.g. the
++    * fixup of a simple type fixes up a complex base type, which creates
++    * particles and model groups.
++    */
+     nbItems = con->pending->nbItems;
+     /*
+     * Now that we have parsed *all* the schema document(s) and converted
+@@ -20538,7 +20543,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * 7. Attribute prohibitions which had a "ref" attribute.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+ 	    case XML_SCHEMA_TYPE_ELEMENT:
+ 		xmlSchemaResolveElementReferences(
+@@ -20609,7 +20614,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * TODO: check for circular substitution groups.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	/*
+ 	* Let's better stop on the first error here.
+ 	*/
+@@ -20651,7 +20656,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * such particles to the model group of the model group definition.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+ 	    case XML_SCHEMA_TYPE_SEQUENCE:
+ 	    case XML_SCHEMA_TYPE_CHOICE:
+@@ -20668,7 +20673,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * Expand attribute group references of attribute group definitions.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+             case XML_SCHEMA_TYPE_ATTRIBUTEGROUP:
+ 		if ((! WXS_ATTR_GROUP_EXPANDED(item)) &&
+@@ -20691,7 +20696,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * circular union types in all cases.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+             case XML_SCHEMA_TYPE_SIMPLE:
+ 		if (WXS_IS_TYPE_NOT_FIXED_1((xmlSchemaTypePtr) item)) {
+@@ -20711,7 +20716,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * be already computed.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+             case XML_SCHEMA_TYPE_SIMPLE:
+ 		if (((xmlSchemaTypePtr) item)->memberTypes != NULL) {
+@@ -20733,7 +20738,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * Do the complete type fixup for simple types.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+             case XML_SCHEMA_TYPE_SIMPLE:
+ 		if (WXS_IS_TYPE_NOT_FIXED(WXS_TYPE_CAST item)) {
+@@ -20754,7 +20759,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * Apply constraints for attribute declarations.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+ 	    case XML_SCHEMA_TYPE_ATTRIBUTE:
+ 		xmlSchemaCheckAttrPropsCorrect(pctxt, WXS_ATTR_CAST item);
+@@ -20770,7 +20775,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * Apply constraints for attribute uses.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+ 	    case XML_SCHEMA_TYPE_ATTRIBUTE_USE:
+ 		if (((xmlSchemaAttributeUsePtr)item)->defValue != NULL) {
+@@ -20790,7 +20795,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * Apply constraints for attribute group definitions.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+ 	case XML_SCHEMA_TYPE_ATTRIBUTEGROUP:
+ 	    if (( (WXS_ATTR_GROUP_CAST item)->attrUses != NULL) &&
+@@ -20838,14 +20843,13 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     * The list could have changed, since xmlSchemaFixupComplexType()
+     * will create particles and model groups in some cases.
+     */
+-    items = (xmlSchemaTreeItemPtr *) con->pending->items;
+     nbItems = con->pending->nbItems;
+ 
+     /*
+     * Apply some constraints for element declarations.
+     */
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+ 	    case XML_SCHEMA_TYPE_ELEMENT:
+ 		elemDecl = (xmlSchemaElementPtr) item;
+@@ -20886,7 +20890,7 @@ xmlSchemaFixupComponents(xmlSchemaParserCtxtPtr pctxt,
+     */
+ 
+     for (i = 0; i < nbItems; i++) {
+-	item = items[i];
++	item = con->pending->items[i];
+ 	switch (item->type) {
+ 	    case XML_SCHEMA_TYPE_COMPLEX:
+ 		xmlSchemaBuildContentModel((xmlSchemaTypePtr) item, pctxt);

@@ -1,0 +1,99 @@
+Subject: [PATCH] exr: do not allocate a declared chunk size before reading it
+
+CompressedScanLineBlock::read and CompressedTileBlock::read pass the maximum
+block byte size both as the hard limit and as the "soft max" allocation step of
+read_i32_sized_vec_le. A chunk that declares a size close to the (header
+derived, possibly huge) maximum block size therefore allocates and zeroes that
+much memory before the reader notices the file is only a few hundred bytes
+long. Read in 1 MiB steps instead, like the deep blocks already do with
+6 * u16::MAX, so memory grows only with data that is actually present.
+
+Upstream: open umbrella issue johannesvollmer/exrs#123 (uncapped allocations); open PR #300 (by jedypod, 2026-11-02) checks offset tables before allocating image buffers, a different site.
+Nothing upstream caps the per-chunk read allocation in src/block/chunk.rs yet.
+
+diff --git a/src/block/chunk.rs b/src/block/chunk.rs
+index 79db3f0..5d8163c 100644
+--- a/src/block/chunk.rs
++++ b/src/block/chunk.rs
+@@ -220,6 +220,12 @@ impl TileCoordinates {
+ 
+ use crate::meta::{calculate_block_size, BlockDescription, MetaData};
+ 
++/// How many bytes of a chunk are allocated before the file proves that it
++/// actually contains that many bytes. The declared chunk size is only bounded
++/// by the (possibly huge) uncompressed block size, so a tiny file could
++/// otherwise request gigabytes of memory.
++const MAX_UNVERIFIED_ALLOCATION: usize = 1024 * 1024;
++
+ impl CompressedScanLineBlock {
+     /// Without validation, write this instance to the byte stream.
+     pub fn write<W: Write>(&self, write: &mut W) -> UnitResult {
+@@ -239,7 +245,7 @@ impl CompressedScanLineBlock {
+         let y_coordinate = i32::read_le(read)?;
+         let compressed_pixels_le = u8::read_i32_sized_vec_le(
+             read,
+-            max_block_byte_size,
++            MAX_UNVERIFIED_ALLOCATION,
+             Some(max_block_byte_size),
+             "scan line block sample count",
+         )?;
+@@ -269,7 +275,7 @@ impl CompressedTileBlock {
+         let coordinates = TileCoordinates::read(read)?;
+         let compressed_pixels_le = u8::read_i32_sized_vec_le(
+             read,
+-            max_block_byte_size,
++            MAX_UNVERIFIED_ALLOCATION,
+             Some(max_block_byte_size),
+             "tile block sample count",
+         )?;
+@@ -453,3 +459,50 @@ impl Chunk {
+         Ok(chunk)
+     }
+ }
++
++#[cfg(test)]
++mod test {
++    use super::*;
++
++    /// Remembers the largest buffer that the chunk reader asked to fill,
++    /// which is the largest amount of memory it allocated before reading.
++    struct ProbeReader<'d> {
++        data: &'d [u8],
++        largest_request: usize,
++    }
++
++    impl Read for ProbeReader<'_> {
++        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
++            self.largest_request = self.largest_request.max(buffer.len());
++            self.data.read(buffer)
++        }
++    }
++
++    #[test]
++    fn declared_chunk_size_is_not_allocated_before_reading() {
++        let declared_size = i32::MAX;
++        let mut scan_line = Vec::new();
++        scan_line.extend_from_slice(&0_i32.to_le_bytes()); // y coordinate
++        scan_line.extend_from_slice(&declared_size.to_le_bytes());
++        scan_line.extend_from_slice(&[1, 2, 3, 4]); // the actual data is much shorter
++
++        let mut tile = Vec::new();
++        tile.extend_from_slice(&[0; 16]); // tile and level indices
++        tile.extend_from_slice(&declared_size.to_le_bytes());
++        tile.extend_from_slice(&[1, 2, 3, 4]);
++
++        let mut reader = ProbeReader {
++            data: &scan_line,
++            largest_request: 0,
++        };
++        assert!(CompressedScanLineBlock::read(&mut reader, declared_size as usize).is_err());
++        assert!(reader.largest_request <= MAX_UNVERIFIED_ALLOCATION);
++
++        let mut reader = ProbeReader {
++            data: &tile,
++            largest_request: 0,
++        };
++        assert!(CompressedTileBlock::read(&mut reader, declared_size as usize).is_err());
++        assert!(reader.largest_request <= MAX_UNVERIFIED_ALLOCATION);
++    }
++}

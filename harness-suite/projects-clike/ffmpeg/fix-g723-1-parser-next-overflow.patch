@@ -1,0 +1,131 @@
+Avoid a negative frame size in the G.723.1 parser.
+
+g723_1_parse() (libavcodec/g723_1_parser.c) computes next = frame_size * nb_channels in int.
+A demuxer-provided channel count near INT_MAX overflows it to a negative value that is not
+END_NOT_FOUND, so ff_combine_frame() hits av_assert0(next >= 0 || pc->buffer)
+(libavcodec/parser.c:254) on the first packet. Compute in 64 bits and clamp to INT_MAX;
+ff_combine_frame() then rejects the oversized frame as before.
+Not fixed upstream as of 47f7313e6a (2026-11-21).
+
+Includes libavcodec/tests/g723_1_parser.c (fate-g723_1-parser): parses one 24-byte frame with
+1 and with 100000000 channels. Without the fix the second call fails the assertion.
+
+Upstream: none found.
+
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+index f12ad9c8e8..8c13d2084f 100644
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -1410,6 +1410,7 @@ TESTPROGS-$(CONFIG_H264_METADATA_BSF)     += h264_levels
+ TESTPROGS-$(CONFIG_HEVC_METADATA_BSF)     += h265_levels
+ TESTPROGS-$(CONFIG_RANGECODER)            += rangecoder
+ TESTPROGS-$(CONFIG_SNOW_ENCODER)          += snowenc
++TESTPROGS-$(CONFIG_G723_1_PARSER)         += g723_1_parser
+ 
+ TESTOBJS = dctref.o
+ 
+diff --git a/libavcodec/g723_1_parser.c b/libavcodec/g723_1_parser.c
+index e2fba33ca6..f96f4d7b36 100644
+--- a/libavcodec/g723_1_parser.c
++++ b/libavcodec/g723_1_parser.c
+@@ -37,8 +37,12 @@ static int g723_1_parse(AVCodecParserContext *s1, AVCodecContext *avctx,
+     ParseContext *pc = &s->pc;
+     int next = END_NOT_FOUND;
+ 
+-    if (buf_size > 0)
+-        next = frame_size[buf[0] & 3] * FFMAX(1, avctx->ch_layout.nb_channels);
++    if (buf_size > 0) {
++        /* a bogus channel count must not overflow next into a negative value */
++        int64_t size = frame_size[buf[0] & 3] *
++                       (int64_t)FFMAX(1, avctx->ch_layout.nb_channels);
++        next = FFMIN(size, INT_MAX);
++    }
+ 
+     if (ff_combine_frame(pc, next, &buf, &buf_size) < 0 || !buf_size) {
+         *poutbuf      = NULL;
+diff --git a/libavcodec/tests/g723_1_parser.c b/libavcodec/tests/g723_1_parser.c
+new file mode 100644
+index 0000000000..5bddc6b2af
+--- /dev/null
++++ b/libavcodec/tests/g723_1_parser.c
+@@ -0,0 +1,64 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <stdio.h>
++
++#include "libavcodec/avcodec.h"
++
++/*
++ * The G.723.1 frame size is the per-channel size (24, 20 or 4 bytes, from the
++ * first byte) times the channel count. A channel count taken from a broken
++ * container must not overflow it into a negative frame end, which made
++ * ff_combine_frame() fail av_assert0(next >= 0 || pc->buffer).
++ */
++static int parse(int nb_channels)
++{
++    static const uint8_t frame[24 + AV_INPUT_BUFFER_PADDING_SIZE] = { 0x00 };
++    AVCodecParserContext *parser = av_parser_init(AV_CODEC_ID_G723_1);
++    AVCodecContext *avctx = avcodec_alloc_context3(NULL);
++    uint8_t *out = NULL;
++    int out_size = -1;
++
++    if (!parser || !avctx) {
++        fprintf(stderr, "allocation failed\n");
++        return -1;
++    }
++    avctx->ch_layout.order       = AV_CHANNEL_ORDER_UNSPEC;
++    avctx->ch_layout.nb_channels = nb_channels;
++    av_parser_parse2(parser, avctx, &out, &out_size, frame, 24,
++                     AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
++    printf("%d channels: frame of %d bytes\n", nb_channels, out_size);
++
++    av_parser_close(parser);
++    avcodec_free_context(&avctx);
++    return out_size;
++}
++
++int main(void)
++{
++    if (parse(1) != 24) {
++        fprintf(stderr, "mono frame not returned\n");
++        return 1;
++    }
++    /* 24 * 100000000 does not fit in an int */
++    if (parse(100000000) != 0) {
++        fprintf(stderr, "frame larger than the input returned\n");
++        return 1;
++    }
++    return 0;
++}
+diff --git a/tests/fate/libavcodec.mak b/tests/fate/libavcodec.mak
+index 2e2dabcd14..6190ee7c61 100644
+--- a/tests/fate/libavcodec.mak
++++ b/tests/fate/libavcodec.mak
+@@ -56,6 +56,11 @@ fate-golomb: libavcodec/tests/golomb$(EXESUF)
+ fate-golomb: CMD = run libavcodec/tests/golomb$(EXESUF)
+ fate-golomb: CMP = null
+ 
++FATE_LIBAVCODEC-$(CONFIG_G723_1_PARSER) += fate-g723_1-parser
++fate-g723_1-parser: libavcodec/tests/g723_1_parser$(EXESUF)
++fate-g723_1-parser: CMD = run libavcodec/tests/g723_1_parser$(EXESUF)
++fate-g723_1-parser: CMP = null
++
+ FATE_LIBAVCODEC-$(CONFIG_DXV_ENCODER) += fate-hashtable
+ fate-hashtable: libavcodec/tests/hashtable$(EXESUF)
+ fate-hashtable: CMD = run libavcodec/tests/hashtable$(EXESUF)

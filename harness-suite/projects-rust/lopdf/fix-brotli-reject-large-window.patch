@@ -1,0 +1,38 @@
+diff --git a/src/object.rs b/src/object.rs
+index e02f596..b0aba1d 100644
+--- a/src/object.rs
++++ b/src/object.rs
+@@ -918,6 +918,13 @@ fn decompress_brotli(input: &[u8], limit: Option<usize>) -> Result<Vec<u8>> {
+ 
+         // Unlike the Flate path there is no raw-deflate fallback, so a corrupt stream
+         // fails hard instead of yielding partial output. Intentional for a new filter.
++        // RFC 7932 has no large-window mode (WBITS bits 1,000,001), but brotli_decompressor
++        // accepts it by default, so a 25-byte stream could demand a 1 GiB ring buffer.
++        if input.first().is_some_and(|b| b & 0x7f == 0x11) {
++            return Err(Error::InvalidStream(
++                "Brotli decompression failed: large-window streams are not RFC 7932".to_string(),
++            ));
++        }
+         let mut output = Vec::with_capacity(initial_capacity(input.len(), limit));
+         Self::read_capped(Decompressor::new(input, 4096), &mut output, limit)
+             .map_err(|err| Error::InvalidStream(format!("Brotli decompression failed: {err}")))?;
+diff --git a/tests/brotli_decode.rs b/tests/brotli_decode.rs
+index 2d569f9..284c944 100644
+--- a/tests/brotli_decode.rs
++++ b/tests/brotli_decode.rs
+@@ -87,3 +87,15 @@ fn brotli_filter_ignores_decode_parms() {
+ 
+     assert_eq!(stream.decompressed_content().unwrap(), PAYLOAD);
+ }
++
++// Fuzzer input: the stream header selects the non-RFC 7932 large-window mode with a 1 GiB
++// window; decoding it allocated the whole ring buffer before failing.
++#[test]
++fn brotli_filter_rejects_large_window_streams() {
++    let stream = brotli_stream(&[
++        0x11, 0x9e, 0x2e, 0x4c, 0xc4, 0xb2, 0x5a, 0xef, 0x14, 0x8f, 0x9e, 0x85, 0x27, 0x24, 0xd6, 0x35, 0x5f, 0xfb,
++        0xc8, 0xdd, 0x80, 0x90, 0x13, 0x9e, 0x31,
++    ]);
++    let err = stream.decompressed_content().unwrap_err();
++    assert!(err.to_string().contains("large-window"), "{err}");
++}

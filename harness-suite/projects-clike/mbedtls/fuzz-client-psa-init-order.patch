@@ -1,0 +1,75 @@
+Subject: [PATCH] programs/fuzz: call psa_crypto_init() before parsing the CA certificate
+
+Open upstream as Mbed-TLS/mbedtls#10932, the same move in fuzz_client and
+fuzz_dtlsclient. Ours also moves mbedtls_ssl_init()/mbedtls_ssl_config_init()
+above it, so the early `goto exit` frees initialised contexts. Drop this patch
+once #10932 lands.
+
+diff --git a/programs/fuzz/fuzz_client.c b/programs/fuzz/fuzz_client.c
+index 8c99f2ddd..50fcd2ff3 100644
+--- a/programs/fuzz/fuzz_client.c
++++ b/programs/fuzz/fuzz_client.c
+@@ -37,6 +37,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+     fuzzBufferOffset_t biomemfuzz;
+     uint16_t options;
+ 
++    mbedtls_ssl_init(&ssl);
++    mbedtls_ssl_config_init(&conf);
++
++    psa_status_t status = psa_crypto_init();
++    if (status != PSA_SUCCESS) {
++        goto exit;
++    }
++
+     if (initialized == 0) {
+ #if defined(MBEDTLS_X509_CRT_PARSE_C) && defined(MBEDTLS_PEM_PARSE_C)
+         mbedtls_x509_crt_init(&cacert);
+@@ -63,14 +71,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+     //Avoid warnings if compile options imply no options
+     (void) options;
+ 
+-    mbedtls_ssl_init(&ssl);
+-    mbedtls_ssl_config_init(&conf);
+-
+-    psa_status_t status = psa_crypto_init();
+-    if (status != PSA_SUCCESS) {
+-        goto exit;
+-    }
+-
+     if (mbedtls_ssl_config_defaults(&conf,
+                                     MBEDTLS_SSL_IS_CLIENT,
+                                     MBEDTLS_SSL_TRANSPORT_STREAM,
+diff --git a/programs/fuzz/fuzz_dtlsclient.c b/programs/fuzz/fuzz_dtlsclient.c
+index 508b796e8..ce6e59aa2 100644
+--- a/programs/fuzz/fuzz_dtlsclient.c
++++ b/programs/fuzz/fuzz_dtlsclient.c
+@@ -33,6 +33,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+     unsigned char buf[4096];
+     fuzzBufferOffset_t biomemfuzz;
+ 
++    mbedtls_ssl_init(&ssl);
++    mbedtls_ssl_config_init(&conf);
++
++    psa_status_t status = psa_crypto_init();
++    if (status != PSA_SUCCESS) {
++        goto exit;
++    }
++
+     if (initialized == 0) {
+ #if defined(MBEDTLS_X509_CRT_PARSE_C) && defined(MBEDTLS_PEM_PARSE_C)
+         mbedtls_x509_crt_init(&cacert);
+@@ -46,14 +54,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+         initialized = 1;
+     }
+ 
+-    mbedtls_ssl_init(&ssl);
+-    mbedtls_ssl_config_init(&conf);
+-
+-    psa_status_t status = psa_crypto_init();
+-    if (status != PSA_SUCCESS) {
+-        goto exit;
+-    }
+-
+     if (mbedtls_ssl_config_defaults(&conf,
+                                     MBEDTLS_SSL_IS_CLIENT,
+                                     MBEDTLS_SSL_TRANSPORT_DATAGRAM,

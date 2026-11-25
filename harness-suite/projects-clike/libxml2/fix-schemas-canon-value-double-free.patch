@@ -1,0 +1,192 @@
+Subject: [PATCH] schemas: Fix double free in xmlSchemaGetCanonValueWhtspExt_1
+
+If xmlSchemaGetCanonValue fails (malloc failure), the default case freed
+value2 and jumped to internal_error while *retValue could still point to
+memory the caller frees again: xmlSchemaFormatIDCKeySequence_1 then freed
+the same buffer twice. Let internal_error free and clear *retValue, and
+don't free value2 separately.
+
+Found with the schema fuzzer's malloc failure injection (double free /
+heap-buffer-overflow in xmlSchemaFormatIDCKeySequence_1 <
+xmlSchemaXPathProcessHistory). Regression test testSchemaCanonValueOom in
+testparser.c, which fails each allocation of the validation of an xs:unique
+key of list type in turn. The failing allocators it adds to testparser.c
+are shared with the later malloc failure tests.
+
+Not fixed upstream as of 21c8223.
+Upstream: no report found. The closed, unmerged merge request
+GNOME/libxml2!454 (by sin99xx, 2026-09-03, "xmlschemas: Fix NULL deref and
+silent wrong verdicts on malloc failure") contained the "*retValue = NULL"
+half of this fix, but not the double free of value2.
+---
+diff --git a/testparser.c b/testparser.c
+index 02f5c5f5..783b2b84 100644
+--- a/testparser.c
++++ b/testparser.c
+@@ -17,8 +17,41 @@
+ #include <libxml/HTMLtree.h>
+ #include <libxml/xmlschemas.h>
+ 
++#include <stdlib.h>
+ #include <string.h>
+ 
++/*
++ * Allocators that fail the testFailAllocNum-th allocation.
++ */
++static int testFailAllocNum;
++static int testFailAllocCount;
++
++static void *
++testFailMalloc(size_t size) {
++    if (++testFailAllocCount == testFailAllocNum)
++        return(NULL);
++    return(malloc(size));
++}
++
++static void *
++testFailRealloc(void *ptr, size_t size) {
++    if (++testFailAllocCount == testFailAllocNum)
++        return(NULL);
++    return(realloc(ptr, size));
++}
++
++static char *
++testFailStrdup(const char *str) {
++    if (++testFailAllocCount == testFailAllocNum)
++        return(NULL);
++    return(strdup(str));
++}
++
++static void
++testIgnoreError(void *ctxt ATTRIBUTE_UNUSED,
++                const xmlError *error ATTRIBUTE_UNUSED) {
++}
++
+ #ifdef LIBXML_SAX1_ENABLED
+ static void
+ ignoreError(void *ctxt ATTRIBUTE_UNUSED,
+@@ -1792,6 +1825,85 @@ testRemoveParamEntityExtSubset(void) {
+     return err;
+ }
+ 
++#ifdef LIBXML_SCHEMAS_ENABLED
++static int
++testSchemaCanonValueOom(void) {
++    /*
++     * Make each allocation of the validation fail in turn. The keys of
++     * the identity constraint are lists, so a failure while computing
++     * the canonical value of the second item must not free the
++     * canonical value of the first one twice.
++     */
++    const char schemaContent[] =
++        "<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'>\n"
++        " <xs:element name='d'>\n"
++        "  <xs:complexType><xs:sequence>\n"
++        "   <xs:element name='i' type='l' maxOccurs='unbounded'/>\n"
++        "  </xs:sequence></xs:complexType>\n"
++        "  <xs:unique name='u'>\n"
++        "   <xs:selector xpath='i'/><xs:field xpath='.'/>\n"
++        "  </xs:unique>\n"
++        " </xs:element>\n"
++        " <xs:simpleType name='l'><xs:list itemType='xs:int'/></xs:simpleType>\n"
++        "</xs:schema>\n";
++    const char docContent[] = "<d><i>1 2 3</i><i>1 2 3</i></d>";
++    xmlFreeFunc freeFunc;
++    xmlMallocFunc mallocFunc;
++    xmlReallocFunc reallocFunc;
++    xmlStrdupFunc strdupFunc;
++    xmlSchemaParserCtxtPtr pctxt;
++    xmlSchemaPtr schema;
++    xmlDocPtr doc;
++    int err = 0;
++
++    pctxt = xmlSchemaNewMemParserCtxt(schemaContent,
++                                      sizeof(schemaContent) - 1);
++    schema = xmlSchemaParse(pctxt);
++    xmlSchemaFreeParserCtxt(pctxt);
++    doc = xmlReadMemory(docContent, sizeof(docContent) - 1, NULL, NULL, 0);
++    if ((schema == NULL) || (doc == NULL)) {
++        fprintf(stderr, "testSchemaCanonValueOom: parse failed\n");
++        xmlSchemaFree(schema);
++        xmlFreeDoc(doc);
++        return(1);
++    }
++
++    xmlMemGet(&freeFunc, &mallocFunc, &reallocFunc, &strdupFunc);
++
++    for (testFailAllocNum = 1; ; testFailAllocNum++) {
++        xmlSchemaValidCtxtPtr vctxt;
++        int ret, failed;
++
++        testFailAllocCount = 0;
++        xmlMemSetup(free, testFailMalloc, testFailRealloc, testFailStrdup);
++        vctxt = xmlSchemaNewValidCtxt(schema);
++        if (vctxt != NULL) {
++            xmlSchemaSetValidStructuredErrors(vctxt, testIgnoreError, NULL);
++            ret = xmlSchemaValidateDoc(vctxt, doc);
++            xmlSchemaFreeValidCtxt(vctxt);
++        } else {
++            ret = -1;
++        }
++        xmlMemSetup(freeFunc, mallocFunc, reallocFunc, strdupFunc);
++        failed = (testFailAllocCount >= testFailAllocNum);
++
++        /* the duplicate key makes the document invalid */
++        if ((!failed) && (ret <= 0)) {
++            fprintf(stderr, "testSchemaCanonValueOom: duplicate key not "
++                    "detected: %d\n", ret);
++            err = 1;
++        }
++        if ((err) || (!failed))
++            break;
++    }
++
++    xmlFreeDoc(doc);
++    xmlSchemaFree(schema);
++
++    return(err);
++}
++#endif /* LIBXML_SCHEMAS_ENABLED */
++
+ int
+ main(void) {
+     int err = 0;
+@@ -1862,6 +1974,9 @@ main(void) {
+     err |= testCharEncConvImpl();
+     err |= testRemoveParamEntityIntSubset();
+     err |= testRemoveParamEntityExtSubset();
++#ifdef LIBXML_SCHEMAS_ENABLED
++    err |= testSchemaCanonValueOom();
++#endif
+ 
+     return err;
+ }
+diff --git a/xmlschemas.c b/xmlschemas.c
+index 95ef9a05..46259d6d 100644
+--- a/xmlschemas.c
++++ b/xmlschemas.c
+@@ -1479,11 +1479,8 @@ xmlSchemaGetCanonValueWhtspExt_1(xmlSchemaValPtr val,
+ 		}
+ 		break;
+ 	    default:
+-		if (xmlSchemaGetCanonValue(val, &value2) == -1) {
+-		    if (value2 != NULL)
+-			xmlFree((xmlChar *) value2);
++		if (xmlSchemaGetCanonValue(val, &value2) == -1)
+ 		    goto internal_error;
+-		}
+ 		if (for_hash && valType == XML_SCHEMAS_DECIMAL) {
+ 		    /* We can mostly use the canonical value for hashing,
+ 		       except in the case of decimal.  There the canonical
+@@ -1517,8 +1514,10 @@ xmlSchemaGetCanonValueWhtspExt_1(xmlSchemaValPtr val,
+ 
+     return (0);
+ internal_error:
+-    if (*retValue != NULL)
++    if (*retValue != NULL) {
+ 	xmlFree((xmlChar *) (*retValue));
++	*retValue = NULL;
++    }
+     if (value2 != NULL)
+ 	xmlFree((xmlChar *) value2);
+     return (-1);

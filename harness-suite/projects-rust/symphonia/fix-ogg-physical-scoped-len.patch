@@ -1,3 +1,12 @@
+Upstream: none found.
+
+When the end of a chained physical stream is bisected, the bisection can end with the end bound
+inside the last page of the stream. Reading that page from the start bound leaves the reader past
+the end bound, so byte_range_end - pos in scan_stream_end underflows (a panic with overflow checks,
+a huge scope length without them). Without overflow checks, a page with a bad CRC that follows
+then makes the page reader seek within the ScopedStream, whose end wraps, and clamp() panics with
+min > max. The test builds such a stream.
+
 diff --git a/symphonia-format-ogg/src/physical.rs b/symphonia-format-ogg/src/physical.rs
 index 005a291..0dea7f1 100644
 --- a/symphonia-format-ogg/src/physical.rs
@@ -15,3 +24,64 @@ index 005a291..0dea7f1 100644
  
      let mut scoped_reader = ScopedStream::new(reader, scoped_len);
  
+diff --git a/symphonia-format-ogg/tests/chained_stream_end.rs b/symphonia-format-ogg/tests/chained_stream_end.rs
+new file mode 100644
+index 0000000..c738f71
+--- /dev/null
++++ b/symphonia-format-ogg/tests/chained_stream_end.rs
+@@ -0,0 +1,55 @@
++use std::io::Cursor;
++
++use symphonia_core::checksum::Crc32;
++use symphonia_core::formats::{FormatOptions, FormatReader};
++use symphonia_core::io::{MediaSourceStream, Monitor};
++use symphonia_format_ogg::OggReader;
++
++/// Builds an Ogg page containing a single complete packet.
++fn page(serial: u32, sequence: u32, flags: u8, packet: &[u8], corrupt_crc: bool) -> Vec<u8> {
++    let mut segments = vec![255; packet.len() / 255];
++    segments.push((packet.len() % 255) as u8);
++    assert!(segments.len() <= 255);
++
++    let mut page = b"OggS".to_vec();
++    page.push(0); // Version.
++    page.push(flags);
++    page.extend_from_slice(&0u64.to_le_bytes()); // Granule position.
++    page.extend_from_slice(&serial.to_le_bytes());
++    page.extend_from_slice(&sequence.to_le_bytes());
++    page.extend_from_slice(&0u32.to_le_bytes()); // CRC, filled in below.
++    page.push(segments.len() as u8);
++    page.extend_from_slice(&segments);
++    page.extend_from_slice(packet);
++
++    let mut crc = Crc32::new(0);
++    crc.process_buf_bytes(&page);
++    let crc = crc.crc() ^ u32::from(corrupt_crc);
++    page[22..26].copy_from_slice(&crc.to_le_bytes());
++    page
++}
++
++#[test]
++fn chained_stream_end_inside_last_page() {
++    const FIRST_PAGE: u8 = 0x2;
++
++    let mut head = b"OpusHead".to_vec();
++    head.extend_from_slice(&[1, 2, 0x38, 0x01, 0x80, 0xbb, 0, 0, 0, 0, 0]);
++    let mut tags = b"OpusTags".to_vec();
++    tags.extend_from_slice(&[4, 0, 0, 0, b't', b'e', b's', b't', 0, 0, 0, 0]);
++
++    // The first physical stream ends with a page of almost the maximum page size, so the linear
++    // scan for the end of the first stream starts inside that page and only finds pages of the
++    // second physical stream. The end is then bisected, and bisection ends with the end bound
++    // inside the large page. Reading that page moves the reader past the end bound. The next page
++    // is corrupt, which makes the page reader seek back within the scan range.
++    let mut file = page(1, 0, FIRST_PAGE, &head, false);
++    file.extend(page(1, 1, 0, &tags, false));
++    file.extend(page(1, 2, 0, &[0x02; 254 * 255 + 200], false));
++    file.extend(page(2, 0, FIRST_PAGE, &[0x03; 100], true));
++    file.extend(page(2, 0, FIRST_PAGE, &[0x03; 100], false));
++
++    let mss = MediaSourceStream::new(Box::new(Cursor::new(file)), Default::default());
++    let mut reader = OggReader::try_new(mss, FormatOptions::default()).unwrap();
++    while let Ok(Some(_)) = reader.next_packet() {}
++}

@@ -1,0 +1,209 @@
+AnnotMovie::draw() built the poster appearance, which stays cached in the
+annotation, on gfx->getXRef(). page_renderer::render_page() draws through
+Page::displaySlice() with copyXRef, so that XRef is a temporary copy freed
+when the page is done; FontInfoScanner (page::text_list, document::fonts)
+later fetched the poster through the freed XRef (heap-use-after-free in
+XRef::fetch). Build the appearance on the document's XRef, as createForm()
+and the other annotation types do.
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 2b5829b40..852a7f76a 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -17,6 +17,10 @@ endmacro(CPP_ADD_SIMPLETEST)
+ cpp_add_simpletest(poppler-dump poppler-dump.cpp ${CMAKE_SOURCE_DIR}/utils/parseargs.cc)
+ cpp_add_simpletest(poppler-render poppler-render.cpp ${CMAKE_SOURCE_DIR}/utils/parseargs.cc)
+ cpp_add_simpletest(poppler-alpha-bg-test poppler-alpha-bg-test.cpp)
++cpp_add_simpletest(poppler-movie-poster-test poppler-movie-poster-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-movie-poster-test COMMAND poppler-movie-poster-test)
++endif()
+ 
+ if(ENABLE_FUZZER)
+   cpp_add_simpletest(doc_fuzzer ./fuzzing/doc_fuzzer.cc)
+diff --git a/cpp/tests/poppler-movie-poster-test.cpp b/cpp/tests/poppler-movie-poster-test.cpp
+new file mode 100644
+index 000000000..ea18abdd7
+--- /dev/null
++++ b/cpp/tests/poppler-movie-poster-test.cpp
+@@ -0,0 +1,130 @@
++/*
++ * Regression test: the poster appearance that AnnotMovie::draw() builds is
++ * cached in the annotation, so it must not refer to the temporary XRef copy
++ * that Page::displaySlice() makes when copyXRef is set (as
++ * poppler::page_renderer::render_page() does). That copy is freed after the
++ * page is drawn; later users of the appearance (FontInfoScanner via
++ * page::text_list / document::fonts) then fetched the poster through the
++ * freed XRef (heap-use-after-free).
++ */
++
++#include <Annot.h>
++#include <FontInfo.h>
++#include <GlobalParams.h>
++#include <Object.h>
++#include <PDFDoc.h>
++#include <Page.h>
++#include <Stream.h>
++#include <TextOutputDev.h>
++
++#include <cstdio>
++#include <iostream>
++#include <memory>
++#include <string>
++#include <vector>
++
++static std::string build_pdf()
++{
++    const std::vector<std::string> objs = {
++        "<< /Type /Catalog /Pages 2 0 R >>",
++        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
++        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Annots [5 0 R] >>",
++        "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font << /F1 6 0 R >> >> /Length 13 >>\nstream\nBT /F1 1 Tf ET\nendstream",
++        "<< /Type /Annot /Subtype /Movie /Rect [10 10 74 58] /T (movie) /Movie << /F (movie.mov) /Aspect [64 48] /Poster 4 0 R >> >>",
++        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
++    };
++    std::string pdf = "%PDF-1.7\n";
++    std::vector<size_t> offsets;
++    for (size_t i = 0; i < objs.size(); ++i) {
++        offsets.push_back(pdf.size());
++        pdf += std::to_string(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
++    }
++    const size_t xrefOffset = pdf.size();
++    pdf += "xref\n0 " + std::to_string(objs.size() + 1) + "\n0000000000 65535 f \n";
++    for (size_t off : offsets) {
++        char line[21];
++        snprintf(line, sizeof(line), "%010zu 00000 n \n", off);
++        pdf += line;
++    }
++    pdf += "trailer\n<< /Size " + std::to_string(objs.size() + 1) + " /Root 1 0 R >>\nstartxref\n" + std::to_string(xrefOffset) + "\n%%EOF\n";
++    return pdf;
++}
++
++// Every dictionary reachable from obj without fetching must use xref.
++static int check_xref(const Object &obj, XRef *xref, const std::string &path)
++{
++    const Dict *dict = nullptr;
++    if (obj.isDict()) {
++        dict = obj.getDict();
++    } else if (obj.isStream()) {
++        dict = obj.getStream()->getDict();
++    } else {
++        return 0;
++    }
++    int failures = 0;
++    if (dict->getXRef() != xref) {
++        std::cerr << "  FAIL: " << path << " uses a different XRef than the document\n";
++        ++failures;
++    }
++    for (int i = 0; i < dict->getLength(); ++i) {
++        failures += check_xref(dict->getValNF(i), xref, path + "/" + dict->getKey(i));
++    }
++    return failures;
++}
++
++int main()
++{
++    GlobalParamsIniter globalParamsIniter(nullptr);
++    globalParams->setErrQuiet(true);
++
++    const std::string pdf = build_pdf();
++    PDFDoc doc(std::make_unique<MemStream>(pdf.data(), 0, pdf.size(), Object::null()));
++    if (!doc.isOk() || doc.getNumPages() != 1) {
++        std::cerr << "failed to load the test document\n";
++        return 1;
++    }
++
++    // Draw the page on a temporary XRef copy, as page_renderer::render_page() does.
++    TextOutputDev out(nullptr, false, 0, false, false);
++    doc.displayPageSlice(&out, 1, 72, 72, 0, false, true, false, -1, -1, -1, -1, nullptr, nullptr, nullptr, nullptr, true);
++
++    int failures = 0;
++    int movies = 0;
++    for (const std::shared_ptr<Annot> &annot : doc.getPage(1)->getAnnots()->getAnnots()) {
++        if (annot->getType() != Annot::typeMovie) {
++            continue;
++        }
++        ++movies;
++        const Object res = annot->getAppearanceResDict();
++        if (!res.isDict()) {
++            std::cerr << "  FAIL: movie annotation has no generated poster appearance\n";
++            ++failures;
++            continue;
++        }
++        failures += check_xref(res, doc.getXRef(), "AP/Resources");
++    }
++    if (movies != 1) {
++        std::cerr << "  FAIL: expected one movie annotation, got " << movies << "\n";
++        ++failures;
++    }
++
++    // The poster's font is only reachable through the generated appearance.
++    FontInfoScanner scanner(&doc, 0);
++    std::vector<FontInfo *> fonts = scanner.scan(1);
++    bool foundHelvetica = false;
++    for (FontInfo *f : fonts) {
++        foundHelvetica |= f->getName() && *f->getName() == "Helvetica";
++        delete f;
++    }
++    if (!foundHelvetica) {
++        std::cerr << "  FAIL: font scan did not find the poster's Helvetica\n";
++        ++failures;
++    }
++
++    if (failures) {
++        std::cerr << failures << " failure(s)\n";
++        return 1;
++    }
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/poppler/Annot.cc b/poppler/Annot.cc
+index f5ebd7844..8d74b78ef 100644
+--- a/poppler/Annot.cc
++++ b/poppler/Annot.cc
+@@ -6022,23 +6022,27 @@ void AnnotMovie::draw(Gfx *gfx, bool printing)
+             appearBuf.append("/MImg Do\n");
+             appearBuf.append("Q\n");
+ 
+-            auto imgDict = std::make_unique<Dict>(gfx->getXRef());
++            // The appearance is cached in the annotation and outlives this call.
++            // gfx's XRef can be the temporary copy made by Page::displaySlice
++            // (copyXRef), which is freed once the page is drawn, so build the
++            // objects on the document's XRef, as createForm() does.
++            auto imgDict = std::make_unique<Dict>(doc->getXRef());
+             imgDict->set("MImg", std::move(poster));
+ 
+-            auto resDict = std::make_unique<Dict>(gfx->getXRef());
++            auto resDict = std::make_unique<Dict>(doc->getXRef());
+             resDict->set("XObject", Object(std::move(imgDict)));
+ 
+-            auto formDict = std::make_unique<Dict>(gfx->getXRef());
++            auto formDict = std::make_unique<Dict>(doc->getXRef());
+             formDict->set("Length", Object(static_cast<int>(appearBuf.size())));
+             formDict->set("Subtype", Object::name("Form"));
+             formDict->set("Name", Object::name("FRM"));
+-            auto bboxArray = std::make_unique<Array>(gfx->getXRef());
++            auto bboxArray = std::make_unique<Array>(doc->getXRef());
+             bboxArray->add(Object(0));
+             bboxArray->add(Object(0));
+             bboxArray->add(Object(width));
+             bboxArray->add(Object(height));
+             formDict->set("BBox", Object(std::move(bboxArray)));
+-            auto matrix = std::make_unique<Array>(gfx->getXRef());
++            auto matrix = std::make_unique<Array>(doc->getXRef());
+             matrix->add(Object(1));
+             matrix->add(Object(0));
+             matrix->add(Object(0));
+@@ -6051,10 +6055,10 @@ void AnnotMovie::draw(Gfx *gfx, bool printing)
+             std::vector<char> data { appearBuf.c_str(), appearBuf.c_str() + appearBuf.size() };
+             auto mStream = std::make_unique<AutoFreeMemStream>(std::move(data), Object(std::move(formDict)));
+ 
+-            auto dict = std::make_unique<Dict>(gfx->getXRef());
++            auto dict = std::make_unique<Dict>(doc->getXRef());
+             dict->set("FRM", Object(std::move(mStream)));
+ 
+-            auto resDict2 = std::make_unique<Dict>(gfx->getXRef());
++            auto resDict2 = std::make_unique<Dict>(doc->getXRef());
+             resDict2->set("XObject", Object(std::move(dict)));
+ 
+             appearBuf.clear();

@@ -1,0 +1,78 @@
+Subject: [PATCH] extras: Treat an empty primary ICC profile as invalid
+
+When the codestream carries an ICC profile with an unknown color space, the
+JXL decoder sets primary_color_representation to kIccIsPrimary but leaves
+ppf.icc empty. ConvertPackedPixelFileToCodecInOut() then calls
+ColorEncoding::SetICC() with an empty profile, which aborts on
+JXL_ENSURE(!icc.empty()). Fall back to sRGB as for any other profile that
+SetICC() rejects.
+
+Found with the set_from_bytes fuzzer (abort in
+ConvertPackedPixelFileToCodecInOut < SetFromBytes).
+Reproducer: repro/fix-convert-empty-primary-icc.jxl.
+Test: CodecTest.ConvertEmptyPrimaryICC.
+---
+diff --git a/lib/extras/codec_test.cc b/lib/extras/codec_test.cc
+index 69b9728c..c00b7cd9 100644
+--- a/lib/extras/codec_test.cc
++++ b/lib/extras/codec_test.cc
+@@ -21,11 +21,13 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "lib/extras/codec_in_out.h"
+ #include "lib/extras/common.h"
+ #include "lib/extras/dec/color_hints.h"
+ #include "lib/extras/dec/decode.h"
+ #include "lib/extras/enc/encode.h"
+ #include "lib/extras/packed_image.h"
++#include "lib/extras/packed_image_convert.h"
+ #include "lib/jxl/base/byte_order.h"
+ #include "lib/jxl/base/compiler_specific.h"
+ #include "lib/jxl/base/data_parallel.h"
+@@ -33,6 +35,7 @@
+ #include "lib/jxl/base/span.h"
+ #include "lib/jxl/base/status.h"
+ #include "lib/jxl/color_encoding_internal.h"
++#include "lib/jxl/test_memory_manager.h"
+ #include "lib/jxl/test_utils.h"
+ #include "lib/jxl/testing.h"
+ 
+@@ -642,6 +645,20 @@ TEST(CodecTest, FormatNegotiationGrayscaleNoMatch) {
+ }
+ #endif
+ 
++// The JXL decoder marks the ICC as primary but leaves it empty if the ICC
++// profile in the codestream has an unknown color space.
++TEST(CodecTest, ConvertEmptyPrimaryICC) {
++  const char* pgm = "P5\n1 1\n255\n\x80";
++  PackedPixelFile ppf;
++  ASSERT_TRUE(DecodeBytes(MakeSpan(pgm), ColorHints(), &ppf));
++  ppf.primary_color_representation = PackedPixelFile::kIccIsPrimary;
++  ppf.icc.clear();
++  auto io = jxl::make_unique<CodecInOut>(jxl::test::MemoryManager());
++  ASSERT_TRUE(ConvertPackedPixelFileToCodecInOut(ppf, nullptr, io.get()));
++  EXPECT_TRUE(io->metadata.m.color_encoding.IsGray());
++  EXPECT_FALSE(io->metadata.m.color_encoding.WantICC());
++}
++
+ TEST(CodecTest, EncodeToPNG) {
+   ThreadPool* const pool = nullptr;
+ 
+diff --git a/lib/extras/packed_image_convert.cc b/lib/extras/packed_image_convert.cc
+index 271f00d3..11328af7 100644
+--- a/lib/extras/packed_image_convert.cc
++++ b/lib/extras/packed_image_convert.cc
+@@ -139,7 +139,11 @@ Status ConvertPackedPixelFileToCodecInOut(const PackedPixelFile& ppf,
+   // Convert the color encoding.
+   if (ppf.primary_color_representation == PackedPixelFile::kIccIsPrimary) {
+     IccBytes icc = ppf.icc;
+-    if (!io->metadata.m.color_encoding.SetICC(std::move(icc),
++    // The JXL decoder reports the ICC as primary but leaves it empty when the
++    // codestream's ICC profile has an unknown color space. SetICC() requires a
++    // non-empty profile (JXL_ENSURE), so handle it like an invalid one.
++    if (icc.empty() ||
++        !io->metadata.m.color_encoding.SetICC(std::move(icc),
+                                               JxlGetDefaultCms())) {
+       fprintf(stderr, "Warning: error setting ICC profile, assuming SRGB\n");
+       io->metadata.m.color_encoding = ColorEncoding::SRGB(is_gray);

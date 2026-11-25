@@ -1,5 +1,15 @@
+Upstream: none found.
+
+CodebookBuilder::make returns an empty codebook for an empty code list, and read_codebook then
+indexed its empty lookup table and panicked. Vorbis is the only decoder that builds codebooks from
+stream data, and a sparse Vorbis codebook without used entries is empty. Without this patch and
+fix-vorbis-codebook-lookup.patch, decode_any panics (index out of bounds in read_codebook) on an
+Ogg Vorbis stream whose floor reads from such a codebook. fix-vorbis-codebook-lookup.patch, applied
+earlier, rejects empty Vorbis codebooks during setup, so the harnesses do not reach this check
+while it is applied.
+
 diff --git a/symphonia-core/src/io/bit.rs b/symphonia-core/src/io/bit.rs
-index 1f5a9a5..1899e63 100644
+index 1f5a9a5..8df09ba 100644
 --- a/symphonia-core/src/io/bit.rs
 +++ b/symphonia-core/src/io/bit.rs
 @@ -15,6 +15,10 @@ fn end_of_bitstream_error<T>() -> io::Result<T> {
@@ -35,3 +45,23 @@ index 1f5a9a5..1899e63 100644
          // Attempt to refill the bit buffer with enough bits for the longest codeword in the
          // codebook. However, this does not mean the bit buffer will have enough bits to decode a
          // codeword.
+@@ -1681,6 +1693,19 @@ mod tests {
+         assert_eq!(codebook.unwrap().is_empty(), true);
+     }
+ 
++    #[test]
++    fn verify_read_codebook_empty() {
++        // Reading from an empty codebook is an error, not a panic.
++        let mut builder = CodebookBuilder::new(BitOrder::Verbatim);
++        let codebook = builder.make::<Entry8x8>(&[], &[], &[]).unwrap();
++
++        let mut bs = BitReaderLtr::new(&[0xff; 4]);
++        assert!(bs.read_codebook(&codebook).is_err());
++
++        let mut bs = BitReaderRtl::new(&[0xff; 4]);
++        assert!(bs.read_codebook(&codebook).is_err());
++    }
++
+     fn generate_codebook(bit_order: BitOrder) -> (Codebook<Entry8x8>, Vec<u8>, &'static str) {
+         // Codewords in MSb bit-order.
+         #[rustfmt::skip]

@@ -1,0 +1,92 @@
+SplashBitmap kept its colour data when the alpha channel it was asked for
+could not be allocated. Callers only check getDataPtr() (Splash::scaleImage
+and others) and then write the alpha channel through the null alpha pointer:
+heap corruption in the wasm guest (dlfree trap), a crash natively. Treat a
+failed alpha allocation like a failed data allocation.
+
+diff --git a/cpp/tests/CMakeLists.txt b/cpp/tests/CMakeLists.txt
+index 8465a8be3..a53f4744e 100644
+--- a/cpp/tests/CMakeLists.txt
++++ b/cpp/tests/CMakeLists.txt
+@@ -34,6 +34,10 @@ cpp_add_simpletest(poppler-xref-objstm-test poppler-xref-objstm-test.cpp)
+ if(BUILD_CPP_TESTS)
+   add_test(NAME poppler-xref-objstm-test COMMAND poppler-xref-objstm-test)
+ endif()
++cpp_add_simpletest(poppler-splashbitmap-alpha-test poppler-splashbitmap-alpha-test.cpp)
++if(BUILD_CPP_TESTS)
++  add_test(NAME poppler-splashbitmap-alpha-test COMMAND poppler-splashbitmap-alpha-test)
++endif()
+ 
+ if(ENABLE_FUZZER)
+   cpp_add_simpletest(doc_fuzzer ./fuzzing/doc_fuzzer.cc)
+diff --git a/cpp/tests/poppler-splashbitmap-alpha-test.cpp b/cpp/tests/poppler-splashbitmap-alpha-test.cpp
+new file mode 100644
+index 000000000..977915089
+--- /dev/null
++++ b/cpp/tests/poppler-splashbitmap-alpha-test.cpp
+@@ -0,0 +1,30 @@
++/*
++ * Regression test: when SplashBitmap gets its colour data but not the alpha
++ * channel it was asked for, it must report failure through getDataPtr().
++ * Callers such as Splash::scaleImage() only check getDataPtr() and then write
++ * the alpha channel through the null getAlphaPtr().
++ *
++ * A 65536 x 32768 mono bitmap needs 256 MB of colour data, but its alpha
++ * channel (one byte per pixel) overflows the int allocation size, so the
++ * second allocation fails deterministically without touching memory.
++ */
++
++#include <splash/SplashBitmap.h>
++
++#include <iostream>
++
++int main()
++{
++    SplashBitmap bitmap(65536, 32768, 1, splashModeMono1, true);
++    if (bitmap.getDataPtr() != nullptr && bitmap.getAlphaPtr() == nullptr) {
++        std::cerr << "  FAIL: bitmap with colour data but without the requested alpha channel\n";
++        return 1;
++    }
++    SplashBitmap small(16, 16, 1, splashModeRGB8, true);
++    if (small.getDataPtr() == nullptr || small.getAlphaPtr() == nullptr) {
++        std::cerr << "  FAIL: small bitmap with alpha could not be allocated\n";
++        return 1;
++    }
++    std::cout << "PASS\n";
++    return 0;
++}
+diff --git a/splash/SplashBitmap.cc b/splash/SplashBitmap.cc
+index 7d9a38934..1bd42e711 100644
+--- a/splash/SplashBitmap.cc
++++ b/splash/SplashBitmap.cc
+@@ -111,18 +111,19 @@ SplashBitmap::SplashBitmap(int widthA, int heightA, int rowPadA, SplashColorMode
+         rowSize -= rowSize % rowPad;
+     }
+     data = static_cast<SplashColorPtr>(gmallocn_checkoverflow(rowSize, height));
+-    if (data != nullptr) {
+-        if (!topDown) {
+-            data += (height - 1) * rowSize;
+-            rowSize = -rowSize;
+-        }
+-        if (alphaA) {
+-            alpha = static_cast<unsigned char *>(gmallocn_checkoverflow(width, height));
+-        } else {
+-            alpha = nullptr;
++    alpha = nullptr;
++    if (data != nullptr && alphaA) {
++        alpha = static_cast<unsigned char *>(gmallocn_checkoverflow(width, height));
++        if (alpha == nullptr) {
++            // callers only check getDataPtr(): a bitmap that was asked for an
++            // alpha channel and has none must look as failed as one without data
++            gfree(data);
++            data = nullptr;
+         }
+-    } else {
+-        alpha = nullptr;
++    }
++    if (data != nullptr && !topDown) {
++        data += (height - 1) * rowSize;
++        rowSize = -rowSize;
+     }
+     separationList = new std::vector<std::unique_ptr<GfxSeparationColorSpace>>();
+     if (separationListA != nullptr) {

@@ -11,10 +11,10 @@ for f in adler32 crc32 inffast inflate inftrees uncompr zutil; do
   $CC $CFLAGS -c $f.c -o "$B/z_$f.o"
 done
 
-# brotli decoder (needed by woff2)
+# brotli decoder (needed by woff2); brotli's sources include "common/..." relative to c/
 cd "$PROJECT/brotli"
 for f in c/common/*.c c/dec/*.c; do
-  $CC $CFLAGS -Ic/include -c "$f" -o "$B/br_$(basename "${f%.c}")_$(basename "$(dirname "$f")").o"
+  $CC $CFLAGS -Ic -Ic/include -c "$f" -o "$B/br_$(basename "${f%.c}")_$(basename "$(dirname "$f")").o"
 done
 
 # woff2 decoder
