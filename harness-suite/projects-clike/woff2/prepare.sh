@@ -1,2 +1,2 @@
 set -e
-git clone-rev.sh https://github.com/google/woff2 "$PROJECT/repo" fb9c3379f2605b10f3e8f1d9636664ab5576775c --recursive
+git clone-rev.sh https://github.com/google/woff2 "$PROJECT/repo" 7b67e12355fe7da148db5c19d4261f0a498a9537 --recursive

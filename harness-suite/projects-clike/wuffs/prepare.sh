@@ -3,10 +3,10 @@ set -e
 # Both clones are at upstream HEAD, which is the Wuffs v0.4 line. Chromium
 # ships v0.3.5 instead: its third_party/wuffs/src is this same
 # google/wuffs-mirror-release-c commit, but BUILD.gn compiles wuffs-v0.3.c.
-git clone-rev.sh https://github.com/google/wuffs-mirror-release-c.git "$PROJECT/release" 7411f488fe2e2c205c3d3b3d28638b7356522930
+git clone-rev.sh https://github.com/google/wuffs-mirror-release-c.git "$PROJECT/release" c55c7ceba7ef6560f7f6154be7db1c3a181e1321
 # The mirror only carries release/c/*.c. The fuzzers live in google/wuffs,
 # whose HEAD targets the v0.4 API.
-git clone-rev.sh https://github.com/google/wuffs.git "$PROJECT/repo" f31d952b62fcd8abcc8d42908284f50097313bc8
+git clone-rev.sh https://github.com/google/wuffs.git "$PROJECT/repo" a87f0bb85b9406d29f48a1c03b6f42c4585145f6
 
 # The fuzzers #include "release/c/wuffs-unsupported-snapshot.c" (the
 # unreleased development snapshot). Replace it with the mirror's v0.4 release

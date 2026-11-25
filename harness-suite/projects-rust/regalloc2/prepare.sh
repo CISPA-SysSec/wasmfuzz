@@ -1,3 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/bytecodealliance/regalloc2.git "$PROJECT/repo" 2fe490bc9dda433f70c54f90f7633ed929f693d9
+git clone-rev.sh https://github.com/bytecodealliance/regalloc2.git "$PROJECT/repo" a45e355a3edd68afc6db738fb61cd8ad9c852282
 # git -C "$PROJECT/repo" apply "$PROJECT/port-add-arbitrary-dep.patch"
