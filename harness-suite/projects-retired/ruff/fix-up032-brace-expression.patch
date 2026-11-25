@@ -1,0 +1,85 @@
+Subject: [PATCH] UP032: don't let a leading brace become an escaped brace
+
+Open upstream as astral-sh/ruff#25487, which parenthesizes such arguments (and
+lambdas) instead of inserting a space. Drop this patch once #25487 lands.
+
+UP032: an expression starting with `{` produced `{{`, an escaped brace; add a space.
+Regression test included; fuzz repro: repro/fix-up032-brace-expression.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP032_0.py b/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP032_0.py
+index 1507e25ecdec695c7a22e72e4017e6a9dbe30604..237dd0b9d68c8c9ba7f501fe7da9445365da437b 100644
+--- a/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP032_0.py
++++ b/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP032_0.py
+@@ -285,3 +285,7 @@ r"\N{angle}AOB = {angle}°".format(angle=180)
+ # Attribute names that aren't identifiers can't be accessed in an f-string
+ "{.;:F}".format(x)
+ "{0.a.1}".format(x)
++
++# Expressions starting with a brace
++"{}".format({1: 2}[1])
++"{:x}".format({1} if x else 1)
+diff --git a/crates/ruff_linter/src/rules/pyupgrade/rules/f_strings.rs b/crates/ruff_linter/src/rules/pyupgrade/rules/f_strings.rs
+index 09b307fad07f8ee9bb67edc0106834f9d6aacca9..79076c32badc1f01b74930d6331c6c2fbe19ff6a 100644
+--- a/crates/ruff_linter/src/rules/pyupgrade/rules/f_strings.rs
++++ b/crates/ruff_linter/src/rules/pyupgrade/rules/f_strings.rs
+@@ -336,7 +336,7 @@ impl FStringConversion {
+                         return Ok(Self::SideEffects);
+                     }
+ 
+-                    converted.push_str(&formatted_expr(
++                    let expr = formatted_expr(
+                         arg,
+                         if field.parts.is_empty() {
+                             FormatContext::Bare
+@@ -344,7 +344,12 @@ impl FStringConversion {
+                             FormatContext::Accessed
+                         },
+                         locator,
+-                    ));
++                    );
++                    // Ex) `"{}".format({})`: `{{` would be an escaped brace, so `f"{ {}}"`.
++                    if expr.starts_with('{') {
++                        converted.push(' ');
++                    }
++                    converted.push_str(&expr);
+ 
+                     for part in field.parts {
+                         match part {
+diff --git a/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP032_0.py.snap b/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP032_0.py.snap
+index c63ec3d09f082bd29becbaefb9a998f4f94b3783..7d543f8e404cd1498210c9649e1a63db6f74ce5b 100644
+--- a/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP032_0.py.snap
++++ b/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP032_0.py.snap
+@@ -1269,3 +1269,33 @@ help: Convert to f-string
+ 283 + rf"\N{180}AOB = {180}°"
+ 284 |
+     |
++
++UP032 [*] Use f-string instead of `format` call
++   --> UP032_0.py:290:1
++    |
++289 | # Expressions starting with a brace
++290 | "{}".format({1: 2}[1])
++    | ^^^^^^^^^^^^^^^^^^^^^^
++291 | "{:x}".format({1} if x else 1)
++    |
++help: Convert to f-string
++    |
++289 | # Expressions starting with a brace
++    - "{}".format({1: 2}[1])
++290 + f"{({1: 2}[1])}"
++291 | "{:x}".format({1} if x else 1)
++    |
++
++UP032 [*] Use f-string instead of `format` call
++   --> UP032_0.py:291:1
++    |
++289 | # Expressions starting with a brace
++290 | "{}".format({1: 2}[1])
++291 | "{:x}".format({1} if x else 1)
++    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++help: Convert to f-string
++    |
++290 | "{}".format({1: 2}[1])
++    - "{:x}".format({1} if x else 1)
++291 + f"{ {1} if x else 1:x}"
++    |

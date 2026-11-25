@@ -1,0 +1,153 @@
+RUF100 (delete_comment): deleting a noqa comment line after a line continuation joined the
+continuation with the next line; delete from the backslash instead.
+Regression test included; fuzz repro: repro/fix-ruf100-delete-comment-after-continuation.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/ruff/RUF100_8.py b/crates/ruff_linter/resources/test/fixtures/ruff/RUF100_8.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..95931716f1d24260f81df545adc687b21c6ea364
+--- /dev/null
++++ b/crates/ruff_linter/resources/test/fixtures/ruff/RUF100_8.py
+@@ -0,0 +1,10 @@
++# Unused `noqa` directives on the last line of a line continuation: deleting the line would
++# join the continuation with the next line, or leave it dangling at the end of the file.
++x = 1 \
++# noqa: F401
++y = 2
++w = 4 \
++# noqa with a reason
++v = 5
++z = 3 \
++    # noqa
+\ No newline at end of file
+diff --git a/crates/ruff_linter/src/fix/edits.rs b/crates/ruff_linter/src/fix/edits.rs
+index d8ee983fce2484a980d913fdc1339308abf4a7f9..3531c5270ea23aa4b0ef37b5e8577802ded28100 100644
+--- a/crates/ruff_linter/src/fix/edits.rs
++++ b/crates/ruff_linter/src/fix/edits.rs
+@@ -82,6 +82,12 @@ pub(crate) fn delete_comment(range: TextRange, locator: &Locator) -> Edit {
+             range.end() + trailing_space_len,
+         )
+     {
++        if let Some(continuation) = preceding_continuation(line_range.start(), locator) {
++            // Ex) `x = 1 \` + newline + `# noqa`: the comment ends the logical line, and deleting
++            // its whole line would join the continuation with the next line (or leave it dangling
++            // at the end of the file). Delete from the backslash to the end of the comment.
++            return Edit::deletion(continuation, line_range.end());
++        }
+         let full_line_end = locator.full_line_end(line_range.end());
+         Edit::deletion(line_range.start(), full_line_end)
+     }
+@@ -103,11 +109,32 @@ pub(crate) fn delete_comment(range: TextRange, locator: &Locator) -> Edit {
+     }
+     // Ex) `x = 1  # noqa here`
+     else {
++        if range.start() - leading_space_len == line_range.start() {
++            // Ex) `x = 1 \` + newline + `# noqa here`: as above, the line is left empty.
++            if let Some(continuation) = preceding_continuation(line_range.start(), locator) {
++                return Edit::deletion(continuation, line_range.end());
++            }
++        }
+         // Remove `# noqa here` and whitespace
+         Edit::deletion(range.start() - leading_space_len, line_range.end())
+     }
+ }
+ 
++/// If the line before the line starting at `line_start` ends with a line continuation (`\`
++/// followed by a newline), return the offset of the backslash.
++///
++/// This only looks at the source text: a backslash at the end of a comment is reported, too.
++fn preceding_continuation(line_start: TextSize, locator: &Locator) -> Option<TextSize> {
++    let before = locator.up_to(line_start);
++    let before = before
++        .strip_suffix("\r\n")
++        .or_else(|| before.strip_suffix('\n'))
++        .or_else(|| before.strip_suffix('\r'))?;
++    before
++        .ends_with('\\')
++        .then(|| before.text_len() - '\\'.text_len())
++}
++
+ /// Generate a `Fix` to remove the specified imports from an `import` statement.
+ pub(crate) fn remove_unused_imports<'a>(
+     member_names: impl Iterator<Item = &'a str>,
+diff --git a/crates/ruff_linter/src/rules/ruff/mod.rs b/crates/ruff_linter/src/rules/ruff/mod.rs
+index c646cf3d4d5019b203b0f5ae12a7b363b8eab314..a04285b5377eda57bea2b8953fac3798a5585c89 100644
+--- a/crates/ruff_linter/src/rules/ruff/mod.rs
++++ b/crates/ruff_linter/src/rules/ruff/mod.rs
+@@ -634,6 +634,16 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test]
++    fn ruff_noqa_after_continuation() -> Result<()> {
++        let diagnostics = test_path(
++            Path::new("ruff/RUF100_8.py"),
++            &settings::LinterSettings::for_rules(vec![Rule::UnusedNOQA]),
++        )?;
++        assert_diagnostics!(diagnostics);
++        Ok(())
++    }
++
+     #[test]
+     fn ruff_noqa_filedirective_unused_last_of_many() -> Result<()> {
+         let diagnostics = test_path(
+diff --git a/crates/ruff_linter/src/rules/ruff/snapshots/ruff_linter__rules__ruff__tests__ruff_noqa_after_continuation.snap b/crates/ruff_linter/src/rules/ruff/snapshots/ruff_linter__rules__ruff__tests__ruff_noqa_after_continuation.snap
+new file mode 100644
+index 0000000000000000000000000000000000000000..94f864384e420a6f6afa2be64e2591c3a97ffd43
+--- /dev/null
++++ b/crates/ruff_linter/src/rules/ruff/snapshots/ruff_linter__rules__ruff__tests__ruff_noqa_after_continuation.snap
+@@ -0,0 +1,55 @@
++---
++source: crates/ruff_linter/src/rules/ruff/mod.rs
++---
++RUF100 [*] Unused `noqa` directive (non-enabled: `F401`)
++ --> RUF100_8.py:4:1
++  |
++2 | # join the continuation with the next line, or leave it dangling at the end of the file.
++3 | x = 1 \
++4 | # noqa: F401
++  | ^^^^^^^^^^^^
++5 | y = 2
++6 | w = 4 \
++  |
++help: Remove unused `noqa` directive
++  |
++2 | # join the continuation with the next line, or leave it dangling at the end of the file.
++  - x = 1 \
++  - # noqa: F401
++3 + x = 1 
++4 | y = 2
++  |
++
++RUF100 [*] Unused blanket `noqa` directive
++ --> RUF100_8.py:7:1
++  |
++5 | y = 2
++6 | w = 4 \
++7 | # noqa with a reason
++  | ^^^^^^
++8 | v = 5
++9 | z = 3 \
++  |
++help: Remove unused `noqa` directive
++  |
++5 | y = 2
++  - w = 4 \
++  - # noqa with a reason
++6 + w = 4 
++7 | v = 5
++  |
++
++RUF100 [*] Unused blanket `noqa` directive
++  --> RUF100_8.py:10:5
++   |
++ 8 | v = 5
++ 9 | z = 3 \
++10 |     # noqa
++   |     ^^^^^^
++help: Remove unused `noqa` directive
++  |
++8 | v = 5
++  - z = 3 \
++  -     # noqa
++9 + z = 3 
++  |

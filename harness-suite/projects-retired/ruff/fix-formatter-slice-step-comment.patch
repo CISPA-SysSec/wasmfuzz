@@ -1,0 +1,88 @@
+Formatter: an end-of-line comment after the second slice colon was moved to its own line
+and re-indented on every run.
+Regression test included; fuzz repro: repro/fix-formatter-slice-step-comment.py (ruff_formatter_idempotency).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/slice.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/slice.py
+index f041bb10ff3c8e03cc1377aca2a871e662d18c8b..228799b81ca3c122dfed99d71ee90fdf2d591005 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/slice.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/slice.py
+@@ -63,6 +63,15 @@ d3 = "d"[
+     :
+ ]
+ 
++# End of line comments after the second colon (fuzz regression: unstable indentation)
++d3 = "d"[::  # comment
++]
++d4 = "d"[1::  # comment
++]
++d5 = "d"[1::
++    # comment
++]
++
+ # Spacing around the colon(s)
+ def a():
+     pass
+diff --git a/crates/ruff_python_formatter/src/expression/expr_slice.rs b/crates/ruff_python_formatter/src/expression/expr_slice.rs
+index eb6678ac6629af10044956a09739229a25535fb8..ad6c626ce9ff26aae3d144f0fbe7c2c07e8781f9 100644
+--- a/crates/ruff_python_formatter/src/expression/expr_slice.rs
++++ b/crates/ruff_python_formatter/src/expression/expr_slice.rs
+@@ -135,12 +135,14 @@ impl FormatNodeRule<ExprSlice> for FormatExprSlice {
+                 let step_leading_comments = comments.leading(step.as_ref());
+                 leading_comments_spacing(f, step_leading_comments)?;
+                 step.format().fmt(f)?;
+-            } else if !dangling_step_comments.is_empty() {
+-                // Put the colon and comments on their own lines
+-                write!(
+-                    f,
+-                    [hard_line_break(), dangling_comments(dangling_step_comments)]
+-                )?;
++            } else if let Some(first) = dangling_step_comments.first() {
++                // Put own line comments on their own lines. An end-of-line comment stays on the
++                // line of the colon, as for the upper part: after a line break, it would be
++                // indented like an end-of-line comment, and become an own line comment.
++                if first.line_position().is_own_line() {
++                    hard_line_break().fmt(f)?;
++                }
++                dangling_comments(dangling_step_comments).fmt(f)?;
+             }
+         } else {
+             debug_assert!(step.is_none(), "step can't exist without a second colon");
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@expression__slice.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@expression__slice.py.snap
+index 7e12e244743c15545a7c88b61a5aeeec0a413e08..a5a869d0ae9c17e8a1bc6facde40b30a0d977861 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@expression__slice.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@expression__slice.py.snap
+@@ -69,6 +69,15 @@ d3 = "d"[
+     :
+ ]
+ 
++# End of line comments after the second colon (fuzz regression: unstable indentation)
++d3 = "d"[::  # comment
++]
++d4 = "d"[1::  # comment
++]
++d5 = "d"[1::
++    # comment
++]
++
+ # Spacing around the colon(s)
+ def a():
+     pass
+@@ -192,6 +201,18 @@ d3 = "d"[
+     :
+ ]
+ 
++# End of line comments after the second colon (fuzz regression: unstable indentation)
++d3 = "d"[
++    ::  # comment
++]
++d4 = "d"[
++    1::  # comment
++]
++d5 = "d"[
++    1::
++    # comment
++]
++
+ 
+ # Spacing around the colon(s)
+ def a():

@@ -1,0 +1,314 @@
+C408/C414/C406/SIM208/FURB167: the LibCST-based fix cannot parse all input (e.g. a
+parenthesized keyword name `dict((a)=1)`), so the fix availability is Sometimes, not Always.
+Regression test included; fuzz repro: repro/fix-linter-fix-availability-sometimes.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_comprehensions/C408.py b/crates/ruff_linter/resources/test/fixtures/flake8_comprehensions/C408.py
+index d2ffaa73528c8cdfe2de84ded18872d2b10f9b5c..a29a6d5484e04ba8b6ca605b5594211a1ddf7831 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_comprehensions/C408.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_comprehensions/C408.py
+@@ -46,3 +46,7 @@ dict(ℼ=3.14)
+ dict(ſ=1)
+ dict(𝕒=1, b=2)
+ dict(a=1, b=2)  # already NFKC-normalized: unchanged
++
++# The fix uses LibCST, which fails to parse a parenthesized keyword name (valid before
++# Python 3.8): report the call without a fix.
++dict((a)=1)
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_comprehensions/C414.py b/crates/ruff_linter/resources/test/fixtures/flake8_comprehensions/C414.py
+index 7db605fecbe64f067080c3b10a009b42ed6391fd..221ab17bd74e03d3c64177e144767899fc7934fc 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_comprehensions/C414.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_comprehensions/C414.py
+@@ -45,3 +45,8 @@ xxxxxxxxxxx_xxxxx_xxxxx = sorted(
+     list(x_xxxx_xxxxxxxxxxx_xxxxx.xxxx()),  # xxxxxxxxxxx xxxxx xxxx xxx xx Nxxx
+     key=lambda xxxxx: xxxxx or "",
+ )
++
++
++# The fix uses LibCST, which fails to parse a parenthesized keyword name (valid before
++# Python 3.8): report the call without a fix.
++sorted(list(x), (key)=f)
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM208.py b/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM208.py
+index 5ad2dd6f820baeaa78666f61c90b31c842d7249a..ee18ec9c472a6c43810194ccc1dcbc1c77f2142d 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM208.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM208.py
+@@ -19,3 +19,8 @@ f(not not a)  # SIM208
+ 
+ if 1 + (not (not a)):  # SIM208
+     pass
++
++
++def f(bool):
++    # No fix: `bool` is shadowed
++    return not not x
+diff --git a/crates/ruff_linter/resources/test/fixtures/refurb/FURB167.py b/crates/ruff_linter/resources/test/fixtures/refurb/FURB167.py
+index 7df815352fd74a0141f4edfe6bd93005aa6dfbeb..b1c1c150b098b9f278a314f8f31f47f0ce74f6d4 100644
+--- a/crates/ruff_linter/resources/test/fixtures/refurb/FURB167.py
++++ b/crates/ruff_linter/resources/test/fixtures/refurb/FURB167.py
+@@ -20,3 +20,9 @@ def func():
+     # FURB167
+     if search("^hello", "hello world", I):
+         pass
++
++
++def f():
++    # No fix: `re` is bound to the alias itself
++    import re.I as re
++    re
+diff --git a/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_collection_call.rs b/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_collection_call.rs
+index 7bd83cb33919695c9b16a501533762e667f70258..991a9912f5ad9ba5bf8878f9d6bcdc39d882d255 100644
+--- a/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_collection_call.rs
++++ b/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_collection_call.rs
+@@ -7,7 +7,7 @@ use crate::codes::Category;
+ use crate::rules::flake8_comprehensions::fixes;
+ use crate::rules::flake8_comprehensions::fixes::{pad_end, pad_start};
+ use crate::rules::flake8_comprehensions::settings::Settings;
+-use crate::{AlwaysFixableViolation, Edit, Fix};
++use crate::{Edit, Fix, FixAvailability, Violation};
+ 
+ /// ## What it does
+ /// Checks for unnecessary `dict()`, `list()` or `tuple()` calls that can be
+@@ -46,15 +46,19 @@ pub(crate) struct UnnecessaryCollectionCall {
+     kind: Collection,
+ }
+ 
+-impl AlwaysFixableViolation for UnnecessaryCollectionCall {
++// The fix rewrites the call with LibCST, which can't parse all valid code (e.g.
++// `dict((a)=1)`, valid before Python 3.8), so it is not always available.
++impl Violation for UnnecessaryCollectionCall {
++    const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;
++
+     #[derive_message_formats]
+     fn message(&self) -> String {
+         let UnnecessaryCollectionCall { kind } = self;
+         format!("Unnecessary `{kind}()` call (rewrite as a literal)")
+     }
+ 
+-    fn fix_title(&self) -> String {
+-        "Rewrite as a literal".to_string()
++    fn fix_title(&self) -> Option<String> {
++        Some("Rewrite as a literal".to_string())
+     }
+ }
+ 
+diff --git a/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_double_cast_or_process.rs b/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_double_cast_or_process.rs
+index d6fb343e1b19d83fa7dfdfe3d70d8a42a77102f1..05169b5cd62be0fe79c79f9d2c65ffdb44952396 100644
+--- a/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_double_cast_or_process.rs
++++ b/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_double_cast_or_process.rs
+@@ -5,7 +5,7 @@ use ruff_text_size::Ranged;
+ 
+ use crate::checkers::ast::Checker;
+ use crate::codes::Category;
+-use crate::{AlwaysFixableViolation, Fix};
++use crate::{Fix, FixAvailability, Violation};
+ 
+ use crate::rules::flake8_comprehensions::fixes;
+ 
+@@ -55,16 +55,20 @@ pub(crate) struct UnnecessaryDoubleCastOrProcess {
+     outer: String,
+ }
+ 
+-impl AlwaysFixableViolation for UnnecessaryDoubleCastOrProcess {
++// The fix rewrites the call with LibCST, which can't parse all code that Ruff accepts, so it
++// is not always available.
++impl Violation for UnnecessaryDoubleCastOrProcess {
++    const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;
++
+     #[derive_message_formats]
+     fn message(&self) -> String {
+         let UnnecessaryDoubleCastOrProcess { inner, outer } = self;
+         format!("Unnecessary `{inner}()` call within `{outer}()`")
+     }
+ 
+-    fn fix_title(&self) -> String {
++    fn fix_title(&self) -> Option<String> {
+         let UnnecessaryDoubleCastOrProcess { inner, .. } = self;
+-        format!("Remove the inner `{inner}()` call")
++        Some(format!("Remove the inner `{inner}()` call"))
+     }
+ }
+ 
+diff --git a/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_literal_dict.rs b/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_literal_dict.rs
+index adb894755b0bc118f777fe03b94375099a55e4af..8db5f582db8e0aa92a4f86720963ee218002ceac 100644
+--- a/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_literal_dict.rs
++++ b/crates/ruff_linter/src/rules/flake8_comprehensions/rules/unnecessary_literal_dict.rs
+@@ -5,7 +5,7 @@ use ruff_text_size::Ranged;
+ use crate::checkers::ast::Checker;
+ use crate::codes::Category;
+ use crate::rules::flake8_comprehensions::fixes;
+-use crate::{AlwaysFixableViolation, Fix};
++use crate::{Fix, FixAvailability, Violation};
+ 
+ use crate::rules::flake8_comprehensions::helpers;
+ 
+@@ -39,15 +39,19 @@ pub(crate) struct UnnecessaryLiteralDict {
+     obj_type: LiteralKind,
+ }
+ 
+-impl AlwaysFixableViolation for UnnecessaryLiteralDict {
++// The fix rewrites the call with LibCST, which can't parse all code that Ruff accepts, so it
++// is not always available.
++impl Violation for UnnecessaryLiteralDict {
++    const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;
++
+     #[derive_message_formats]
+     fn message(&self) -> String {
+         let UnnecessaryLiteralDict { obj_type } = self;
+         format!("Unnecessary {obj_type} literal (rewrite as a dict literal)")
+     }
+ 
+-    fn fix_title(&self) -> String {
+-        "Rewrite as a dict literal".to_string()
++    fn fix_title(&self) -> Option<String> {
++        Some("Rewrite as a dict literal".to_string())
+     }
+ }
+ 
+diff --git a/crates/ruff_linter/src/rules/flake8_comprehensions/snapshots/ruff_linter__rules__flake8_comprehensions__tests__unnecessary-collection-call_C408.py.snap b/crates/ruff_linter/src/rules/flake8_comprehensions/snapshots/ruff_linter__rules__flake8_comprehensions__tests__unnecessary-collection-call_C408.py.snap
+index 0fea149499c5678b4a439a9949c7a7cc31f1bf2f..f1be1e9c576dd598f46b051e1e9d24dd7631e8f2 100644
+--- a/crates/ruff_linter/src/rules/flake8_comprehensions/snapshots/ruff_linter__rules__flake8_comprehensions__tests__unnecessary-collection-call_C408.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_comprehensions/snapshots/ruff_linter__rules__flake8_comprehensions__tests__unnecessary-collection-call_C408.py.snap
+@@ -623,10 +623,23 @@ C408 [*] Unnecessary `dict()` call (rewrite as a literal)
+ 47 | dict(𝕒=1, b=2)
+ 48 | dict(a=1, b=2)  # already NFKC-normalized: unchanged
+    | ^^^^^^^^^^^^^^
++49 |
++50 | # The fix uses LibCST, which fails to parse a parenthesized keyword name (valid before
++   |
+ help: Rewrite as a literal
+    |
+ 47 | dict(𝕒=1, b=2)
+    - dict(a=1, b=2)  # already NFKC-normalized: unchanged
+ 48 + {"a": 1, "b": 2}  # already NFKC-normalized: unchanged
++49 |
+    |
+ note: This is an unsafe fix and may change runtime behavior
++
++C408 Unnecessary `dict()` call (rewrite as a literal)
++  --> C408.py:52:1
++   |
++50 | # The fix uses LibCST, which fails to parse a parenthesized keyword name (valid before
++51 | # Python 3.8): report the call without a fix.
++52 | dict((a)=1)
++   | ^^^^^^^^^^^
++help: Rewrite as a literal
+diff --git a/crates/ruff_linter/src/rules/flake8_comprehensions/snapshots/ruff_linter__rules__flake8_comprehensions__tests__unnecessary-double-cast-or-process_C414.py.snap b/crates/ruff_linter/src/rules/flake8_comprehensions/snapshots/ruff_linter__rules__flake8_comprehensions__tests__unnecessary-double-cast-or-process_C414.py.snap
+index c2cf4caba83904b972b06c6f3975dcab3c082220..1e177522c792e3377009d1141c2cc927d55f0bf4 100644
+--- a/crates/ruff_linter/src/rules/flake8_comprehensions/snapshots/ruff_linter__rules__flake8_comprehensions__tests__unnecessary-double-cast-or-process_C414.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_comprehensions/snapshots/ruff_linter__rules__flake8_comprehensions__tests__unnecessary-double-cast-or-process_C414.py.snap
+@@ -468,3 +468,12 @@ help: Remove the inner `list()` call
+ 46 |     key=lambda xxxxx: xxxxx or "",
+    |
+ note: This is an unsafe fix and may change runtime behavior
++
++C414 Unnecessary `list()` call within `sorted()`
++  --> C414.py:52:1
++   |
++50 | # The fix uses LibCST, which fails to parse a parenthesized keyword name (valid before
++51 | # Python 3.8): report the call without a fix.
++52 | sorted(list(x), (key)=f)
++   | ^^^^^^^^^^^^^^^^^^^^^^^^
++help: Remove the inner `list()` call
+diff --git a/crates/ruff_linter/src/rules/flake8_simplify/rules/ast_unary_op.rs b/crates/ruff_linter/src/rules/flake8_simplify/rules/ast_unary_op.rs
+index d802ed3f866df2b0431aeaf5b6cbe9876b80730b..8cd79cc5aef3aac428671af6efe4680e61509d6f 100644
+--- a/crates/ruff_linter/src/rules/flake8_simplify/rules/ast_unary_op.rs
++++ b/crates/ruff_linter/src/rules/flake8_simplify/rules/ast_unary_op.rs
+@@ -7,7 +7,7 @@ use ruff_python_semantic::ScopeKind;
+ 
+ use crate::checkers::ast::Checker;
+ use crate::codes::Category;
+-use crate::{AlwaysFixableViolation, Edit, Fix};
++use crate::{AlwaysFixableViolation, Edit, Fix, FixAvailability, Violation};
+ 
+ /// ## What it does
+ /// Checks for negated `==` operators.
+@@ -120,16 +120,18 @@ pub(crate) struct DoubleNegation {
+     expr: String,
+ }
+ 
+-impl AlwaysFixableViolation for DoubleNegation {
++impl Violation for DoubleNegation {
++    const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;
++
+     #[derive_message_formats]
+     fn message(&self) -> String {
+         let DoubleNegation { expr } = self;
+         format!("Use `{expr}` instead of `not (not {expr})`")
+     }
+ 
+-    fn fix_title(&self) -> String {
++    fn fix_title(&self) -> Option<String> {
+         let DoubleNegation { expr } = self;
+-        format!("Replace with `{expr}`")
++        Some(format!("Replace with `{expr}`"))
+     }
+ }
+ 
+diff --git a/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__double-negation_SIM208.py.snap b/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__double-negation_SIM208.py.snap
+index 2afc79efa22446b6b5fd7a697fb02553793c412f..2edda8e3d13625ca6dfb79fb781c35ecbbb29592 100644
+--- a/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__double-negation_SIM208.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__double-negation_SIM208.py.snap
+@@ -84,3 +84,12 @@ help: Replace with `a`
+ 20 + if 1 + (bool(a)):  # SIM208
+ 21 |     pass
+    |
++
++SIM208 Use `x` instead of `not (not x)`
++  --> SIM208.py:26:12
++   |
++24 | def f(bool):
++25 |     # No fix: `bool` is shadowed
++26 |     return not not x
++   |            ^^^^^^^^^
++help: Replace with `x`
+diff --git a/crates/ruff_linter/src/rules/refurb/rules/regex_flag_alias.rs b/crates/ruff_linter/src/rules/refurb/rules/regex_flag_alias.rs
+index fe911b73ce8bec06bc77721f6767807090843453..98973dcea50fd33949482b2e25b4ebfcbe5c5210 100644
+--- a/crates/ruff_linter/src/rules/refurb/rules/regex_flag_alias.rs
++++ b/crates/ruff_linter/src/rules/refurb/rules/regex_flag_alias.rs
+@@ -6,7 +6,7 @@ use ruff_text_size::Ranged;
+ use crate::checkers::ast::Checker;
+ use crate::codes::Category;
+ use crate::importer::ImportRequest;
+-use crate::{AlwaysFixableViolation, Edit, Fix};
++use crate::{Edit, Fix, FixAvailability, Violation};
+ 
+ /// ## What it does
+ /// Checks for the use of shorthand aliases for regular expression flags
+@@ -38,16 +38,18 @@ pub(crate) struct RegexFlagAlias {
+     flag: RegexFlag,
+ }
+ 
+-impl AlwaysFixableViolation for RegexFlagAlias {
++impl Violation for RegexFlagAlias {
++    const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;
++
+     #[derive_message_formats]
+     fn message(&self) -> String {
+         let RegexFlagAlias { flag } = self;
+         format!("Use of regular expression alias `re.{}`", flag.alias())
+     }
+ 
+-    fn fix_title(&self) -> String {
++    fn fix_title(&self) -> Option<String> {
+         let RegexFlagAlias { flag } = self;
+-        format!("Replace with `re.{}`", flag.full_name())
++        Some(format!("Replace with `re.{}`", flag.full_name()))
+     }
+ }
+ 
+diff --git a/crates/ruff_linter/src/rules/refurb/snapshots/ruff_linter__rules__refurb__tests__regex-flag-alias_FURB167.py.snap b/crates/ruff_linter/src/rules/refurb/snapshots/ruff_linter__rules__refurb__tests__regex-flag-alias_FURB167.py.snap
+index e56e3f467bc6afdd0f070327457903e6094bbc88..c1649d9465c1b8016e81a33cd5cecabab46482fa 100644
+--- a/crates/ruff_linter/src/rules/refurb/snapshots/ruff_linter__rules__refurb__tests__regex-flag-alias_FURB167.py.snap
++++ b/crates/ruff_linter/src/rules/refurb/snapshots/ruff_linter__rules__refurb__tests__regex-flag-alias_FURB167.py.snap
+@@ -35,3 +35,12 @@ help: Replace with `re.IGNORECASE`
+ 22 +     if search("^hello", "hello world", re.IGNORECASE):
+ 23 |         pass
+    |
++
++FURB167 Use of regular expression alias `re.I`
++  --> FURB167.py:28:5
++   |
++26 |     # No fix: `re` is bound to the alias itself
++27 |     import re.I as re
++28 |     re
++   |     ^^
++help: Replace with `re.IGNORECASE`

@@ -1,0 +1,414 @@
+Diagnostics inside complex string annotations (nodes parsed from the string value, all with
+the string range) were reported with fixes that edited the wrong text or panicked on token/range
+lookups; report them without fix (or not at all for always-fixable rules).
+Regression test included; fuzz repro: repro/fix-linter-complex-string-annotations.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/src/checkers/ast/mod.rs b/crates/ruff_linter/src/checkers/ast/mod.rs
+index 344f6aec913021847a9a4d602538ce4b232119ec..8758dc480cc38f6e4326d954c77f4205ef2121c2 100644
+--- a/crates/ruff_linter/src/checkers/ast/mod.rs
++++ b/crates/ruff_linter/src/checkers/ast/mod.rs
+@@ -84,7 +84,7 @@ use crate::rules::pylint::rules::{
+ use crate::rules::{flake8_pyi, flake8_type_checking, pyflakes, pyupgrade};
+ use crate::settings::rule_table::RuleTable;
+ use crate::settings::{LinterSettings, TargetVersion, flags};
+-use crate::{Edit, Violation};
++use crate::{Edit, FixAvailability, Violation};
+ use crate::{Locator, docstrings, noqa};
+ 
+ mod analyze;
+@@ -456,7 +456,7 @@ impl<'a> Checker<'a> {
+         kind: T,
+         range: TextRange,
+     ) -> DiagnosticGuard<'chk, 'a> {
+-        self.context.report_diagnostic(kind, range)
++        self.locate(self.context.report_diagnostic(kind, range))
+     }
+ 
+     /// Return a [`DiagnosticGuard`] for reporting a diagnostic if the corresponding rule is
+@@ -469,7 +469,9 @@ impl<'a> Checker<'a> {
+         kind: T,
+         range: TextRange,
+     ) -> Option<DiagnosticGuard<'chk, 'a>> {
+-        self.context.report_diagnostic_if_enabled(kind, range)
++        self.context
++            .report_diagnostic_if_enabled(kind, range)
++            .map(|guard| self.locate(guard))
+     }
+ 
+     /// Return a [`DiagnosticGuard`] for reporting a diagnostic, with its fix title deferred.
+@@ -481,7 +483,20 @@ impl<'a> Checker<'a> {
+         kind: T,
+         range: TextRange,
+     ) -> DiagnosticGuard<'chk, 'a> {
+-        self.context.report_custom_diagnostic(kind, range)
++        self.locate(self.context.report_custom_diagnostic(kind, range))
++    }
++
++    /// Marks a diagnostic that is reported within a complex string type definition (see
++    /// [`AnnotationKind::Complex`]).
++    ///
++    /// The nodes of such an annotation are parsed from the value of the string and can't be
++    /// mapped back to the source: they all share the range of the string literal. A fix computed
++    /// from their ranges (or from the tokens around them) would edit the wrong text, so the
++    /// diagnostic is reported without its fix. Diagnostics of rules that promise to always
++    /// provide a fix are not reported at all.
++    fn locate<'chk>(&self, mut guard: DiagnosticGuard<'chk, 'a>) -> DiagnosticGuard<'chk, 'a> {
++        guard.in_complex_string_type_definition = self.semantic.in_complex_string_type_definition();
++        guard
+     }
+ 
+     /// Adds a [`TextRange`] to the set of ranges of variable names
+@@ -493,13 +508,18 @@ impl<'a> Checker<'a> {
+         ranges.insert(range)
+     }
+ 
+-    /// Returns the [`Tokens`] for the parsed type annotation if the checker is in a typing context
++    /// Returns the [`Tokens`] for the parsed type annotation if the checker is in a simple string
++    /// type definition (see [`AnnotationKind::Simple`]),
+     /// or the parsed source code.
+     pub(crate) fn tokens(&self) -> &'a Tokens {
+-        if let Some(type_annotation) = self.parsed_type_annotation {
+-            type_annotation.parsed().tokens()
+-        } else {
+-            self.parsed.tokens()
++        match self.parsed_type_annotation {
++            // The nodes of a complex annotation are all relocated to the range of the string
++            // literal in the source, so they have to be paired with the source tokens: the
++            // annotation's own tokens are relative to the parsed string value.
++            Some(type_annotation) if type_annotation.kind().is_simple() => {
++                type_annotation.parsed().tokens()
++            }
++            _ => self.parsed.tokens(),
+         }
+     }
+ 
+@@ -3165,7 +3185,12 @@ impl<'a> Checker<'a> {
+                         self.semantic.restore(snapshot);
+ 
+                         if self.is_rule_enabled(Rule::QuotedAnnotation) {
+-                            pyupgrade::rules::quoted_annotation(self, annotation, range);
++                            pyupgrade::rules::quoted_annotation(
++                                self,
++                                annotation,
++                                range,
++                                parsed_annotation.parsed().tokens(),
++                            );
+                         }
+ 
+                         if self.source_type.is_stub() {
+@@ -3189,6 +3214,11 @@ impl<'a> Checker<'a> {
+                             SemanticModelFlags::TYPE_DEFINITION | type_definition_flag;
+                         let parsed_expr = parsed_annotation.expression();
+                         self.visit_expr(parsed_expr);
++                        // TC008 replaces the string literal as a whole, which works for complex
++                        // annotations, too (see `Checker::locate`).
++                        self.semantic
++                            .flags
++                            .remove(SemanticModelFlags::COMPLEX_STRING_TYPE_DEFINITION);
+                         if self.semantic.in_type_alias_value() {
+                             // stub files are covered by PYI020
+                             if !self.source_type.is_stub()
+@@ -3617,6 +3647,7 @@ impl<'a> LintContext<'a> {
+             diagnostic: Some(kind.into_diagnostic(range, self.source_file())),
+             rule: T::rule(),
+             before_drop_fns: SmallVec::new(),
++            in_complex_string_type_definition: false,
+         }
+     }
+ 
+@@ -3637,6 +3668,7 @@ impl<'a> LintContext<'a> {
+                 diagnostic: Some(kind.into_diagnostic(range, self.source_file())),
+                 rule,
+                 before_drop_fns: SmallVec::new(),
++                in_complex_string_type_definition: false,
+             })
+         } else {
+             None
+@@ -3669,6 +3701,7 @@ impl<'a> LintContext<'a> {
+             diagnostic: Some(diagnostic),
+             rule: T::rule(),
+             before_drop_fns: SmallVec::new(),
++            in_complex_string_type_definition: false,
+         };
+ 
+         if let Some(fix_title) = kind.fix_title() {
+@@ -3779,6 +3812,9 @@ pub(crate) struct DiagnosticGuard<'a, 'b> {
+     /// Functions to call before dropping the guard and storing the diagnostic.
+     before_drop_fns: SmallVec<[BeforeDropFn; 1]>,
+     rule: Rule,
++    /// Whether the diagnostic is reported within a complex string type definition, where fixes
++    /// can't be located (see [`Checker::locate`]).
++    in_complex_string_type_definition: bool,
+ }
+ 
+ impl DiagnosticGuard<'_, '_> {
+@@ -3873,7 +3909,7 @@ impl DiagnosticGuard<'_, '_> {
+     /// Set the [`Fix`] used to fix the diagnostic.
+     #[inline]
+     pub(crate) fn set_fix(&mut self, fix: Fix) {
+-        if !self.context.rules.should_fix(self.rule) {
++        if !self.context.rules.should_fix(self.rule) || self.in_complex_string_type_definition {
+             self.diagnostic.as_mut().unwrap().remove_fix();
+             return;
+         }
+@@ -3888,6 +3924,10 @@ impl DiagnosticGuard<'_, '_> {
+     /// Otherwise, log the error.
+     #[inline]
+     pub(crate) fn try_set_fix(&mut self, func: impl FnOnce() -> anyhow::Result<Fix>) {
++        // Don't even compute the fix: it may rely on locating nodes in the source.
++        if self.in_complex_string_type_definition {
++            return;
++        }
+         match func() {
+             Ok(fix) => self.set_fix(fix),
+             Err(err) => log::debug!("Failed to create fix for {}: {}", self.name(), err),
+@@ -3901,6 +3941,9 @@ impl DiagnosticGuard<'_, '_> {
+         &mut self,
+         func: impl FnOnce() -> anyhow::Result<Option<Fix>>,
+     ) {
++        if self.in_complex_string_type_definition {
++            return;
++        }
+         match func() {
+             Ok(None) => {}
+             Ok(Some(fix)) => self.set_fix(fix),
+@@ -3957,6 +4000,12 @@ impl Drop for DiagnosticGuard<'_, '_> {
+         }
+ 
+         if let Some(mut diagnostic) = self.diagnostic.take() {
++            if self.in_complex_string_type_definition {
++                if matches!(self.rule.fixable(), FixAvailability::Always) {
++                    return;
++                }
++                diagnostic.remove_fix();
++            }
+             for f in &self.before_drop_fns {
+                 f(&mut diagnostic);
+             }
+diff --git a/crates/ruff_linter/src/linter.rs b/crates/ruff_linter/src/linter.rs
+index 8f2c4deb768436ad85572170b0b8dcb678867a36..a1ac9671fb336a10599370e7db7be214f266057b 100644
+--- a/crates/ruff_linter/src/linter.rs
++++ b/crates/ruff_linter/src/linter.rs
+@@ -1272,4 +1272,23 @@ mod tests {
+         let diagnostics = test_snippet(contents, &settings);
+         assert_diagnostics!(snapshot, diagnostics);
+     }
++
++    /// Complex string annotations (with escapes or implicit concatenations) are parsed from the
++    /// value of the string, so their nodes can't be mapped back to the source. Fuzz regressions:
++    /// rules sliced the source with ranges relative to the parsed value (panicking on char
++    /// boundaries or `start <= end` assertions), and fixes edited the wrong text.
++    #[test_case(r##"ԓ:"'\'""##; "nested_string_annotation")]
++    #[test_case(r##"id:"{""}|'ۻͧ'''""##; "nested_implicit_concatenation")]
++    #[test_case(r##"s:"''%""()""##; "printf_string_formatting")]
++    #[test_case(r##"d:"t"",""t''""t''""##; "implicit_concatenation_in_collection")]
++    #[test_case(r##"VUtyyN:'a(y,d)is d is{}'"""##; "invalid_literal_comparison")]
++    #[test_case(r##"l:"{True,True}#\b"(((),))"##; "duplicate_value")]
++    #[test_case(r##"b:"3eys())">"\f(7in w.keys())" .f"##; "key_in_dict")]
++    #[test_case(r##"ל:"U'\'""##; "unicode_kind_prefix")]
++    #[test_case(r##"B:U"Q(rTTT)is()""""##; "is_literal")]
++    #[test_case(r##"f:"f""''%f""##; "f_string_missing_placeholders")]
++    #[test_case(r##"m:"'ϸ''͸'""%E""##; "printf_string_formatting_segments")]
++    fn complex_string_annotation(contents: &str) {
++        test_snippet(contents, &LinterSettings::default());
++    }
+ }
+diff --git a/crates/ruff_linter/src/rules/flake8_simplify/rules/key_in_dict.rs b/crates/ruff_linter/src/rules/flake8_simplify/rules/key_in_dict.rs
+index e4644a788261967aa50f69f81283021e61cddb1e..3d4aa01f271a54bbd559973ca32030b49a1949f3 100644
+--- a/crates/ruff_linter/src/rules/flake8_simplify/rules/key_in_dict.rs
++++ b/crates/ruff_linter/src/rules/flake8_simplify/rules/key_in_dict.rs
+@@ -102,6 +102,11 @@ fn key_in_dict(checker: &Checker, left: &Expr, right: &Expr, operator: CmpOp, pa
+         },
+         TextRange::new(left_range.start(), right_range.end()),
+     );
++    // The nodes of a complex string annotation can't be located in the source.
++    if checker.semantic().in_complex_string_type_definition() {
++        return;
++    }
++
+     // Delete from the start of the dot to the end of the expression.
+     if let Some(dot) = SimpleTokenizer::starts_at(value.end(), checker.locator().contents())
+         .skip_trivia()
+diff --git a/crates/ruff_linter/src/rules/pyupgrade/rules/printf_string_formatting.rs b/crates/ruff_linter/src/rules/pyupgrade/rules/printf_string_formatting.rs
+index 7396addf2643eb780970ec291cc561b6bcaf065f..12aa714a538345a797514dab4449a5fc4cbff182 100644
+--- a/crates/ruff_linter/src/rules/pyupgrade/rules/printf_string_formatting.rs
++++ b/crates/ruff_linter/src/rules/pyupgrade/rules/printf_string_formatting.rs
+@@ -373,6 +373,12 @@ pub(crate) fn printf_string_formatting(
+     bin_op: &ast::ExprBinOp,
+     string_expr: &ast::ExprStringLiteral,
+ ) {
++    // The nodes of a complex string annotation can't be located in the source, and the fix below
++    // rebuilds the expression from source slices.
++    if checker.semantic().in_complex_string_type_definition() {
++        return;
++    }
++
+     let right = &*bin_op.right;
+ 
+     let mut num_positional_arguments = 0;
+diff --git a/crates/ruff_linter/src/rules/pyupgrade/rules/quoted_annotation.rs b/crates/ruff_linter/src/rules/pyupgrade/rules/quoted_annotation.rs
+index 8fd5b0fb05ceb52c9560d7dded3fe0e2c55dfea6..f9ef6901f14a964a05dc5514214eb7445eaddcae 100644
+--- a/crates/ruff_linter/src/rules/pyupgrade/rules/quoted_annotation.rs
++++ b/crates/ruff_linter/src/rules/pyupgrade/rules/quoted_annotation.rs
+@@ -1,6 +1,6 @@
+ use ruff_macros::{ViolationMetadata, derive_message_formats};
+ use ruff_python_ast::Stmt;
+-use ruff_python_ast::token::TokenKind;
++use ruff_python_ast::token::{TokenKind, Tokens};
+ use ruff_python_semantic::SemanticModel;
+ use ruff_source_file::LineRanges;
+ use ruff_text_size::{TextLen, TextRange, TextSize};
+@@ -103,7 +103,12 @@ impl AlwaysFixableViolation for QuotedAnnotation {
+ }
+ 
+ /// UP037
+-pub(crate) fn quoted_annotation(checker: &Checker, annotation: &str, range: TextRange) {
++pub(crate) fn quoted_annotation(
++    checker: &Checker,
++    annotation: &str,
++    range: TextRange,
++    annotation_tokens: &Tokens,
++) {
+     let add_future_import = checker.settings().future_annotations
+         && checker.semantic().in_runtime_evaluated_annotation();
+ 
+@@ -114,8 +119,7 @@ pub(crate) fn quoted_annotation(checker: &Checker, annotation: &str, range: Text
+     let placeholder_range = TextRange::up_to(annotation.text_len());
+     let spans_multiple_lines = annotation.contains_line_break(placeholder_range);
+ 
+-    let last_token_is_comment = checker
+-        .tokens()
++    let last_token_is_comment = annotation_tokens
+         .iter()
+         .rfind(|tok| !tok.kind().is_any_newline())
+         .is_some_and(|tok| tok.kind() == TokenKind::Comment);
+diff --git a/crates/ruff_python_ast/src/relocate.rs b/crates/ruff_python_ast/src/relocate.rs
+index 64fd01bed9d5c90851083a72a25719266079a58b..91ab9e111366c7e2908ff6a1748c6cff6084f321 100644
+--- a/crates/ruff_python_ast/src/relocate.rs
++++ b/crates/ruff_python_ast/src/relocate.rs
+@@ -1,11 +1,22 @@
+ use ruff_text_size::TextRange;
+ 
+-use crate::visitor::transformer::{Transformer, walk_expr, walk_keyword};
++use crate::visitor::transformer::{
++    Transformer, walk_arguments, walk_comprehension, walk_expr, walk_f_string,
++    walk_interpolated_string_element, walk_keyword, walk_parameter, walk_parameters, walk_t_string,
++};
+ use crate::{self as ast};
+-use crate::{Expr, Keyword};
++use crate::{
++    Arguments, BytesLiteral, Comprehension, Expr, FString, InterpolatedStringElement, Keyword,
++    Parameter, Parameters, StringLiteral, TString,
++};
+ 
+ /// Change an expression's location (recursively) to match a desired, fixed
+ /// range.
++///
++/// This relocates every node of the tree that has a range, not only the expressions: string
++/// literal parts, f-string elements, keywords, parameters, identifiers, etc. Otherwise these
++/// nodes would keep ranges that refer to a different source text (e.g. the parsed value of a
++/// string annotation), which callers would then use to slice the real source.
+ pub fn relocate_expr(expr: &mut Expr, range: TextRange) {
+     Relocator { range }.visit_expr(expr);
+ }
+@@ -98,8 +109,9 @@ impl Transformer for Relocator {
+             Expr::EllipsisLiteral(ast::ExprEllipsisLiteral { range, .. }) => {
+                 *range = self.range;
+             }
+-            Expr::Attribute(ast::ExprAttribute { range, .. }) => {
++            Expr::Attribute(ast::ExprAttribute { range, attr, .. }) => {
+                 *range = self.range;
++                attr.range = self.range;
+             }
+             Expr::Subscript(ast::ExprSubscript { range, .. }) => {
+                 *range = self.range;
+@@ -128,6 +140,69 @@ impl Transformer for Relocator {
+ 
+     fn visit_keyword(&self, keyword: &mut Keyword) {
+         keyword.range = self.range;
++        if let Some(arg) = &mut keyword.arg {
++            arg.range = self.range;
++        }
+         walk_keyword(self, keyword);
+     }
++
++    fn visit_comprehension(&self, comprehension: &mut Comprehension) {
++        comprehension.range = self.range;
++        walk_comprehension(self, comprehension);
++    }
++
++    fn visit_arguments(&self, arguments: &mut Arguments) {
++        arguments.range = self.range;
++        walk_arguments(self, arguments);
++    }
++
++    fn visit_parameters(&self, parameters: &mut Parameters) {
++        parameters.range = self.range;
++        for parameter in parameters
++            .posonlyargs
++            .iter_mut()
++            .chain(&mut parameters.args)
++            .chain(&mut parameters.kwonlyargs)
++        {
++            parameter.range = self.range;
++        }
++        walk_parameters(self, parameters);
++    }
++
++    fn visit_parameter(&self, parameter: &mut Parameter) {
++        parameter.range = self.range;
++        parameter.name.range = self.range;
++        walk_parameter(self, parameter);
++    }
++
++    fn visit_f_string(&self, f_string: &mut FString) {
++        f_string.range = self.range;
++        walk_f_string(self, f_string);
++    }
++
++    fn visit_t_string(&self, t_string: &mut TString) {
++        t_string.range = self.range;
++        walk_t_string(self, t_string);
++    }
++
++    fn visit_interpolated_string_element(&self, element: &mut InterpolatedStringElement) {
++        match element {
++            InterpolatedStringElement::Literal(literal) => literal.range = self.range,
++            InterpolatedStringElement::Interpolation(interpolation) => {
++                interpolation.range = self.range;
++                if let Some(format_spec) = &mut interpolation.format_spec {
++                    format_spec.range = self.range;
++                }
++            }
++        }
++        walk_interpolated_string_element(self, element);
++    }
++
++    fn visit_string_literal(&self, string_literal: &mut StringLiteral) {
++        string_literal.range = self.range;
++    }
++
++    fn visit_bytes_literal(&self, bytes_literal: &mut BytesLiteral) {
++        bytes_literal.range = self.range;
++    }
+ }
+diff --git a/crates/ruff_python_parser/src/typing.rs b/crates/ruff_python_parser/src/typing.rs
+index e0c690c3dd70d63d24eed3dc720abb52ca03c8f8..eee9a49d20afcb6f641d18f8cc0be67f4af6da0d 100644
+--- a/crates/ruff_python_parser/src/typing.rs
++++ b/crates/ruff_python_parser/src/typing.rs
+@@ -58,8 +58,13 @@ pub fn parse_type_annotation(
+ ) -> AnnotationParseResult {
+     if let Some(string_literal) = string_expr.as_single_part_string() {
+         // Compare the raw contents (without quotes) of the expression with the parsed contents
+-        // contained in the string literal.
+-        if &source[string_literal.content_range()] == string_literal.as_str() {
++        // contained in the string literal. Use `get`: a string literal nested in a complex
++        // annotation (e.g. `x: "'int'" ""`) has a range that `relocate_expr` set to the whole
++        // outer string, so its content range need not fall on character boundaries.
++        if source.get(std::ops::Range::<usize>::from(
++            string_literal.content_range(),
++        )) == Some(string_literal.as_str())
++        {
+             parse_simple_type_annotation(string_literal, source)
+         } else {
+             // The raw contents of the string doesn't match the parsed content. This could be the

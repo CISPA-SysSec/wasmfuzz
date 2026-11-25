@@ -1,0 +1,116 @@
+PLR2044: deleting an empty comment after a line continuation left a dangling `\` at EOF
+(or joined `\r` + `\n`); delete the continuation too.
+Regression test included; fuzz repro: repro/fix-plr2044-continuation-at-eof.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/pylint/empty_comment_line_continuation_eof.py b/crates/ruff_linter/resources/test/fixtures/pylint/empty_comment_line_continuation_eof.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..67d7a4d642bf0822b86a33b6294ae5b8f8c09d23
+--- /dev/null
++++ b/crates/ruff_linter/resources/test/fixtures/pylint/empty_comment_line_continuation_eof.py
+@@ -0,0 +1,3 @@
++x = 0 \#
++y = 1 \
++#
+\ No newline at end of file
+diff --git a/crates/ruff_linter/src/rules/pylint/mod.rs b/crates/ruff_linter/src/rules/pylint/mod.rs
+index dcfa7b50a3c817956e5af758e3e4ba497ac82d07..02dea72caf78140017d02d91bce79e44db5e3004 100644
+--- a/crates/ruff_linter/src/rules/pylint/mod.rs
++++ b/crates/ruff_linter/src/rules/pylint/mod.rs
+@@ -53,6 +53,10 @@ mod tests {
+     #[test_case(Rule::EqWithoutHash, Path::new("eq_without_hash.py"))]
+     #[test_case(Rule::EmptyComment, Path::new("empty_comment.py"))]
+     #[test_case(Rule::EmptyComment, Path::new("empty_comment_line_continuation.py"))]
++    #[test_case(
++        Rule::EmptyComment,
++        Path::new("empty_comment_line_continuation_eof.py")
++    )]
+     #[test_case(Rule::ManualFromImport, Path::new("import_aliasing.py"))]
+     #[test_case(Rule::IfStmtMinMax, Path::new("if_stmt_min_max.py"))]
+     #[test_case(Rule::SingleStringSlots, Path::new("single_string_slots.py"))]
+diff --git a/crates/ruff_linter/src/rules/pylint/rules/empty_comment.rs b/crates/ruff_linter/src/rules/pylint/rules/empty_comment.rs
+index 51e5bf71471746ba08bc7316e04046de4c970d78..e48e89f45f379d091550011b29c6c6ee49b9be19 100644
+--- a/crates/ruff_linter/src/rules/pylint/rules/empty_comment.rs
++++ b/crates/ruff_linter/src/rules/pylint/rules/empty_comment.rs
+@@ -101,9 +101,7 @@ fn empty_comment(context: &LintContext, range: TextRange, locator: &Locator, ind
+ 
+     // If there is no character preceding the comment, this comment must be on its own physical line.
+     // If there is a line preceding the empty comment's line, check if it ends in a line continuation character. (`\`)
+-    let is_on_same_logical_line = indexer
+-        .preceded_by_continuations(first_hash_col, locator.contents())
+-        .is_some();
++    let continuation = indexer.preceded_by_continuations(first_hash_col, locator.contents());
+ 
+     if let Some(mut diagnostic) = context
+         .report_diagnostic_if_enabled(EmptyComment, TextRange::new(first_hash_col, line.end()))
+@@ -111,8 +109,13 @@ fn empty_comment(context: &LintContext, range: TextRange, locator: &Locator, ind
+         diagnostic.set_fix(Fix::safe_edit(
+             if let Some(deletion_start_col) = deletion_start_col {
+                 Edit::deletion(line.start() + deletion_start_col, line.end())
+-            } else if is_on_same_logical_line {
+-                Edit::deletion(first_hash_col, line.end())
++            } else if let Some(continuation) = continuation {
++                // The comment ends the logical line that the continuation started, so delete the
++                // continuation along with the comment. Deleting only the comment can leave a
++                // dangling continuation: at the end of the file (`x = 0 \` + `#`), or when the
++                // continuation line ends in `\r` and the comment line in `\n`, which join into a
++                // single `\r\n` once the comment is gone.
++                Edit::deletion(continuation, line.end())
+             } else {
+                 Edit::range_deletion(locator.full_line_range(first_hash_col))
+             },
+diff --git a/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment_line_continuation.py.snap b/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment_line_continuation.py.snap
+index 15bcc33b096d3bf2f15bd4f5730a1d7d829ecf29..2289b807142348404ad54f73c9808adeb16580f4 100644
+--- a/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment_line_continuation.py.snap
++++ b/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment_line_continuation.py.snap
+@@ -27,8 +27,9 @@ PLR2044 [*] Line with empty comment
+   |
+ help: Delete the empty comment
+   |
+-2 | x = 0 \
++1 | #
++  - x = 0 \
+   - #
+-3 +
+-4 | +1
++2 + x = 0 
++3 | +1
+   |
+diff --git a/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment_line_continuation_eof.py.snap b/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment_line_continuation_eof.py.snap
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b88c2b694329e83b95390e4f4efe240e01b5990
+--- /dev/null
++++ b/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment_line_continuation_eof.py.snap
+@@ -0,0 +1,33 @@
++---
++source: crates/ruff_linter/src/rules/pylint/mod.rs
++---
++PLR2044 [*] Line with empty comment
++ --> empty_comment_line_continuation_eof.py:2:1
++  |
++1 | x = 0 \
++2 | #
++  | ^
++3 | y = 1 \
++4 | #
++  |
++help: Delete the empty comment
++  |
++  - x = 0 \  - #
++1 + x = 0 
++2 | y = 1 \
++  |
++
++PLR2044 [*] Line with empty comment
++ --> empty_comment_line_continuation_eof.py:4:1
++  |
++2 | #
++3 | y = 1 \
++4 | #
++  | ^
++help: Delete the empty comment
++  |
++2 | #
++  - y = 1 \
++  - #
++3 + y = 1 
++  |

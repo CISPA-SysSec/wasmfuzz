@@ -1,0 +1,41 @@
+Codegen: a single tuple context manager needs double parentheses (`with ((a, b)):`).
+Regression test included; fuzz repro: repro/fix-codegen-with-tuple.py (ruff_parse_idempotency).
+
+diff --git a/crates/ruff_python_codegen/src/generator.rs b/crates/ruff_python_codegen/src/generator.rs
+index f83aafd87aee36dcd396d1f0092f2da386739ea3..01cd379fd3ff50a5604fa6a92dcf2cee0a1f594b 100644
+--- a/crates/ruff_python_codegen/src/generator.rs
++++ b/crates/ruff_python_codegen/src/generator.rs
+@@ -524,11 +524,20 @@ impl<'a> Generator<'a> {
+                         self.p("async ");
+                     }
+                     self.p("with ");
++                    // `with (a, b):` has two context managers: a single tuple needs a
++                    // second pair of parentheses.
++                    let tuple_item = matches!(
++                        items.as_slice(),
++                        [WithItem { context_expr: Expr::Tuple(tuple), optional_vars: None, .. }]
++                            if !tuple.is_empty()
++                    );
++                    self.p_if(tuple_item, "(");
+                     let mut first = true;
+                     for item in items {
+                         self.p_delim(&mut first, ", ");
+                         self.unparse_with_item(item);
+                     }
++                    self.p_if(tuple_item, ")");
+                     self.p(":");
+                 });
+                 self.body(body);
+@@ -1974,6 +1983,12 @@ class Foo:
+         assert_round_trip!(r"x[:(a,), b]");
+         assert_round_trip!(r"x[::(a, b)]");
+         assert_round_trip!(r"(x := (*a, b))");
++        // A tuple context manager isn't a parenthesized list of context managers.
++        assert_round_trip!("with ((a, b)):\n    pass");
++        assert_round_trip!("with ((a,)):\n    pass");
++        assert_round_trip!("with (a, b), c:\n    pass");
++        assert_round_trip!("with (a, b) as c:\n    pass");
++        assert_round_trip!("with a, b:\n    pass");
+         // Class patterns, and `as`/`|` patterns nested in other `as`/`|` patterns.
+         assert_round_trip!(
+             r"match x:

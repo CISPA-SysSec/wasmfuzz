@@ -1,0 +1,46 @@
+noqa mappings: a shebang after a line continuation (`\\\n\t#!`) was pushed out of order
+(sorted-insertion assertion).
+Regression test included; fuzz repro: repro/fix-noqa-shebang-after-continuation.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/src/directives.rs b/crates/ruff_linter/src/directives.rs
+index ad9dbbed660b909ace91e58f29bef854e8d1263d..f99be5c087cf7c78a52572899c852bf45085fc62 100644
+--- a/crates/ruff_linter/src/directives.rs
++++ b/crates/ruff_linter/src/directives.rs
+@@ -190,10 +190,13 @@ fn extract_noqa_line_for(tokens: &Tokens, locator: &Locator, indexer: &Indexer)
+         left: all_mappings.peekable(),
+         right: continuation_mappings.into_iter().peekable(),
+     };
++    // The shebang isn't necessarily the first mapping: it can follow a line continuation
++    // (`\` + newline + `#!`).
++    let all_mappings = SortedMergeIter {
++        left: all_mappings.peekable(),
++        right: shebang_mapping.into_iter().peekable(),
++    };
+ 
+-    if let Some(mapping) = shebang_mapping {
+-        mappings.push_mapping(mapping);
+-    }
+     for mapping in all_mappings {
+         mappings.push_mapping(mapping);
+     }
+@@ -582,6 +585,20 @@ assert foo, \
+         );
+     }
+ 
++    #[test]
++    fn noqa_mapping_shebang_after_continuation() {
++        // Fuzz regression: the shebang mapping was inserted before the (preceding) continuation
++        // mapping, violating the sorted insertion order.
++        let contents = "\\\n\t#!\n";
++        assert_eq!(
++            noqa_mappings(contents),
++            NoqaMapping::from_iter([
++                TextRange::new(TextSize::from(0), TextSize::from(2)),
++                TextRange::new(TextSize::from(3), TextSize::from(6)),
++            ])
++        );
++    }
++
+     fn isort_directives(contents: &str) -> IsortDirectives {
+         let parsed = parse_module(contents).unwrap();
+         let locator = Locator::new(contents);

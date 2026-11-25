@@ -1,0 +1,97 @@
+Formatter: an expression statement that is a binary/bool/compare expression with comments
+must be parenthesized, or removed inner parentheses leave it unbreakable and unstable.
+Regression test included; fuzz repro: repro/fix-formatter-binary-statement-comments.py (ruff_formatter_idempotency).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/binary.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/binary.py
+index 439d0f1cc1459e9dabd41fc019c4623313569f1f..35199be166d589f3ebaced4d50dcb4be48fbd194 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/binary.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/binary.py
+@@ -444,3 +444,12 @@ t"hellooooooooooooooooooooooo \
+         worlddddddddddddddddddddddddddddddddd" + (aaaaaaaaaaaaaaaaaaaaaaaaaa + bbbbbbbbbbbbbbbbbbb)
+ aaaaaaaaaaa = t"hellooooooooooooooooooooooo \
+         worlddddddddddddddddddddddddddddddddd" + (aaaaaaaaaaaaaaaaaaaaaaaaaa + bbbbbbbbbbbbbbbbbbb)
++
++# Comments between nested parentheses of an operand are formatted outside of the kept
++# parentheses: the expression statement has to be parenthesized.
++s & (  # comment
++    (b)
++)
++s @ (  # comment
++    (b)
++) == c
+diff --git a/crates/ruff_python_formatter/src/statement/stmt_expr.rs b/crates/ruff_python_formatter/src/statement/stmt_expr.rs
+index e5073a7b355dda83d5494a2e5871f49e5707893b..76be73012a7533fc04689f5fd236aa86188ef834 100644
+--- a/crates/ruff_python_formatter/src/statement/stmt_expr.rs
++++ b/crates/ruff_python_formatter/src/statement/stmt_expr.rs
+@@ -13,7 +13,12 @@ impl FormatNodeRule<StmtExpr> for FormatStmtExpr {
+     fn fmt_fields(&self, item: &StmtExpr, f: &mut PyFormatter) -> FormatResult<()> {
+         let StmtExpr { value, .. } = item;
+ 
+-        if is_arithmetic_like(value) {
++        if is_arithmetic_like(value)
++            || (is_binary_like(value)
++                && f.context()
++                    .comments()
++                    .contains_comments(value.as_ref().into()))
++        {
+             maybe_parenthesize_expression(value, item, Parenthesize::Optional).fmt(f)?;
+         } else {
+             value.format().fmt(f)?;
+@@ -30,6 +35,16 @@ impl FormatNodeRule<StmtExpr> for FormatStmtExpr {
+     }
+ }
+ 
++/// Comments inside a binary-like expression can force line breaks between its operands, e.g. when
++/// the formatter removes redundant parentheses (`a & (  # comment\n (b))`), and an expression
++/// statement can only break inside parentheses.
++const fn is_binary_like(expression: &Expr) -> bool {
++    matches!(
++        expression,
++        Expr::BinOp(_) | Expr::BoolOp(_) | Expr::Compare(_)
++    )
++}
++
+ const fn is_arithmetic_like(expression: &Expr) -> bool {
+     matches!(
+         expression,
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@expression__binary.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@expression__binary.py.snap
+index a5f34628115c6c29d74066ee296c6ce41c5af9c5..e76d52cd12de39434aea2728d1ffe6a1664b5278 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@expression__binary.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@expression__binary.py.snap
+@@ -450,6 +450,15 @@ t"hellooooooooooooooooooooooo \
+         worlddddddddddddddddddddddddddddddddd" + (aaaaaaaaaaaaaaaaaaaaaaaaaa + bbbbbbbbbbbbbbbbbbb)
+ aaaaaaaaaaa = t"hellooooooooooooooooooooooo \
+         worlddddddddddddddddddddddddddddddddd" + (aaaaaaaaaaaaaaaaaaaaaaaaaa + bbbbbbbbbbbbbbbbbbb)
++
++# Comments between nested parentheses of an operand are formatted outside of the kept
++# parentheses: the expression statement has to be parenthesized.
++s & (  # comment
++    (b)
++)
++s @ (  # comment
++    (b)
++) == c
+ ```
+ 
+ ## Output
+@@ -958,4 +967,20 @@ aaaaaaaaaaa = (
+         worlddddddddddddddddddddddddddddddddd"
+     + (aaaaaaaaaaaaaaaaaaaaaaaaaa + bbbbbbbbbbbbbbbbbbb)
+ )
++
++# Comments between nested parentheses of an operand are formatted outside of the kept
++# parentheses: the expression statement has to be parenthesized.
++(
++    s
++    &
++    # comment
++    (b)
++)
++(
++    s
++    @
++    # comment
++    (b)
++    == c
++)
+ ```

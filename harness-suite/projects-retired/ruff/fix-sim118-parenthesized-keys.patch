@@ -1,0 +1,116 @@
+SIM118: `key in (obj.keys)()` deleted `.keys)()` across the closing parenthesis.
+Regression test included; fuzz repro: repro/fix-sim118-parenthesized-keys.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM118.py b/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM118.py
+index 79afeb5d843e7ec68029f3e930c69bf159d747dc..d406a9b234b2adb2956877d5197db425e78bacd6 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM118.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM118.py
+@@ -63,3 +63,7 @@ from builtins import dict as SneakyDict
+ 
+ d = SneakyDict()
+ key in d.keys()  # SIM118
++
++# Parenthesized attribute
++key in (obj.keys)()
++key in (obj.keys)()or x
+diff --git a/crates/ruff_linter/src/rules/flake8_simplify/rules/key_in_dict.rs b/crates/ruff_linter/src/rules/flake8_simplify/rules/key_in_dict.rs
+index 3d4aa01f271a54bbd559973ca32030b49a1949f3..348e57db0598c048aec32fee8b05090fdd7d913e 100644
+--- a/crates/ruff_linter/src/rules/flake8_simplify/rules/key_in_dict.rs
++++ b/crates/ruff_linter/src/rules/flake8_simplify/rules/key_in_dict.rs
+@@ -60,7 +60,7 @@ impl AlwaysFixableViolation for InDictKeys {
+ fn key_in_dict(checker: &Checker, left: &Expr, right: &Expr, operator: CmpOp, parent: AnyNodeRef) {
+     let Expr::Call(ast::ExprCall {
+         func,
+-        arguments: Arguments { args, keywords, .. },
++        arguments: arguments @ Arguments { args, keywords, .. },
+         range_start: _,
+         node_index: _,
+     }) = &right
+@@ -132,29 +132,28 @@ fn key_in_dict(checker: &Checker, left: &Expr, right: &Expr, operator: CmpOp, pa
+             }
+         };
+ 
++        // Delete `.keys` and the call parentheses separately: the attribute may be parenthesized,
++        // as in `key in (foo.keys)()`.
++        let keys_edit = Edit::deletion(dot.start(), func.end());
++
+         // If the `.keys()` is followed by (e.g.) a keyword, we need to insert a space,
+         // since we're removing parentheses, which could lead to invalid syntax, as in:
+         // ```python
+         // if key in foo.keys()and bar:
+         // ```
+-        let range = TextRange::new(dot.start(), right.end());
+-        if checker
++        let range = arguments.range();
++        let call_edit = if checker
+             .locator()
+             .after(range.end())
+             .chars()
+             .next()
+             .is_some_and(|char| char.is_ascii_alphabetic())
+         {
+-            diagnostic.set_fix(Fix::applicable_edit(
+-                Edit::range_replacement(" ".to_string(), range),
+-                applicability,
+-            ));
++            Edit::range_replacement(" ".to_string(), range)
+         } else {
+-            diagnostic.set_fix(Fix::applicable_edit(
+-                Edit::range_deletion(range),
+-                applicability,
+-            ));
+-        }
++            Edit::range_deletion(range)
++        };
++        diagnostic.set_fix(Fix::applicable_edits(keys_edit, [call_edit], applicability));
+     }
+ }
+ 
+diff --git a/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__in-dict-keys_SIM118.py.snap b/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__in-dict-keys_SIM118.py.snap
+index 9edee0fda8c793514e35e4cc0e056106298f53aa..8fdf36a96495655692206012f8b47abda8c43503 100644
+--- a/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__in-dict-keys_SIM118.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__in-dict-keys_SIM118.py.snap
+@@ -352,9 +352,43 @@ SIM118 [*] Use `key in dict` instead of `key in dict.keys()`
+ 64 | d = SneakyDict()
+ 65 | key in d.keys()  # SIM118
+    | ^^^^^^^^^^^^^^^
++66 |
++67 | # Parenthesized attribute
++   |
+ help: Remove `.keys()`
+    |
+ 64 | d = SneakyDict()
+    - key in d.keys()  # SIM118
+ 65 + key in d  # SIM118
++66 |
++   |
++
++SIM118 [*] Use `key in dict` instead of `key in dict.keys()`
++  --> SIM118.py:68:1
++   |
++67 | # Parenthesized attribute
++68 | key in (obj.keys)()
++   | ^^^^^^^^^^^^^^^^^^^
++69 | key in (obj.keys)()or x
++   |
++help: Remove `.keys()`
++   |
++67 | # Parenthesized attribute
++   - key in (obj.keys)()
++68 + key in (obj)
++69 | key in (obj.keys)()or x
++   |
++
++SIM118 [*] Use `key in dict` instead of `key in dict.keys()`
++  --> SIM118.py:69:1
++   |
++67 | # Parenthesized attribute
++68 | key in (obj.keys)()
++69 | key in (obj.keys)()or x
++   | ^^^^^^^^^^^^^^^^^^^
++help: Remove `.keys()`
++   |
++68 | key in (obj.keys)()
++   - key in (obj.keys)()or x
++69 + key in (obj) or x
+    |

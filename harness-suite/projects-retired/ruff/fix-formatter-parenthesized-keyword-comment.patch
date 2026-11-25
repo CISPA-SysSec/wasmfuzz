@@ -1,0 +1,87 @@
+Formatter: a comment inside the parentheses of a keyword argument name (`t((#\nc)=4)`) is a
+leading comment of the keyword.
+Regression test included; fuzz repro: repro/fix-formatter-parenthesized-keyword-comment.py (ruff_formatter_idempotency).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/call.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/call.py
+index f635ec9685b7f39280fbbd1d699003a0bd15134f..f3ec8708bc67b0d794c2d489c1ba820701f5d561 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/call.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/call.py
+@@ -273,3 +273,12 @@ result = (
+ 
+ 
+ result = (object[complicate_caller])("argument").a["b"].test(argument)
++
++# Fuzz regression: comments in the parentheses around a keyword argument name (valid before
++# Python 3.8)
++t((#
++c)=4)
++[a((#
++w)=a)]
++t((c#
++)=4)
+diff --git a/crates/ruff_python_formatter/src/comments/placement.rs b/crates/ruff_python_formatter/src/comments/placement.rs
+index 7bfd929b00c878ad440db170ecbe29c202f37d72..619505868bdf5160a3d73c0b145d43936e344650 100644
+--- a/crates/ruff_python_formatter/src/comments/placement.rs
++++ b/crates/ruff_python_formatter/src/comments/placement.rs
+@@ -1258,6 +1258,17 @@ fn handle_keyword_comment<'a>(
+ ) -> CommentPlacement<'a> {
+     let start = keyword.arg.as_ref().map_or(keyword.start(), Ranged::end);
+ 
++    // The name of a keyword argument can be parenthesized before Python 3.8, and the formatter
++    // removes these parentheses. A comment inside them precedes the name:
++    // ```python
++    // func((  # comment
++    //     x
++    // )=1)
++    // ```
++    if comment.start() < start {
++        return CommentPlacement::leading(comment.enclosing_node(), comment);
++    }
++
+     // If the comment is parenthesized, it should be attached to the value:
+     // ```python
+     // func(
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@expression__call.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@expression__call.py.snap
+index 6feb06a6ac5193dd98a40ae9023f06b39b85931d..6b6a852df61b0734d4e2ab023f48dd9981657ae0 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@expression__call.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@expression__call.py.snap
+@@ -279,6 +279,15 @@ result = (
+ 
+ 
+ result = (object[complicate_caller])("argument").a["b"].test(argument)
++
++# Fuzz regression: comments in the parentheses around a keyword argument name (valid before
++# Python 3.8)
++t((#
++c)=4)
++[a((#
++w)=a)]
++t((c#
++)=4)
+ ```
+ 
+ ## Output
+@@ -555,6 +564,23 @@ result = (
+ 
+ 
+ result = (object[complicate_caller])("argument").a["b"].test(argument)
++
++# Fuzz regression: comments in the parentheses around a keyword argument name (valid before
++# Python 3.8)
++t(
++    #
++    c=4
++)
++[
++    a(
++        #
++        w=a
++    )
++]
++t(
++    #
++    c=4
++)
+ ```
+ 
+ 

@@ -1,0 +1,187 @@
+Formatter: the quote-flip check for nested triple-quoted literals looked at the literal's own
+quote; in 3.12+ input (`f'{''''z'''}'`) the quotes oscillated between runs.
+Regression test included; fuzz repro: repro/fix-formatter-fstring-nested-quote.py (ruff_formatter_idempotency).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/nested_string_quote_style.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/nested_string_quote_style.py
+index 76657855ca32f740070256ca4a728bdf027fee67..e32f2e020ad9eae920b0ccdd68b491ca6553976f 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/nested_string_quote_style.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/nested_string_quote_style.py
+@@ -88,3 +88,9 @@ t'{v:{d["n"]}}'
+ 
+ # A nested f-string inside a format spec adds another level of nesting.
+ f'''{v:{f"{d['n']}"}}'''
++
++# 3.12+ syntax: a nested triple-quoted literal that reuses the outer quote.
++# The quote check must look at the quote the outer f-string would get, not at the
++# nested literal's own quote, or the quotes oscillate between formatter runs.
++f'{''''z'''}'
++f"{"""'z"""}"
+diff --git a/crates/ruff_python_formatter/src/string/implicit.rs b/crates/ruff_python_formatter/src/string/implicit.rs
+index 8f577b41c30da5e96ef024fac0320e33f9de2d39..6b5eee9bf79fe33b6dcfb42245a1cab7dbd3a8c8 100644
+--- a/crates/ruff_python_formatter/src/string/implicit.rs
++++ b/crates/ruff_python_formatter/src/string/implicit.rs
+@@ -194,7 +194,9 @@ impl<'a> FormatImplicitConcatenatedStringFlat<'a> {
+                         // * When joining parts that contain triple quoted strings with quotes: `f"{'''test ' '''}" f'{"""other " """}'`
+                         else if is_fstring_with_quoted_debug_expression(fstring, context)
+                             || is_fstring_with_triple_quoted_literal_expression_containing_quotes(
+-                                fstring, context,
++                                fstring,
++                                part.flags().quote_style().opposite(),
++                                context,
+                             )
+                         {
+                             if preserve_quotes_requirement
+diff --git a/crates/ruff_python_formatter/src/string/normalize.rs b/crates/ruff_python_formatter/src/string/normalize.rs
+index 7c4e6181a7d7b4f423a4f793b774e5f57eeaf540..59d74e41464663c9deb99a986395ead13f8fad2b 100644
+--- a/crates/ruff_python_formatter/src/string/normalize.rs
++++ b/crates/ruff_python_formatter/src/string/normalize.rs
+@@ -102,10 +102,13 @@ impl<'a, 'src> StringNormalizer<'a, 'src> {
+ 
+                     // An f-string expression that contains a triple quoted string literal
+                     // expression that contains a quote.
+-                    if is_fstring_with_triple_quoted_literal_expression_containing_quotes(
+-                        fstring,
+-                        self.context,
+-                    ) {
++                    if let Ok(preferred_quote) = Quote::try_from(preferred_quote_style)
++                        && is_fstring_with_triple_quoted_literal_expression_containing_quotes(
++                            fstring,
++                            preferred_quote,
++                            self.context,
++                        )
++                    {
+                         return QuoteStyle::Preserve;
+                     }
+                 }
+@@ -946,12 +949,19 @@ pub(super) fn is_fstring_with_quoted_debug_expression(
+ /// ```python
+ /// f"{'''other " '''}'
+ /// ```
++///
++/// `quote` is the quote that the outer f-string would use: it must not appear in the nested
++/// literals. In valid pre-3.12 code, the nested literals use the opposite quote of the outer
++/// f-string, but the input can be 3.12+ code that reuses the outer quote (`f'{''''a'''}'`):
++/// checking the nested literal's own quote made the quotes oscillate between runs.
+ pub(super) fn is_fstring_with_triple_quoted_literal_expression_containing_quotes(
+     fstring: &FString,
++    quote: Quote,
+     context: &PyFormatContext,
+ ) -> bool {
+     struct Visitor<'a> {
+         context: &'a PyFormatContext<'a>,
++        quote: Quote,
+         found: bool,
+     }
+ 
+@@ -963,12 +973,12 @@ pub(super) fn is_fstring_with_triple_quoted_literal_expression_containing_quotes
+ 
+             let contains_quotes = match part {
+                 StringLikePart::String(_) | StringLikePart::Bytes(_) => {
+-                    self.contains_quote(part.content_range(), part.flags())
++                    self.contains_quote(part.content_range())
+                 }
+                 StringLikePart::FString(fstring) => {
+                     let mut contains_quotes = false;
+                     for literal in fstring.elements.literals() {
+-                        if self.contains_quote(literal.range(), fstring.flags.into()) {
++                        if self.contains_quote(literal.range()) {
+                             contains_quotes = true;
+                             break;
+                         }
+@@ -979,7 +989,7 @@ pub(super) fn is_fstring_with_triple_quoted_literal_expression_containing_quotes
+                 StringLikePart::TString(tstring) => {
+                     let mut contains_quotes = false;
+                     for literal in tstring.elements.literals() {
+-                        if self.contains_quote(literal.range(), tstring.flags.into()) {
++                        if self.contains_quote(literal.range()) {
+                             contains_quotes = true;
+                             break;
+                         }
+@@ -994,8 +1004,8 @@ pub(super) fn is_fstring_with_triple_quoted_literal_expression_containing_quotes
+             }
+         }
+ 
+-        fn contains_quote(&self, range: TextRange, flags: AnyStringFlags) -> bool {
+-            self.context.source()[range].contains(flags.quote_style().as_char())
++        fn contains_quote(&self, range: TextRange) -> bool {
++            self.context.source()[range].contains(self.quote.as_char())
+         }
+     }
+ 
+@@ -1015,6 +1025,7 @@ pub(super) fn is_fstring_with_triple_quoted_literal_expression_containing_quotes
+ 
+     let mut visitor = Visitor {
+         context,
++        quote,
+         found: false,
+     };
+ 
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@expression__nested_string_quote_style.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@expression__nested_string_quote_style.py.snap
+index 9a449b680d43716f46c4da44ed344f163b5b9d74..6b44f61139ebe8770cc495ab5738730aea851cec 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@expression__nested_string_quote_style.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@expression__nested_string_quote_style.py.snap
+@@ -94,6 +94,12 @@ t'{v:{d["n"]}}'
+ 
+ # A nested f-string inside a format spec adds another level of nesting.
+ f'''{v:{f"{d['n']}"}}'''
++
++# 3.12+ syntax: a nested triple-quoted literal that reuses the outer quote.
++# The quote check must look at the quote the outer f-string would get, not at the
++# nested literal's own quote, or the quotes oscillate between formatter runs.
++f'{''''z'''}'
++f"{"""'z"""}"
+ ```
+ 
+ ## Outputs
+@@ -204,6 +210,12 @@ t"{v:{d['n']}}"
+ 
+ # A nested f-string inside a format spec adds another level of nesting.
+ f"""{v:{f"{d['n']}"}}"""
++
++# 3.12+ syntax: a nested triple-quoted literal that reuses the outer quote.
++# The quote check must look at the quote the outer f-string would get, not at the
++# nested literal's own quote, or the quotes oscillate between formatter runs.
++f"{''''z'''}"
++f"{''''z'''}"
+ ```
+ 
+ 
+@@ -314,6 +326,12 @@ t"{v:{d["n"]}}"
+ 
+ # A nested f-string inside a format spec adds another level of nesting.
+ f"""{v:{f"{d["n"]}"}}"""
++
++# 3.12+ syntax: a nested triple-quoted literal that reuses the outer quote.
++# The quote check must look at the quote the outer f-string would get, not at the
++# nested literal's own quote, or the quotes oscillate between formatter runs.
++f"{"""'z"""}"
++f"{"""'z"""}"
+ ```
+ 
+ 
+@@ -424,6 +442,12 @@ t"{v:{d['n']}}"
+ 
+ # A nested f-string inside a format spec adds another level of nesting.
+ f"""{v:{f"{d['n']}"}}"""
++
++# 3.12+ syntax: a nested triple-quoted literal that reuses the outer quote.
++# The quote check must look at the quote the outer f-string would get, not at the
++# nested literal's own quote, or the quotes oscillate between formatter runs.
++f"{''''z'''}"
++f"{''''z'''}"
+ ```
+ 
+ 
+@@ -560,6 +584,12 @@ t"{v:{d['n']}}"
+ 
+ # A nested f-string inside a format spec adds another level of nesting.
+ f"""{v:{f"{d['n']}"}}"""
++
++# 3.12+ syntax: a nested triple-quoted literal that reuses the outer quote.
++# The quote check must look at the quote the outer f-string would get, not at the
++# nested literal's own quote, or the quotes oscillate between formatter runs.
++f"{''''z'''}"
++f"{''''z'''}"
+ ```
+ 
+ 

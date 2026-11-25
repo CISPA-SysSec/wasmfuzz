@@ -1,0 +1,98 @@
+Codegen: class patterns were unparsed as nothing (`case C():` became `case :`), and nested
+as/or patterns lost their required parentheses.
+Regression test included; fuzz repro: repro/fix-codegen-match-class-pattern.py (ruff_parse_idempotency).
+
+diff --git a/crates/ruff_python_codegen/src/generator.rs b/crates/ruff_python_codegen/src/generator.rs
+index c931e89dce6736bd66c3d3d0582d9a97487a360a..369395d29adf77390a647342ad08bfc461972a8c 100644
+--- a/crates/ruff_python_codegen/src/generator.rs
++++ b/crates/ruff_python_codegen/src/generator.rs
+@@ -767,6 +767,18 @@ impl<'a> Generator<'a> {
+         }
+     }
+ 
++    fn unparse_pattern_parenthesized(&mut self, ast: &Pattern, parenthesize: bool) {
++        // A bare capture pattern (`case x as y`) doesn't need parentheses.
++        let parenthesize = parenthesize
++            && !matches!(
++                ast,
++                Pattern::MatchAs(ast::PatternMatchAs { pattern: None, .. })
++            );
++        self.p_if(parenthesize, "(");
++        self.unparse_pattern(ast);
++        self.p_if(parenthesize, ")");
++    }
++
+     fn unparse_pattern(&mut self, ast: &Pattern) {
+         match ast {
+             Pattern::MatchValue(ast::PatternMatchValue {
+@@ -818,7 +830,27 @@ impl<'a> Generator<'a> {
+                 }
+                 self.p("}");
+             }
+-            Pattern::MatchClass(_) => {}
++            Pattern::MatchClass(ast::PatternMatchClass {
++                cls,
++                arguments,
++                range: _,
++                node_index: _,
++            }) => {
++                self.unparse_expr(cls, precedence::MAX);
++                self.p("(");
++                let mut first = true;
++                for pattern in &arguments.patterns {
++                    self.p_delim(&mut first, ", ");
++                    self.unparse_pattern(pattern);
++                }
++                for keyword in &arguments.keywords {
++                    self.p_delim(&mut first, ", ");
++                    self.p_id(&keyword.attr);
++                    self.p("=");
++                    self.unparse_pattern(&keyword.pattern);
++                }
++                self.p(")");
++            }
+             Pattern::MatchStar(ast::PatternMatchStar {
+                 name,
+                 range: _,
+@@ -838,7 +870,8 @@ impl<'a> Generator<'a> {
+                 node_index: _,
+             }) => {
+                 if let Some(pattern) = pattern {
+-                    self.unparse_pattern(pattern);
++                    // `(a as b) as c` and `(a | b) as c`
++                    self.unparse_pattern_parenthesized(pattern, pattern.is_match_as());
+                     self.p(" as ");
+                 }
+                 if let Some(name) = name {
+@@ -855,7 +888,11 @@ impl<'a> Generator<'a> {
+                 let mut first = true;
+                 for pattern in patterns {
+                     self.p_delim(&mut first, " | ");
+-                    self.unparse_pattern(pattern);
++                    // `a | (b as c)` and `a | (b | c)`
++                    self.unparse_pattern_parenthesized(
++                        pattern,
++                        pattern.is_match_as() || pattern.is_match_or(),
++                    );
+                 }
+             }
+         }
+@@ -1926,6 +1963,18 @@ class Foo:
+         // The value is an `expression`, not an `expressions` list.
+         assert_round_trip!(r"type Foo = (int, str)");
+         assert_round_trip!(r"type Foo = (yield)");
++        // Class patterns, and `as`/`|` patterns nested in other `as`/`|` patterns.
++        assert_round_trip!(
++            r"match x:
++    case C():
++        pass
++    case C(1, [a, b], d=2, e=f.g()):
++        pass
++    case (a as b) as c:
++        pass
++    case a | (b as c) | (d | e) as f:
++        pass"
++        );
+         // https://github.com/astral-sh/ruff/issues/6498
+         assert_round_trip!(r"f(a=1, *args, **kwargs)");
+         assert_round_trip!(r"f(*args, a=1, **kwargs)");

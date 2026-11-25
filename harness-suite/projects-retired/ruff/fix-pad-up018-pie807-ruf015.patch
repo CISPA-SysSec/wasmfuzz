@@ -1,0 +1,207 @@
+UP018/PIE807/RUF015: pad the replacement (`bool()or x` became `Falseor x`).
+Regression test included; fuzz repro: repro/fix-pad-up018-pie807-ruf015.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_pie/PIE807.py b/crates/ruff_linter/resources/test/fixtures/flake8_pie/PIE807.py
+index d4bb5ac089e03a3cb54baf5670dc29785ebde347..dc7f19608e6fd5fffbd7e304d39b0b857be83544 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_pie/PIE807.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_pie/PIE807.py
+@@ -35,3 +35,6 @@ lambda **kwargs: []
+ lambda **kwargs: {}
+ 
+ lambda: {**unwrap}
++
++# Replacements next to keywords need padding
++[lambda:[]for x in y]
+diff --git a/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP018.py b/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP018.py
+index 32f3f6fad511286a35d9d13db8d5b6d784fee82f..552d80a4f81f4d242a83b32aa205d4522b45d35f 100644
+--- a/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP018.py
++++ b/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP018.py
+@@ -111,3 +111,7 @@ complex(real=0j)
+ (complex(0j)).real
+ complex(1j).real
+ complex(real=1j).real
++
++# Replacements next to keywords need padding
++bool()or x
++x if bool()else y
+diff --git a/crates/ruff_linter/resources/test/fixtures/ruff/RUF015.py b/crates/ruff_linter/resources/test/fixtures/ruff/RUF015.py
+index b813297ce7605d21c3ad2d7d46ccedc1d2a92b50..1f65d7a8ce25fb56f56bfe6f3c70849eed9e2cc8 100644
+--- a/crates/ruff_linter/resources/test/fixtures/ruff/RUF015.py
++++ b/crates/ruff_linter/resources/test/fixtures/ruff/RUF015.py
+@@ -71,3 +71,6 @@ list(x).remove(1)
+ def test():
+     zip = list  # Overwrite the builtin zip
+     list(zip(x, y))[0]
++
++# Replacements next to keywords need padding
++x in[y for y in z][0]
+diff --git a/crates/ruff_linter/src/rules/flake8_pie/rules/reimplemented_container_builtin.rs b/crates/ruff_linter/src/rules/flake8_pie/rules/reimplemented_container_builtin.rs
+index 57c4d36e1b3d54602414182a5393b9d09d7bbbcf..2b0224f97511a15b9ee407c653bb0248559e3f0d 100644
+--- a/crates/ruff_linter/src/rules/flake8_pie/rules/reimplemented_container_builtin.rs
++++ b/crates/ruff_linter/src/rules/flake8_pie/rules/reimplemented_container_builtin.rs
+@@ -5,6 +5,7 @@ use ruff_text_size::Ranged;
+ 
+ use crate::checkers::ast::Checker;
+ use crate::codes::Category;
++use crate::fix::edits::pad;
+ use crate::{Edit, Fix};
+ use crate::{FixAvailability, Violation};
+ 
+@@ -85,7 +86,9 @@ pub(crate) fn reimplemented_container_builtin(checker: &Checker, expr: &ExprLamb
+             expr.start(),
+             checker.semantic(),
+         )?;
+-        let binding_edit = Edit::range_replacement(binding, expr.range());
++        // Ex) `[lambda:[]for x in y]` becomes `[list for x in y]`, not `[listfor x in y]`.
++        let binding_edit =
++            Edit::range_replacement(pad(binding, expr.range(), checker.locator()), expr.range());
+         Ok(Fix::safe_edits(binding_edit, import_edit))
+     });
+ }
+diff --git a/crates/ruff_linter/src/rules/flake8_pie/snapshots/ruff_linter__rules__flake8_pie__tests__reimplemented-container-builtin_PIE807.py.snap b/crates/ruff_linter/src/rules/flake8_pie/snapshots/ruff_linter__rules__flake8_pie__tests__reimplemented-container-builtin_PIE807.py.snap
+index 3054374f38a2e6475610a58e3fc8a814fd12123f..3d372373c69ad4d71b36f0f686c5767e8ced37b6 100644
+--- a/crates/ruff_linter/src/rules/flake8_pie/snapshots/ruff_linter__rules__flake8_pie__tests__reimplemented-container-builtin_PIE807.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_pie/snapshots/ruff_linter__rules__flake8_pie__tests__reimplemented-container-builtin_PIE807.py.snap
+@@ -94,3 +94,16 @@ help: Replace with `lambda` with `dict`
+ 14 +     bar = fields.ListField(default=dict)  # PIE807
+ 15 |
+    |
++
++PIE807 [*] Prefer `list` over useless lambda
++  --> PIE807.py:40:2
++   |
++39 | # Replacements next to keywords need padding
++40 | [lambda:[]for x in y]
++   |  ^^^^^^^^^
++help: Replace with `lambda` with `list`
++   |
++39 | # Replacements next to keywords need padding
++   - [lambda:[]for x in y]
++40 + [list for x in y]
++   |
+diff --git a/crates/ruff_linter/src/rules/pyupgrade/rules/native_literals.rs b/crates/ruff_linter/src/rules/pyupgrade/rules/native_literals.rs
+index 58f74144f77d0483e73142f52aa04e9f5fb26b27..dc558ec55392eef005334374d79bf75ad9b9e304 100644
+--- a/crates/ruff_linter/src/rules/pyupgrade/rules/native_literals.rs
++++ b/crates/ruff_linter/src/rules/pyupgrade/rules/native_literals.rs
+@@ -8,6 +8,7 @@ use ruff_text_size::{Ranged, TextRange};
+ 
+ use crate::checkers::ast::Checker;
+ use crate::codes::Category;
++use crate::fix::edits::pad;
+ use crate::{AlwaysFixableViolation, Applicability, Edit, Fix};
+ 
+ #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+@@ -246,6 +247,9 @@ pub(crate) fn native_literals(
+                 content = format!("({content})");
+             }
+ 
++            // Ex) `bool()or x` becomes `False or x`, not `Falseor x`.
++            let content = pad(content, call.range(), checker.locator());
++
+             diagnostic.set_fix(Fix::safe_edit(Edit::range_replacement(
+                 content,
+                 call.range(),
+diff --git a/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP018.py.snap b/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP018.py.snap
+index a331620e672b7bfee6157ae713adfdeb37ef1f9d..9fc7d2bce43d077ba2eec34c9514d41bcf0ead0b 100644
+--- a/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP018.py.snap
++++ b/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP018.py.snap
+@@ -862,9 +862,43 @@ UP018 [*] Unnecessary `complex` call (rewrite as a literal)
+ 112 | complex(1j).real
+ 113 | complex(real=1j).real
+     | ^^^^^^^^^^^^^^^^
++114 |
++115 | # Replacements next to keywords need padding
++    |
+ help: Replace with complex literal
+     |
+ 112 | complex(1j).real
+     - complex(real=1j).real
+ 113 + 1j.real
++114 |
++    |
++
++UP018 [*] Unnecessary `bool` call (rewrite as a literal)
++   --> UP018.py:116:1
++    |
++115 | # Replacements next to keywords need padding
++116 | bool()or x
++    | ^^^^^^
++117 | x if bool()else y
++    |
++help: Replace with boolean literal
++    |
++115 | # Replacements next to keywords need padding
++    - bool()or x
++116 + False or x
++117 | x if bool()else y
++    |
++
++UP018 [*] Unnecessary `bool` call (rewrite as a literal)
++   --> UP018.py:117:6
++    |
++115 | # Replacements next to keywords need padding
++116 | bool()or x
++117 | x if bool()else y
++    |      ^^^^^^
++help: Replace with boolean literal
++    |
++116 | bool()or x
++    - x if bool()else y
++117 + x if False else y
+     |
+diff --git a/crates/ruff_linter/src/rules/ruff/rules/unnecessary_iterable_allocation_for_first_element.rs b/crates/ruff_linter/src/rules/ruff/rules/unnecessary_iterable_allocation_for_first_element.rs
+index ac3605d09bd2ec1ea69e3002fe7e6b62e8edad95..283712e172bde7f57e5475fbb0063c709d8db83c 100644
+--- a/crates/ruff_linter/src/rules/ruff/rules/unnecessary_iterable_allocation_for_first_element.rs
++++ b/crates/ruff_linter/src/rules/ruff/rules/unnecessary_iterable_allocation_for_first_element.rs
+@@ -8,6 +8,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
+ 
+ use crate::checkers::ast::Checker;
+ use crate::codes::Category;
++use crate::fix::edits::pad;
+ use crate::fix::snippet::SourceCodeSnippet;
+ use crate::{AlwaysFixableViolation, Edit, Fix};
+ 
+@@ -124,8 +125,9 @@ pub(crate) fn unnecessary_iterable_allocation_for_first_element(checker: &Checke
+         expr.range(),
+     );
+ 
++    // Ex) `x in[y for y in z][0]` becomes `x in next(y for y in z)`, not `x innext(...)`.
+     diagnostic.set_fix(Fix::unsafe_edit(Edit::range_replacement(
+-        format!("next({iterable})"),
++        pad(format!("next({iterable})"), expr.range(), checker.locator()),
+         expr.range(),
+     )));
+ }
+diff --git a/crates/ruff_linter/src/rules/ruff/snapshots/ruff_linter__rules__ruff__tests__unnecessary-iterable-allocation-for-first-element_RUF015.py.snap b/crates/ruff_linter/src/rules/ruff/snapshots/ruff_linter__rules__ruff__tests__unnecessary-iterable-allocation-for-first-element_RUF015.py.snap
+index 87d7c0c429ea4b4767de326126f8c0a0a8e2e057..d132107dc379fb117a6b601d113ee550f8642792 100644
+--- a/crates/ruff_linter/src/rules/ruff/snapshots/ruff_linter__rules__ruff__tests__unnecessary-iterable-allocation-for-first-element_RUF015.py.snap
++++ b/crates/ruff_linter/src/rules/ruff/snapshots/ruff_linter__rules__ruff__tests__unnecessary-iterable-allocation-for-first-element_RUF015.py.snap
+@@ -430,10 +430,28 @@ RUF015 [*] Prefer `next(iter(zip(x, y)))` over single element slice
+ 72 |     zip = list  # Overwrite the builtin zip
+ 73 |     list(zip(x, y))[0]
+    |     ^^^^^^^^^^^^^^^^^^
++74 |
++75 | # Replacements next to keywords need padding
++   |
+ help: Replace with `next(iter(zip(x, y)))`
+    |
+ 72 |     zip = list  # Overwrite the builtin zip
+    -     list(zip(x, y))[0]
+ 73 +     next(iter(zip(x, y)))
++74 |
++   |
++note: This is an unsafe fix and may change runtime behavior
++
++RUF015 [*] Prefer `next(iter(z))` over single element slice
++  --> RUF015.py:76:5
++   |
++75 | # Replacements next to keywords need padding
++76 | x in[y for y in z][0]
++   |     ^^^^^^^^^^^^^^^^^
++help: Replace with `next(iter(z))`
++   |
++75 | # Replacements next to keywords need padding
++   - x in[y for y in z][0]
++76 + x in next(iter(z))
+    |
+ note: This is an unsafe fix and may change runtime behavior

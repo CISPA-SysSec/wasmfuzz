@@ -1,0 +1,103 @@
+Linter: deferred lambdas in a string annotation lost the parsed annotation tokens, so F632
+looked up annotation-relative ranges in the file tokens and panicked.
+Regression test included; fuzz repro: repro/fix-linter-deferred-lambda-annotation.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/pyflakes/F632.py b/crates/ruff_linter/resources/test/fixtures/pyflakes/F632.py
+index ce1fe2decdee2303ecea02e121248ff7c281adc8..18c87c36ba4b6929ff98ed71ea17ceca7e75aa21 100644
+--- a/crates/ruff_linter/resources/test/fixtures/pyflakes/F632.py
++++ b/crates/ruff_linter/resources/test/fixtures/pyflakes/F632.py
+@@ -32,3 +32,7 @@ if values[1is not None ] is not '-':
+ 
+ # Regression test for https://github.com/astral-sh/ruff/issues/11736
+ variable: "123 is not y"
++
++# A lambda in a string annotation is visited after the annotation: its fix still needs
++# the tokens of the parsed annotation.
++x: "lambda: 0 is ()"
+diff --git a/crates/ruff_linter/src/checkers/ast/deferred.rs b/crates/ruff_linter/src/checkers/ast/deferred.rs
+index 5dc9bfe789114ae943a4af8d05e67fa034a639a0..ed32085e690a69399484004648c0a4b23860e20f 100644
+--- a/crates/ruff_linter/src/checkers/ast/deferred.rs
++++ b/crates/ruff_linter/src/checkers/ast/deferred.rs
+@@ -1,4 +1,5 @@
+ use ruff_python_ast::{Expr, ExprStringLiteral};
++use ruff_python_parser::typing::ParsedAnnotation;
+ use ruff_python_semantic::{ScopeId, Snapshot};
+ 
+ /// A collection of AST nodes that are deferred for later visitation. Used to, e.g., store
+@@ -10,7 +11,9 @@ pub(crate) struct Visit<'a> {
+     pub(crate) future_type_definitions: Vec<(&'a Expr, Snapshot)>,
+     pub(crate) type_param_definitions: Vec<(&'a Expr, Snapshot)>,
+     pub(crate) functions: Vec<Snapshot>,
+-    pub(crate) lambdas: Vec<Snapshot>,
++    /// A lambda in a string type definition keeps the parsed annotation, whose tokens its
++    /// body's ranges refer to.
++    pub(crate) lambdas: Vec<(Snapshot, Option<&'a ParsedAnnotation>)>,
+     /// N.B. This field should always be empty unless it's a stub file
+     pub(crate) class_bases: Vec<(&'a Expr, Snapshot)>,
+ }
+diff --git a/crates/ruff_linter/src/checkers/ast/mod.rs b/crates/ruff_linter/src/checkers/ast/mod.rs
+index 8758dc480cc38f6e4326d954c77f4205ef2121c2..cc5e207eb363427199855f72797379cdc0826da7 100644
+--- a/crates/ruff_linter/src/checkers/ast/mod.rs
++++ b/crates/ruff_linter/src/checkers/ast/mod.rs
+@@ -1896,7 +1896,9 @@ impl<'a> Visitor<'a> for Checker<'a> {
+                 }
+ 
+                 self.semantic.push_scope(ScopeKind::Lambda(lambda));
+-                self.visit.lambdas.push(self.semantic.snapshot());
++                self.visit
++                    .lambdas
++                    .push((self.semantic.snapshot(), self.parsed_type_annotation));
+                 self.analyze.lambdas.push(self.semantic.snapshot());
+             }
+             Expr::If(ast::ExprIf {
+@@ -3320,8 +3322,9 @@ impl<'a> Checker<'a> {
+         let snapshot = self.semantic.snapshot();
+         while !self.visit.lambdas.is_empty() {
+             let lambdas = std::mem::take(&mut self.visit.lambdas);
+-            for snapshot in lambdas {
++            for (snapshot, parsed_type_annotation) in lambdas {
+                 self.semantic.restore(snapshot);
++                self.parsed_type_annotation = parsed_type_annotation;
+ 
+                 let Some(Expr::Lambda(ast::ExprLambda {
+                     parameters,
+@@ -3368,6 +3371,7 @@ impl<'a> Checker<'a> {
+                 }
+             }
+         }
++        self.parsed_type_annotation = None;
+         self.semantic.restore(snapshot);
+     }
+ 
+diff --git a/crates/ruff_linter/src/rules/pyflakes/snapshots/ruff_linter__rules__pyflakes__tests__is-literal_F632.py.snap b/crates/ruff_linter/src/rules/pyflakes/snapshots/ruff_linter__rules__pyflakes__tests__is-literal_F632.py.snap
+index e1df6b06eefd006377780bb0ccbb76dabf8edd44..46825cc731c33f4fe585b685b80303cf5d77877e 100644
+--- a/crates/ruff_linter/src/rules/pyflakes/snapshots/ruff_linter__rules__pyflakes__tests__is-literal_F632.py.snap
++++ b/crates/ruff_linter/src/rules/pyflakes/snapshots/ruff_linter__rules__pyflakes__tests__is-literal_F632.py.snap
+@@ -200,9 +200,27 @@ F632 [*] Use `!=` to compare constant literals
+ 33 | # Regression test for https://github.com/astral-sh/ruff/issues/11736
+ 34 | variable: "123 is not y"
+    |            ^^^^^^^^^^^^
++35 |
++36 | # A lambda in a string annotation is visited after the annotation: its fix still needs
++   |
+ help: Replace `is not` with `!=`
+    |
+ 33 | # Regression test for https://github.com/astral-sh/ruff/issues/11736
+    - variable: "123 is not y"
+ 34 + variable: "123 != y"
++35 |
++   |
++
++F632 [*] Use `==` to compare constant literals
++  --> F632.py:38:13
++   |
++36 | # A lambda in a string annotation is visited after the annotation: its fix still needs
++37 | # the tokens of the parsed annotation.
++38 | x: "lambda: 0 is ()"
++   |             ^^^^^^^
++help: Replace `is` with `==`
++   |
++37 | # the tokens of the parsed annotation.
++   - x: "lambda: 0 is ()"
++38 + x: "lambda: 0 == ()"
+    |

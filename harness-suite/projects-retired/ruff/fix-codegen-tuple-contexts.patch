@@ -1,0 +1,50 @@
+Codegen: parenthesize tuples in if/while tests, slice bounds and walrus values (`if (a,):`
+became `if a,:`).
+Regression test included; fuzz repro: repro/fix-codegen-tuple-contexts.py (ruff_parse_idempotency).
+
+diff --git a/crates/ruff_python_codegen/src/generator.rs b/crates/ruff_python_codegen/src/generator.rs
+index 369395d29adf77390a647342ad08bfc461972a8c..f83aafd87aee36dcd396d1f0092f2da386739ea3 100644
+--- a/crates/ruff_python_codegen/src/generator.rs
++++ b/crates/ruff_python_codegen/src/generator.rs
+@@ -25,11 +25,14 @@ mod precedence {
+     pub(crate) const EXPR: u8 = 5;
+     pub(crate) const YIELD: u8 = 7;
+     pub(crate) const YIELD_FROM: u8 = 7;
+-    pub(crate) const IF: u8 = 9;
++    // An `if`/`elif`/`while` test, a slice bound and a named expression's value are
++    // `expression`s in the grammar, which excludes unparenthesized tuples.
++    pub(crate) const IF: u8 = TUPLE + 1;
+     pub(crate) const FOR: u8 = 9;
+-    pub(crate) const WHILE: u8 = 9;
++    pub(crate) const WHILE: u8 = TUPLE + 1;
+     pub(crate) const RETURN: u8 = 11;
+-    pub(crate) const SLICE: u8 = 13;
++    pub(crate) const SLICE: u8 = TUPLE + 1;
++    pub(crate) const NAMED_EXPR_VALUE: u8 = TUPLE + 1;
+     pub(crate) const SUBSCRIPT: u8 = 13;
+     pub(crate) const COMPREHENSION_TARGET: u8 = 19;
+     pub(crate) const TUPLE: u8 = 19;
+@@ -1004,7 +1007,7 @@ impl<'a> Generator<'a> {
+                 group_if!(precedence::NAMED_EXPR, {
+                     self.unparse_expr(target, precedence::NAMED_EXPR);
+                     self.p(" := ");
+-                    self.unparse_expr(value, precedence::NAMED_EXPR + 1);
++                    self.unparse_expr(value, precedence::NAMED_EXPR_VALUE);
+                 });
+             }
+             Expr::BinOp(ast::ExprBinOp {
+@@ -1963,6 +1966,14 @@ class Foo:
+         // The value is an `expression`, not an `expressions` list.
+         assert_round_trip!(r"type Foo = (int, str)");
+         assert_round_trip!(r"type Foo = (yield)");
++        // Tests, slice bounds and named expression values can't be bare tuples.
++        assert_round_trip!("if (a,):\n    pass");
++        assert_round_trip!("if x:\n    pass\nelif (a, b):\n    pass");
++        assert_round_trip!("while (a, b):\n    pass");
++        assert_round_trip!(r"x[(a, b):]");
++        assert_round_trip!(r"x[:(a,), b]");
++        assert_round_trip!(r"x[::(a, b)]");
++        assert_round_trip!(r"(x := (*a, b))");
+         // Class patterns, and `as`/`|` patterns nested in other `as`/`|` patterns.
+         assert_round_trip!(
+             r"match x:

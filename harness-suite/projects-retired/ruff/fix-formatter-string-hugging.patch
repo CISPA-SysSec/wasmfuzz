@@ -1,0 +1,111 @@
+Formatter: decide multiline string hugging on the text the output keeps (a newline after `**`
+or the parentheses of a parenthesized string flipped the decision on the next run).
+Regression test included; fuzz repro: repro/fix-formatter-string-hugging.py (ruff_formatter_idempotency).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/multiline_string_deviations.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/multiline_string_deviations.py
+index 0537931402fce09dd0c565af1433ee4d2849655f..e3ad9347cf715b0af845f034ebdab36c19f7bf52 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/multiline_string_deviations.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/multiline_string_deviations.py
+@@ -41,3 +41,12 @@ generated_readme = lambda project_name: """
+ 
+ <Add content here!>
+ """.strip().format(project_name)
++
++# A newline between `**` and the string doesn't prevent hugging: hugging removes it.
++call(**
++"""
++""")
++
++# A parenthesized string isn't hugged: its parentheses break.
++call(("""
++"""))
+diff --git a/crates/ruff_python_formatter/src/other/arguments.rs b/crates/ruff_python_formatter/src/other/arguments.rs
+index 04c702cb5cf23d8a80a94f1894fd5c9765c2e120..ab8c4aa3c9fb6f1eb368ee1fb99e7d4699db0519 100644
+--- a/crates/ruff_python_formatter/src/other/arguments.rs
++++ b/crates/ruff_python_formatter/src/other/arguments.rs
+@@ -171,10 +171,11 @@ fn is_single_argument_parenthesized(argument: &Expr, call_end: TextSize, source:
+ /// of those collections.
+ fn is_arguments_huggable(arguments: &Arguments, context: &PyFormatContext) -> bool {
+     // Find the lone argument or `**kwargs` keyword.
+-    let arg = match (arguments.args.as_ref(), arguments.keywords.as_ref()) {
+-        ([arg], []) => arg,
++    // `arg_start` includes the `**` of a `**kwargs` keyword.
++    let (arg, arg_start) = match (arguments.args.as_ref(), arguments.keywords.as_ref()) {
++        ([arg], []) => (arg, arg.start()),
+         ([], [keyword]) if keyword.arg.is_none() && !context.comments().has(keyword) => {
+-            &keyword.value
++            (&keyword.value, keyword.start())
+         }
+         _ => return false,
+     };
+@@ -182,7 +183,7 @@ fn is_arguments_huggable(arguments: &Arguments, context: &PyFormatContext) -> bo
+     // If the expression itself isn't huggable, then we can't hug it.
+     if !(is_expression_huggable(arg, context)
+         || StringLike::try_from(arg)
+-            .is_ok_and(|string| is_huggable_string_argument(string, arguments, context)))
++            .is_ok_and(|string| is_huggable_string_argument(string, arg_start, arguments, context)))
+     {
+         return false;
+     }
+@@ -220,8 +221,14 @@ fn is_arguments_huggable(arguments: &Arguments, context: &PyFormatContext) -> bo
+ ///     """"
+ /// )
+ /// ```
++///
++/// Only the text before the argument (`arg_start`, which includes the `**` of a `**kwargs`
++/// argument) counts, because hugging joins the `**` and the string. A parenthesized string
++/// (`call(("""..."""))`) isn't hugged: its parentheses break, so the next run sees a newline
++/// before the quotes.
+ fn is_huggable_string_argument(
+     string: StringLike,
++    arg_start: TextSize,
+     arguments: &Arguments,
+     context: &PyFormatContext,
+ ) -> bool {
+@@ -235,7 +242,7 @@ fn is_huggable_string_argument(
+         return false;
+     }
+ 
+-    let between_parens_range = TextRange::new(arguments.start() + '('.text_len(), string.start());
++    let between_parens_range = TextRange::new(arguments.start() + '('.text_len(), arg_start);
+     let between_parens = &context.source()[between_parens_range];
+-    !between_parens.trim_whitespace_end().ends_with(['\n', '\r'])
++    !between_parens.contains('(') && !between_parens.trim_whitespace_end().ends_with(['\n', '\r'])
+ }
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@multiline_string_deviations.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@multiline_string_deviations.py.snap
+index d72652b093fe0a8e32eb4f5b0b5beef50246a97e..29be5ce37e6ee2e4bd6ba2499d13b5464abadb9d 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@multiline_string_deviations.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@multiline_string_deviations.py.snap
+@@ -47,6 +47,15 @@ generated_readme = lambda project_name: """
+ 
+ <Add content here!>
+ """.strip().format(project_name)
++
++# A newline between `**` and the string doesn't prevent hugging: hugging removes it.
++call(**
++"""
++""")
++
++# A parenthesized string isn't hugged: its parentheses break.
++call(("""
++"""))
+ ```
+ 
+ ## Output
+@@ -102,4 +111,16 @@ generated_readme = lambda project_name: """
+ 
+ <Add content here!>
+ """.strip().format(project_name)
++
++# A newline between `**` and the string doesn't prevent hugging: hugging removes it.
++call(**"""
++""")
++
++# A parenthesized string isn't hugged: its parentheses break.
++call(
++    (
++        """
++"""
++    )
++)
+ ```

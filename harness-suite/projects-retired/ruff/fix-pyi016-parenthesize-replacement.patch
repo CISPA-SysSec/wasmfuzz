@@ -1,0 +1,78 @@
+PYI016: parenthesize tuple/yield/named replacements of a `|` operand.
+Regression test included; fuzz repro: repro/fix-pyi016-parenthesize-replacement.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_pyi/PYI016.py b/crates/ruff_linter/resources/test/fixtures/flake8_pyi/PYI016.py
+index d8e43741bcc760953c1683f2434baf5f152c3ac7..8ed989062bbd686ced71d47c88f2e0d0243f4b0f 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_pyi/PYI016.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_pyi/PYI016.py
+@@ -156,3 +156,9 @@ field53: typing.Literal[f"{x:.2f}"] | typing.Literal[f"{x:.3f}"]  # OK (differen
+ field54: typing.Literal[f"{x}"] | typing.Literal[f"{x}"]  # Error (true duplicate)
+ field55: typing.Literal[f"{x =}"] | typing.Literal[f"{x=}"]  # OK (different debug text due to spaces)
+ field56: typing.Literal[f"{0x0=}"] | typing.Literal[f"{0o0=}"]  # OK (different source text: "0x0" vs "0o0")
++
++# Replacements that need parentheses
++field57: tuple[(int, str) | (int, str)]  # Error
++
++def f():
++    field58: (yield int) | (yield int)  # Error
+diff --git a/crates/ruff_linter/src/rules/flake8_pyi/rules/duplicate_union_member.rs b/crates/ruff_linter/src/rules/flake8_pyi/rules/duplicate_union_member.rs
+index 304327886f3475178735cb772935e034a8e67686..acde44ae6037aa8568162e22692ad6319b86e6f9 100644
+--- a/crates/ruff_linter/src/rules/flake8_pyi/rules/duplicate_union_member.rs
++++ b/crates/ruff_linter/src/rules/flake8_pyi/rules/duplicate_union_member.rs
+@@ -118,8 +118,17 @@ pub(crate) fn duplicate_union_member<'a>(checker: &Checker, expr: &'a Expr) {
+     // Generate the flattened fix once.
+     let fix = if let &[edit_expr] = unique_nodes.as_slice() {
+         // Generate a [`Fix`] for a single type expression, e.g. `int`.
++        // The generator emits tuples, `yield` and named expressions without parentheses, but the
++        // replacement takes the place of a `|` operand, e.g. in `(a,) | (a,)`.
++        let mut content = checker.generator().expr(edit_expr);
++        if matches!(
++            edit_expr,
++            Expr::Tuple(_) | Expr::Yield(_) | Expr::YieldFrom(_) | Expr::Named(_)
++        ) {
++            content = format!("({content})");
++        }
+         Some(Fix::applicable_edit(
+-            Edit::range_replacement(checker.generator().expr(edit_expr), expr.range()),
++            Edit::range_replacement(content, expr.range()),
+             applicability,
+         ))
+     } else {
+diff --git a/crates/ruff_linter/src/rules/flake8_pyi/snapshots/ruff_linter__rules__flake8_pyi__tests__duplicate-union-member_PYI016.py.snap b/crates/ruff_linter/src/rules/flake8_pyi/snapshots/ruff_linter__rules__flake8_pyi__tests__duplicate-union-member_PYI016.py.snap
+index 1e7493cc15a1ec4843602dba1be30f28fe34ccc5..cc0575658648abbb529e48f07d392f7aad0c5167 100644
+--- a/crates/ruff_linter/src/rules/flake8_pyi/snapshots/ruff_linter__rules__flake8_pyi__tests__duplicate-union-member_PYI016.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_pyi/snapshots/ruff_linter__rules__flake8_pyi__tests__duplicate-union-member_PYI016.py.snap
+@@ -1094,3 +1094,33 @@ help: Remove duplicate union member `typing.Literal[f"{x}"]`
+ 156 + field54: typing.Literal[f"{x}"]  # Error (true duplicate)
+ 157 | field55: typing.Literal[f"{x =}"] | typing.Literal[f"{x=}"]  # OK (different debug text due to spaces)
+     |
++
++PYI016 [*] Duplicate union member `int, str`
++   --> PYI016.py:161:29
++    |
++160 | # Replacements that need parentheses
++161 | field57: tuple[(int, str) | (int, str)]  # Error
++    |                             ^^^^^^^^^^
++162 |
++163 | def f():
++    |
++help: Remove duplicate union member `int, str`
++    |
++160 | # Replacements that need parentheses
++    - field57: tuple[(int, str) | (int, str)]  # Error
++161 + field57: tuple[(int, str)]  # Error
++162 |
++    |
++
++PYI016 [*] Duplicate union member `yield int`
++   --> PYI016.py:164:29
++    |
++163 | def f():
++164 |     field58: (yield int) | (yield int)  # Error
++    |                             ^^^^^^^^^
++help: Remove duplicate union member `yield int`
++    |
++163 | def f():
++    -     field58: (yield int) | (yield int)  # Error
++164 +     field58: (yield int)  # Error
++    |

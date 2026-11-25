@@ -1,0 +1,41 @@
+Codegen: debug f-string expressions (`{x=}`) got extra parentheses/spaces that change the
+debug text on every round trip.
+Regression test included; fuzz repro: repro/fix-codegen-debug-expression.py (ruff_parse_idempotency).
+
+diff --git a/crates/ruff_python_codegen/src/generator.rs b/crates/ruff_python_codegen/src/generator.rs
+index a3cde95b27c21e3f7fe2629d005322ef0d85d183..c931e89dce6736bd66c3d3d0582d9a97487a360a 100644
+--- a/crates/ruff_python_codegen/src/generator.rs
++++ b/crates/ruff_python_codegen/src/generator.rs
+@@ -1489,8 +1489,17 @@ impl<'a> Generator<'a> {
+         flags: AnyStringFlags,
+     ) {
+         let mut generator = Generator::new(self.indent, self.line_ending);
+-        generator.unparse_expr(val, precedence::FORMATTED_VALUE);
+-        let brace = if generator.buffer.starts_with('{') {
++        // With a debug expression (`{x=}`), any parentheses around the expression are part of the
++        // debug text: adding more would change the text (and grow with every round trip).
++        let level = if debug_text.is_some() {
++            precedence::MIN
++        } else {
++            precedence::FORMATTED_VALUE
++        };
++        generator.unparse_expr(val, level);
++        let brace = if generator.buffer.starts_with('{')
++            && debug_text.is_none_or(|debug_text| debug_text.leading().is_empty())
++        {
+             // put a space to avoid escaping the bracket
+             "{ "
+         } else {
+@@ -1908,6 +1917,12 @@ class Foo:
+         assert_round_trip!(r"type Foo[*Ts = *int] = ...");
+         assert_round_trip!(r"type Foo[**P = int] = ...");
+         assert_round_trip!(r"type Foo[T, U, *Ts, **P] = ...");
++        // Debug expressions keep their leading and trailing text, including parentheses.
++        assert_round_trip!(r#"f"{yield=}""#);
++        assert_round_trip!(r#"f"{(yield)=}""#);
++        assert_round_trip!(r#"f"{ (x := 1) =}""#);
++        assert_round_trip!(r#"f"{ {1}=}""#);
++        assert_round_trip!(r#"t"{ {1}=}""#);
+         // The value is an `expression`, not an `expressions` list.
+         assert_round_trip!(r"type Foo = (int, str)");
+         assert_round_trip!(r"type Foo = (yield)");

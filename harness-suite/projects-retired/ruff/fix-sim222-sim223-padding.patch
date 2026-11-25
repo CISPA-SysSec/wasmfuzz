@@ -1,0 +1,113 @@
+SIM222/SIM223: pad the replacement (`if[1]or x:` became `ifTrue:`).
+Regression test included; fuzz repro: repro/fix-sim222-sim223-padding.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM222.py b/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM222.py
+index ebe41aeda6d9f4ac52e139dfd1e3213f8738c2d9..4d76cc30b0a5b99b03d56032ea9599b1db1b2383 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM222.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM222.py
+@@ -237,3 +237,7 @@ print(f"" f"{x}" or "bar")  # OK
+ # Regression test for: https://github.com/astral-sh/ruff/issues/21048
+ print(f"{'x':.0}" or "bar")  # OK
+ print(f"{x > y}" or "bar")  # OK
++
++# Regression test: the replacement must not merge with the preceding keyword
++if[1]or x:
++    pass
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM223.py b/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM223.py
+index abcf2536bbb2c8c5be14f5f2448ccf1362741c82..10be2b68c04fb9bd0e961efb6b27f398669d3b18 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM223.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_simplify/SIM223.py
+@@ -169,3 +169,7 @@ tuple(None) and False  # OK
+ tuple(...) and False  # OK
+ tuple(lambda x: x) and False  # OK
+ tuple(x for x in range(0)) and False  # OK
++
++# Regression test: the replacement must not merge with the preceding keyword
++if() and []():
++    pass
+diff --git a/crates/ruff_linter/src/rules/flake8_simplify/rules/ast_bool_op.rs b/crates/ruff_linter/src/rules/flake8_simplify/rules/ast_bool_op.rs
+index 3db7b8dd1a5fb8255471f0c7d757edd4afdeeec1..2d793a0158f41189e9d44d25b34b0cd2fc9f3fc8 100644
+--- a/crates/ruff_linter/src/rules/flake8_simplify/rules/ast_bool_op.rs
++++ b/crates/ruff_linter/src/rules/flake8_simplify/rules/ast_bool_op.rs
+@@ -707,6 +707,14 @@ pub(crate) fn expr_or_not_expr(checker: &Checker, expr: &Expr) {
+     }
+ }
+ 
++/// Pads the replacement with whitespace where it would otherwise merge with the surrounding
++/// tokens, e.g. `if() and x:` must become `if False:`, not `ifFalse:`.
++fn pad_short_circuit_edit(edit: Edit, checker: &Checker) -> Edit {
++    let range = edit.range();
++    let content = edit.content().unwrap_or_default().to_string();
++    Edit::range_replacement(pad(content, range, checker.locator()), range)
++}
++
+ fn get_short_circuit_edit(
+     expr: &Expr,
+     range: TextRange,
+@@ -841,7 +849,7 @@ pub(crate) fn expr_or_true(checker: &Checker, expr: &Expr) {
+             },
+             edit.range(),
+         );
+-        diagnostic.set_fix(Fix::unsafe_edit(edit));
++        diagnostic.set_fix(Fix::unsafe_edit(pad_short_circuit_edit(edit, checker)));
+     }
+ }
+ 
+@@ -859,6 +867,6 @@ pub(crate) fn expr_and_false(checker: &Checker, expr: &Expr) {
+             },
+             edit.range(),
+         );
+-        diagnostic.set_fix(Fix::unsafe_edit(edit));
++        diagnostic.set_fix(Fix::unsafe_edit(pad_short_circuit_edit(edit, checker)));
+     }
+ }
+diff --git a/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__expr-and-false_SIM223.py.snap b/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__expr-and-false_SIM223.py.snap
+index 31886dd5a0e8d72218b2785d2b1878576d5e60db..1c1d173646058069c319c7b87e7031d23fd592af 100644
+--- a/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__expr-and-false_SIM223.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__expr-and-false_SIM223.py.snap
+@@ -944,3 +944,20 @@ help: Replace with `tuple("")`
+ 164 | tuple(t"") and False  # OK
+     |
+ note: This is an unsafe fix and may change runtime behavior
++
++SIM223 [*] Use `False` instead of `False and ...`
++   --> SIM223.py:174:3
++    |
++173 | # Regression test: the replacement must not merge with the preceding keyword
++174 | if() and []():
++    |   ^^^^^^^^^^^
++175 |     pass
++    |
++help: Replace with `False`
++    |
++173 | # Regression test: the replacement must not merge with the preceding keyword
++    - if() and []():
++174 + if False:
++175 |     pass
++    |
++note: This is an unsafe fix and may change runtime behavior
+diff --git a/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__expr-or-true_SIM222.py.snap b/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__expr-or-true_SIM222.py.snap
+index 70c8050097236448330c887657d8a23b3a3d8c9a..e435138e407b190a5b400b1529de762a3105b6d6 100644
+--- a/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__expr-or-true_SIM222.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_simplify/snapshots/ruff_linter__rules__flake8_simplify__tests__expr-or-true_SIM222.py.snap
+@@ -1085,3 +1085,20 @@ help: Replace with `f"{x}abc"`
+ 234 | # An empty f-string part in an implicit concatenation guarantees nothing
+     |
+ note: This is an unsafe fix and may change runtime behavior
++
++SIM222 [*] Use `True` instead of `True or ...`
++   --> SIM222.py:242:3
++    |
++241 | # Regression test: the replacement must not merge with the preceding keyword
++242 | if[1]or x:
++    |   ^^^^^^^
++243 |     pass
++    |
++help: Replace with `True`
++    |
++241 | # Regression test: the replacement must not merge with the preceding keyword
++    - if[1]or x:
++242 + if True:
++243 |     pass
++    |
++note: This is an unsafe fix and may change runtime behavior

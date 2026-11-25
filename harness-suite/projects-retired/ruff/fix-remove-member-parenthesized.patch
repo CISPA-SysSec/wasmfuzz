@@ -1,0 +1,178 @@
+B033/RUF068: remove_member ignored the parentheses around a member (`{"a", ("a"), b}`).
+Regression test included; fuzz repro: repro/fix-remove-member-parenthesized.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/flake8_bugbear/B033.py b/crates/ruff_linter/resources/test/fixtures/flake8_bugbear/B033.py
+index 4aa8e8d4b22aa8562c08751da6af52dc84b24e40..2d4bceaae2189e429dec6b47c60897cdb7fc06c9 100644
+--- a/crates/ruff_linter/resources/test/fixtures/flake8_bugbear/B033.py
++++ b/crates/ruff_linter/resources/test/fixtures/flake8_bugbear/B033.py
+@@ -34,3 +34,7 @@ correct_set = {"value1", 23, 5}
+ correct_set = {5, "5"}
+ correct_set = {5}
+ correct_set = {}
++
++# Parenthesized duplicates
++{"a", ("a"), b}
++{"a", b, ("a")}
+diff --git a/crates/ruff_linter/src/fix/edits.rs b/crates/ruff_linter/src/fix/edits.rs
+index 3531c5270ea23aa4b0ef37b5e8577802ded28100..fe7ebbba9e00c2d2245890aabad88f6945acb27c 100644
+--- a/crates/ruff_linter/src/fix/edits.rs
++++ b/crates/ruff_linter/src/fix/edits.rs
+@@ -314,12 +314,21 @@ pub(crate) fn add_argument(argument: &str, arguments: &Arguments, tokens: &Token
+ }
+ 
+ /// Remove the member at the given index from a sequence of expressions.
+-pub(crate) fn remove_member(elts: &[ast::Expr], index: usize, source: &str) -> Result<Edit> {
++pub(crate) fn remove_member(
++    elts: &[ast::Expr],
++    parent: AnyNodeRef,
++    index: usize,
++    tokens: &Tokens,
++    source: &str,
++) -> Result<Edit> {
++    // Include any parentheses around the members, e.g. `("a")` in `{"b", ("a"), c}`.
++    let range =
++        |elt: &ast::Expr| parenthesized_range(elt.into(), parent, tokens).unwrap_or(elt.range());
+     if index < elts.len() - 1 {
+         // Case 1: the expression is _not_ the last node, so delete from the start of the
+         // expression to the end of the subsequent comma.
+         // Ex) Delete `"a"` in `{"a", "b", "c"}`.
+-        let mut tokenizer = SimpleTokenizer::starts_at(elts[index].end(), source);
++        let mut tokenizer = SimpleTokenizer::starts_at(range(&elts[index]).end(), source);
+ 
+         // Find the trailing comma.
+         tokenizer
+@@ -333,23 +342,23 @@ pub(crate) fn remove_member(elts: &[ast::Expr], index: usize, source: &str) -> R
+             })
+             .context("Unable to find next token")?;
+ 
+-        Ok(Edit::deletion(elts[index].start(), next.start()))
++        Ok(Edit::deletion(range(&elts[index]).start(), next.start()))
+     } else if index > 0 {
+         // Case 2: the expression is the last node, but not the _only_ node, so delete from the
+         // start of the previous comma to the end of the expression.
+         // Ex) Delete `"c"` in `{"a", "b", "c"}`.
+-        let mut tokenizer = SimpleTokenizer::starts_at(elts[index - 1].end(), source);
++        let mut tokenizer = SimpleTokenizer::starts_at(range(&elts[index - 1]).end(), source);
+ 
+         // Find the trailing comma.
+         let comma = tokenizer
+             .find(|token| token.kind == SimpleTokenKind::Comma)
+             .context("Unable to find trailing comma")?;
+ 
+-        Ok(Edit::deletion(comma.start(), elts[index].end()))
++        Ok(Edit::deletion(comma.start(), range(&elts[index]).end()))
+     } else {
+         // Case 3: expression is the only node, so delete it.
+         // Ex) Delete `"a"` in `{"a"}`.
+-        Ok(Edit::range_deletion(elts[index].range()))
++        Ok(Edit::range_deletion(range(&elts[index])))
+     }
+ }
+ 
+diff --git a/crates/ruff_linter/src/rules/flake8_bugbear/rules/duplicate_value.rs b/crates/ruff_linter/src/rules/flake8_bugbear/rules/duplicate_value.rs
+index 92e928d4b0870a369c6058b738a4087cbf1842f5..b52eb503fcdcb2aeecce53806c9f6c43c059f89b 100644
+--- a/crates/ruff_linter/src/rules/flake8_bugbear/rules/duplicate_value.rs
++++ b/crates/ruff_linter/src/rules/flake8_bugbear/rules/duplicate_value.rs
+@@ -85,17 +85,21 @@ pub(crate) fn duplicate_value(checker: &Checker, set: &ast::ExprSet) {
+                 );
+                 diagnostic.secondary_annotation("Previous occurrence here", existing);
+                 diagnostic.try_set_fix(|| {
+-                    edits::remove_member(&set.elts, index, checker.locator().contents()).map(
+-                        |edit| {
+-                            let applicability = if checker.comment_ranges().intersects(edit.range())
+-                            {
+-                                Applicability::Unsafe
+-                            } else {
+-                                Applicability::Safe
+-                            };
+-                            Fix::applicable_edit(edit, applicability)
+-                        },
++                    edits::remove_member(
++                        &set.elts,
++                        set.into(),
++                        index,
++                        checker.tokens(),
++                        checker.locator().contents(),
+                     )
++                    .map(|edit| {
++                        let applicability = if checker.comment_ranges().intersects(edit.range()) {
++                            Applicability::Unsafe
++                        } else {
++                            Applicability::Safe
++                        };
++                        Fix::applicable_edit(edit, applicability)
++                    })
+                 });
+             }
+         }
+diff --git a/crates/ruff_linter/src/rules/flake8_bugbear/snapshots/ruff_linter__rules__flake8_bugbear__tests__duplicate-value_B033.py.snap b/crates/ruff_linter/src/rules/flake8_bugbear/snapshots/ruff_linter__rules__flake8_bugbear__tests__duplicate-value_B033.py.snap
+index e0c5f128b31897e25b4cab608c96d1e22d23cb7b..de984598ebea152c737c27c1168761ded241611a 100644
+--- a/crates/ruff_linter/src/rules/flake8_bugbear/snapshots/ruff_linter__rules__flake8_bugbear__tests__duplicate-value_B033.py.snap
++++ b/crates/ruff_linter/src/rules/flake8_bugbear/snapshots/ruff_linter__rules__flake8_bugbear__tests__duplicate-value_B033.py.snap
+@@ -202,3 +202,37 @@ help: Remove duplicate item
+ 26 | }
+    |
+ note: This is an unsafe fix and may change runtime behavior
++
++B033 [*] Sets should not contain duplicate item `"a"`
++  --> B033.py:39:8
++   |
++38 | # Parenthesized duplicates
++39 | {"a", ("a"), b}
++   |  ---   ^^^
++   |  |
++   |  Previous occurrence here
++40 | {"a", b, ("a")}
++   |
++help: Remove duplicate item
++   |
++38 | # Parenthesized duplicates
++   - {"a", ("a"), b}
++39 + {"a", b}
++40 | {"a", b, ("a")}
++   |
++
++B033 [*] Sets should not contain duplicate item `"a"`
++  --> B033.py:40:11
++   |
++38 | # Parenthesized duplicates
++39 | {"a", ("a"), b}
++40 | {"a", b, ("a")}
++   |  ---      ^^^
++   |  |
++   |  Previous occurrence here
++help: Remove duplicate item
++   |
++39 | {"a", ("a"), b}
++   - {"a", b, ("a")}
++40 + {"a", b}
++   |
+diff --git a/crates/ruff_linter/src/rules/ruff/rules/duplicate_entry_in_dunder_all.rs b/crates/ruff_linter/src/rules/ruff/rules/duplicate_entry_in_dunder_all.rs
+index e6cf2baa878b0fde671c7cb14605773f6c93b822..0dac54a74ef70073ab0e778358edbc0102fe0c46 100644
+--- a/crates/ruff_linter/src/rules/ruff/rules/duplicate_entry_in_dunder_all.rs
++++ b/crates/ruff_linter/src/rules/ruff/rules/duplicate_entry_in_dunder_all.rs
+@@ -167,14 +167,16 @@ fn duplicate_entry_in_dunder_all(checker: &Checker, target: &ast::Expr, value: &
+             diagnostic.set_primary_annotation_message(format_args!("`{name}` duplicated here"));
+ 
+             diagnostic.try_set_fix(|| {
+-                edits::remove_member(elts, index, source).map(|edit| {
+-                    let applicability = if checker.comment_ranges().intersects(edit.range()) {
+-                        Applicability::Unsafe
+-                    } else {
+-                        Applicability::Safe
+-                    };
+-                    Fix::applicable_edit(edit, applicability)
+-                })
++                edits::remove_member(elts, value.into(), index, checker.tokens(), source).map(
++                    |edit| {
++                        let applicability = if checker.comment_ranges().intersects(edit.range()) {
++                            Applicability::Unsafe
++                        } else {
++                            Applicability::Safe
++                        };
++                        Fix::applicable_edit(edit, applicability)
++                    },
++                )
+             });
+         }
+     }

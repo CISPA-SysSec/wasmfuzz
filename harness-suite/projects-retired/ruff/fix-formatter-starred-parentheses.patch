@@ -1,0 +1,70 @@
+Formatter: never parenthesize a starred expression (`x = (*"""\n""")` is a syntax error).
+Regression test included; fuzz repro: repro/fix-formatter-starred-parentheses.py (ruff_formatter_validity).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/starred.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/starred.py
+index cdbcf4c9423582719d911369a15b47b0f6e432f4..38ea6ce0fef6572dc37233499cd12469bd381f44 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/starred.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/starred.py
+@@ -31,3 +31,12 @@ call(
+         y
+     )
+ )
++
++# Starred expressions are never parenthesized: `x = (*y)` is a syntax error.
++x = *"""
++"""
++x = *(  # comment
++)
++def f():
++    return *"""
++"""
+diff --git a/crates/ruff_python_formatter/src/expression/expr_starred.rs b/crates/ruff_python_formatter/src/expression/expr_starred.rs
+index 57dd3c7affb8ee49c36c8cd90cfa3737097ae838..e274749320c49606eb6d94ace33985656939c5b2 100644
+--- a/crates/ruff_python_formatter/src/expression/expr_starred.rs
++++ b/crates/ruff_python_formatter/src/expression/expr_starred.rs
+@@ -32,6 +32,8 @@ impl NeedsParentheses for ExprStarred {
+         _parent: AnyNodeRef,
+         _context: &PyFormatContext,
+     ) -> OptionalParentheses {
+-        OptionalParentheses::Multiline
++        // A parenthesized starred expression is never valid syntax: `x = (*a)` is a syntax error,
++        // whereas `x = *a` is only rejected by the compiler (and `x = *a, b` is fine).
++        OptionalParentheses::Never
+     }
+ }
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@expression__starred.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@expression__starred.py.snap
+index 42f0ebdf8f089255f92407bc23da30dc50d383da..3f8dd40ab5ed48d9b60537c3a57e7548e5a10324 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@expression__starred.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@expression__starred.py.snap
+@@ -37,6 +37,15 @@ call(
+         y
+     )
+ )
++
++# Starred expressions are never parenthesized: `x = (*y)` is a syntax error.
++x = *"""
++"""
++x = *(  # comment
++)
++def f():
++    return *"""
++"""
+ ```
+ 
+ ## Output
+@@ -98,4 +107,15 @@ call(
+         y
+     ),
+ )
++
++# Starred expressions are never parenthesized: `x = (*y)` is a syntax error.
++x = *"""
++"""
++x = *(  # comment
++)
++
++
++def f():
++    return *"""
++"""
+ ```

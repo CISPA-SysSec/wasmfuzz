@@ -1,0 +1,45 @@
+ty: names inside an invalid named-expression target nested in an unpacking target
+(`for [(not a := 1).b, c] in x`) got an unpacking definition the unpacker never typed (panic).
+Regression test included; fuzz repro: repro/fix-ty-named-invalid-target-in-unpack.py (ty_check_invalid_syntax).
+
+diff --git a/crates/ty_python_core/src/builder.rs b/crates/ty_python_core/src/builder.rs
+index 31cb995a9b038ba0b8d6764230741a10c3eeb522..598f94881ef6795a42ebc2aa3a35fe1869fa57ea 100644
+--- a/crates/ty_python_core/src/builder.rs
++++ b/crates/ty_python_core/src/builder.rs
+@@ -3546,7 +3546,14 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
+                     self.visit_expr(&node.target);
+                     self.pop_assignment();
+                 } else {
++                    // Invalid syntax: the target of a named expression must be a name. Store
++                    // context names inside an invalid target (e.g. `a` in `(not a := 1)`) are
++                    // not bound by an enclosing assignment either, so don't attribute them to
++                    // it. Otherwise `for [(not a := 1).b, c] in x` creates an unpacking `for`
++                    // definition for `a`, which the unpacker never assigns a type to.
++                    let enclosing_assignments = std::mem::take(&mut self.current_assignments);
+                     self.visit_expr(&node.target);
++                    self.current_assignments = enclosing_assignments;
+                 }
+             }
+             ast::Expr::Lambda(lambda) => {
+diff --git a/crates/ty_python_semantic/resources/corpus/named_expr_invalid_target_in_unpack_target.py b/crates/ty_python_semantic/resources/corpus/named_expr_invalid_target_in_unpack_target.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ac1241e04701fbd73468f5646c1f513c521bee6b
+--- /dev/null
++++ b/crates/ty_python_semantic/resources/corpus/named_expr_invalid_target_in_unpack_target.py
+@@ -0,0 +1,16 @@
++# Fuzz regression (ty_check_invalid_syntax): a named expression with an invalid
++# target nested inside an unpacking target must not bind the names in that
++# invalid target to the enclosing assignment.
++for [(not a := 1).b, c] in x:
++    a
++
++[(not d := 1).b, e] = x
++d
++
++with x as [(-f := 1).b, g]:
++    f
++
++[h for [(not h := 1).b, i] in x]
++
++[(*j := 1).b, k] = x
++j

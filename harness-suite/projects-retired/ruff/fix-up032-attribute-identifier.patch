@@ -1,0 +1,58 @@
+UP032: `"{.;:F}".format(x)` was converted to an invalid f-string; only identifiers can be
+accessed as attributes.
+Regression test included; fuzz repro: repro/fix-up032-attribute-identifier.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP032_0.py b/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP032_0.py
+index 24870c52c48d385a4a508cbc0dad2e109695943d..1507e25ecdec695c7a22e72e4017e6a9dbe30604 100644
+--- a/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP032_0.py
++++ b/crates/ruff_linter/resources/test/fixtures/pyupgrade/UP032_0.py
+@@ -281,3 +281,7 @@ if __name__ == "__main__":
+ 
+ # Raw string with \N{...}
+ r"\N{angle}AOB = {angle}°".format(angle=180)
++
++# Attribute names that aren't identifiers can't be accessed in an f-string
++"{.;:F}".format(x)
++"{0.a.1}".format(x)
+diff --git a/crates/ruff_linter/src/rules/pyupgrade/rules/f_strings.rs b/crates/ruff_linter/src/rules/pyupgrade/rules/f_strings.rs
+index 473094f9999ac3990db1d900543955f05e6e766f..09b307fad07f8ee9bb67edc0106834f9d6aacca9 100644
+--- a/crates/ruff_linter/src/rules/pyupgrade/rules/f_strings.rs
++++ b/crates/ruff_linter/src/rules/pyupgrade/rules/f_strings.rs
+@@ -11,6 +11,7 @@ use ruff_python_ast::{self as ast, Expr, Keyword, StringFlags};
+ use ruff_python_literal::format::{
+     FieldName, FieldNamePart, FieldType, FormatPart, FormatString, FromTemplate,
+ };
++use ruff_python_stdlib::identifiers::is_identifier;
+ use ruff_source_file::LineRanges;
+ use ruff_text_size::{Ranged, TextRange};
+ 
+@@ -348,6 +349,11 @@ impl FStringConversion {
+                     for part in field.parts {
+                         match part {
+                             FieldNamePart::Attribute(name) => {
++                                // `str.format` looks up any attribute name (`"{.;}"`), an
++                                // f-string only identifiers.
++                                if !is_identifier(&name) {
++                                    anyhow::bail!("Attribute `{name}` is not an identifier");
++                                }
+                                 converted.push('.');
+                                 converted.push_str(&name);
+                             }
+diff --git a/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP032_0.py.snap b/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP032_0.py.snap
+index 774ff321e98099ae40e0bf5eb061e22aee1ec4d8..c63ec3d09f082bd29becbaefb9a998f4f94b3783 100644
+--- a/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP032_0.py.snap
++++ b/crates/ruff_linter/src/rules/pyupgrade/snapshots/ruff_linter__rules__pyupgrade__tests__UP032_0.py.snap
+@@ -1259,9 +1259,13 @@ UP032 [*] Use f-string instead of `format` call
+ 282 | # Raw string with \N{...}
+ 283 | r"\N{angle}AOB = {angle}°".format(angle=180)
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++284 |
++285 | # Attribute names that aren't identifiers can't be accessed in an f-string
++    |
+ help: Convert to f-string
+     |
+ 282 | # Raw string with \N{...}
+     - r"\N{angle}AOB = {angle}°".format(angle=180)
+ 283 + rf"\N{180}AOB = {180}°"
++284 |
+     |

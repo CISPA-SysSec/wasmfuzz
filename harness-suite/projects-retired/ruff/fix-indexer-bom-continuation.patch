@@ -1,0 +1,36 @@
+Indexer: continuation line starts were off by the BOM length (the first line starts after the
+BOM), so fixes using them sliced inside the BOM.
+Regression test included; fuzz repro: repro/fix-indexer-bom-continuation.py (ruff_fix_validity).
+
+diff --git a/crates/ruff_python_index/src/indexer.rs b/crates/ruff_python_index/src/indexer.rs
+index fe45645826f6056706a922f572b19ea1670e6d06..4ff71ba66ee4dc94e4f47d8731c0b8d42668b0f9 100644
+--- a/crates/ruff_python_index/src/indexer.rs
++++ b/crates/ruff_python_index/src/indexer.rs
+@@ -39,7 +39,8 @@ impl Indexer {
+ 
+         // Token, end
+         let mut prev_end = TextSize::default();
+-        let mut line_start = TextSize::default();
++        // The first line starts after the BOM, if any (see `LineRanges::line_start`).
++        let mut line_start = source.bom_start_offset();
+ 
+         for token in tokens {
+             let token_start = token.start();
+@@ -378,6 +379,17 @@ b
+         );
+     }
+ 
++    #[test]
++    fn continuation_after_bom() {
++        let contents = "\u{feff}x = \\\n    1\n";
++        let indexer = new_indexer(contents);
++        assert_eq!(indexer.continuation_line_starts(), [TextSize::new(3)]);
++        assert_eq!(
++            indexer.preceded_by_continuations(TextSize::new(13), contents),
++            Some(TextSize::new(7))
++        );
++    }
++
+     #[test]
+     fn test_f_string_ranges() {
+         let contents = r#"

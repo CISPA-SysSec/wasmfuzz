@@ -1,0 +1,120 @@
+Stylist: the detected indentation could contain a line continuation or be empty when the
+indent token spans `\t\\\n\x0c`; only the whitespace after the last formfeed/line break counts.
+Regression test included; fuzz repro: repro/fix-codegen-indentation-detection.py (ruff_parse_idempotency).
+
+diff --git a/crates/ruff_python_codegen/src/stylist.rs b/crates/ruff_python_codegen/src/stylist.rs
+index 99167b8b7161822d550eda3fb7287b593754d4cb..89c279e06493132bdb5fbe6a2e5ff58ee928f0ee 100644
+--- a/crates/ruff_python_codegen/src/stylist.rs
++++ b/crates/ruff_python_codegen/src/stylist.rs
+@@ -97,7 +97,7 @@ fn detect_indentation(tokens: &[Token], source: &str) -> Indentation {
+     });
+ 
+     if let Some(indent_range) = indent_range {
+-        let mut whitespace = &source[indent_range];
++        let whitespace = &source[indent_range];
+         // https://docs.python.org/3/reference/lexical_analysis.html#indentation
+         // > A formfeed character may be present at the start of the line; it will be ignored for
+         // > the indentation calculations above. Formfeed characters occurring elsewhere in the
+@@ -109,36 +109,45 @@ fn detect_indentation(tokens: &[Token], source: &str) -> Indentation {
+         // https://github.com/astral-sh/ruff/blob/a41bb2733fe75a71f4cf6d4bb21e659fc4630b30/crates/ruff_python_parser/src/lexer.rs#L664-L667
+         // We also reset the indentation when we see a formfeed character.
+         // See also https://github.com/astral-sh/ruff/issues/7455#issuecomment-1722458825
+-        if let Some((_before, after)) = whitespace.rsplit_once('\x0C') {
+-            whitespace = after;
++        // The indent can also span line continuations (`\t\\\n\x0C`): only the whitespace after
++        // the last formfeed or line break is indentation, and it can be empty.
++        let whitespace = whitespace
++            .rsplit(['\x0C', '\n', '\r'])
++            .next()
++            .unwrap_or_default();
++        if !whitespace.is_empty() {
++            return Indentation(whitespace.to_string());
+         }
++    }
+ 
+-        Indentation(whitespace.to_string())
+-    } else {
+-        // If we can't find a logical indent token, search for a non-logical indent, to cover cases
+-        // like:
+-        //```python
+-        // from math import (
+-        //   sin,
+-        //   tan,
+-        //   cos,
+-        // )
+-        // ```
+-        for token in tokens {
+-            if token.kind() == TokenKind::NonLogicalNewline {
+-                let line = source.line_str(token.end());
+-                let indent_index = line.find(|c: char| !c.is_whitespace());
+-                if let Some(indent_index) = indent_index {
+-                    if indent_index > 0 {
+-                        let whitespace = &line[..indent_index];
+-                        return Indentation(whitespace.to_string());
+-                    }
++    // If we can't find a usable logical indent token, search for a non-logical indent, to cover cases
++    // like:
++    //```python
++    // from math import (
++    //   sin,
++    //   tan,
++    //   cos,
++    // )
++    // ```
++    for token in tokens {
++        if token.kind() == TokenKind::NonLogicalNewline {
++            let line = source.line_str(token.end());
++            let indent_index = line.find(|c: char| !c.is_whitespace());
++            if let Some(indent_index) = indent_index {
++                let mut whitespace = &line[..indent_index];
++                // As above, a formfeed resets the indentation: e.g. a formfeed alone is no
++                // indentation at all, and generating code with it would dedent the block.
++                if let Some((_before, after)) = whitespace.rsplit_once('\x0C') {
++                    whitespace = after;
++                }
++                if !whitespace.is_empty() {
++                    return Indentation(whitespace.to_string());
+                 }
+             }
+         }
+-
+-        Indentation::default()
+     }
++
++    Indentation::default()
+ }
+ 
+ /// The indentation style used in Python source code.
+@@ -248,6 +257,32 @@ class FormFeedIndent:
+         assert_eq!(stylist.indentation(), &Indentation(" ".to_string()));
+     }
+ 
++    #[test]
++    fn indent_formfeed_non_logical_line() {
++        // A formfeed at the start of a line isn't indentation (fuzz regression: the generated
++        // code indented the `if` body with a formfeed only, which doesn't parse).
++        let contents = "\n\x0Cif x: pass\n";
++        let parsed = parse_module(contents).unwrap();
++        assert_eq!(
++            Stylist::from_tokens(parsed.tokens(), contents).indentation(),
++            &Indentation("    ".to_string())
++        );
++
++        let contents = "if x:\n\t\\\n\x0Cy\n";
++        let parsed = parse_module(contents).unwrap();
++        assert_eq!(
++            Stylist::from_tokens(parsed.tokens(), contents).indentation(),
++            &Indentation("    ".to_string())
++        );
++
++        let contents = "with (\n\x0C): pass\n";
++        let parsed = parse_module(contents).unwrap();
++        assert_eq!(
++            Stylist::from_tokens(parsed.tokens(), contents).indentation(),
++            &Indentation("    ".to_string())
++        );
++    }
++
+     #[test]
+     fn indent_non_breaking_whitespace() {
+         let contents = r"

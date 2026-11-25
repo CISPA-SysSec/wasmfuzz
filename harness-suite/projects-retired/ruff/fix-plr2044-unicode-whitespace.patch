@@ -1,0 +1,136 @@
+PLR2044: treat any Unicode whitespace as empty (`#\x0b`): the formatter strips it, so the
+lint appeared only after formatting.
+Regression test included; fuzz repro: repro/fix-plr2044-unicode-whitespace.py (ruff_formatter_validity).
+
+diff --git a/crates/ruff_linter/resources/test/fixtures/pylint/empty_comment.py b/crates/ruff_linter/resources/test/fixtures/pylint/empty_comment.py
+index 3ea3f7f2df7ed60b1fe7c11a8d529616c9c77b3d..91e4be1184d9ff00e0a2a3514ee5282d511232f6 100644
+--- a/crates/ruff_linter/resources/test/fixtures/pylint/empty_comment.py
++++ b/crates/ruff_linter/resources/test/fixtures/pylint/empty_comment.py
+@@ -56,3 +56,12 @@ x = 1
+ 
+ α = 1
+ α#
++
++# Comments that only contain non-Python whitespace (stripped by the formatter) are empty too.
++
++#
++
++x = 1  #　
++
++#
++#
+diff --git a/crates/ruff_linter/src/rules/pylint/rules/empty_comment.rs b/crates/ruff_linter/src/rules/pylint/rules/empty_comment.rs
+index e48e89f45f379d091550011b29c6c6ee49b9be19..517ae47a4dbf64fab60d0a945706e859bb712cf9 100644
+--- a/crates/ruff_linter/src/rules/pylint/rules/empty_comment.rs
++++ b/crates/ruff_linter/src/rules/pylint/rules/empty_comment.rs
+@@ -69,12 +69,14 @@ pub(crate) fn empty_comments(
+ 
+ /// Return a [`Diagnostic`] if the comment at the given [`TextRange`] is empty.
+ fn empty_comment(context: &LintContext, range: TextRange, locator: &Locator, indexer: &Indexer) {
+-    // Check: is the comment empty?
++    // Check: is the comment empty? Any whitespace counts, not only Python whitespace: the
++    // formatter strips all trailing whitespace from comments (like Black), so e.g. `#\x0b`
++    // would otherwise only be reported once it has been formatted.
+     if !locator
+         .slice(range)
+         .chars()
+         .skip(1)
+-        .all(is_python_whitespace)
++        .all(char::is_whitespace)
+     {
+         return;
+     }
+diff --git a/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment.py.snap b/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment.py.snap
+index da0769a52190312ad32d61036f763e75e0297cdf..a1f9e7dcaa1e2b272b8f48dec7d47361e72d2044 100644
+--- a/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment.py.snap
++++ b/crates/ruff_linter/src/rules/pylint/snapshots/ruff_linter__rules__pylint__tests__empty-comment_empty_comment.py.snap
+@@ -103,9 +103,76 @@ PLR2044 [*] Line with empty comment
+ 57 | α = 1
+ 58 | α#
+    |  ^
++59 |
++60 | # Comments that only contain non-Python whitespace (stripped by the formatter) are empty too.
++   |
+ help: Delete the empty comment
+    |
+ 57 | α = 1
+    - α#
+ 58 + α
++59 |
++   |
++
++PLR2044 [*] Line with empty comment
++  --> empty_comment.py:62:1
++   |
++60 | # Comments that only contain non-Python whitespace (stripped by the formatter) are empty too.
++61 |
++62 | #␋
++   | ^^
++63 |
++64 | x = 1  #　
++   |
++help: Delete the empty comment
++   |
++61 |
++   - #
++62 |
++   |
++
++PLR2044 [*] Line with empty comment
++  --> empty_comment.py:64:8
++   |
++62 | #␋
++63 |
++64 | x = 1  #　
++   |        ^^^
++65 |
++66 | #
++   |
++help: Delete the empty comment
++   |
++63 |
++   - x = 1  #　
++64 + x = 1
++65 |
++   |
++
++PLR2044 [*] Line with empty comment
++  --> empty_comment.py:66:1
++   |
++64 | x = 1  #　
++65 |
++66 | #
++   | ^
++67 | #␋
++   |
++help: Delete the empty comment
++   |
++65 |
++   - #
++66 | #
++   |
++
++PLR2044 [*] Line with empty comment
++  --> empty_comment.py:67:1
++   |
++66 | #
++67 | #␋
++   | ^^
++help: Delete the empty comment
++   |
++66 | #
++   - #
+    |
+diff --git a/crates/ruff_python_trivia/src/comment_ranges.rs b/crates/ruff_python_trivia/src/comment_ranges.rs
+index 12c1f99a003952b6bb386c296e3048d29baa6335..6e81f3a347130a23fede2ddffa32d09ec840c675 100644
+--- a/crates/ruff_python_trivia/src/comment_ranges.rs
++++ b/crates/ruff_python_trivia/src/comment_ranges.rs
+@@ -242,7 +242,7 @@ impl CommentRanges {
+ 
+     /// Returns `true` if the given range is an empty comment.
+     fn is_empty(range: TextRange, source: &str) -> bool {
+-        source[range].chars().skip(1).all(is_python_whitespace)
++        source[range].chars().skip(1).all(char::is_whitespace)
+     }
+ 
+     /// Returns `true` if a comment is an own-line comment (as opposed to an end-of-line comment).

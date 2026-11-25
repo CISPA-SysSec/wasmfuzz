@@ -1,0 +1,130 @@
+Formatter: `with ((a, b)):` was formatted as `with (a, b):` (two context managers).
+Regression test included; fuzz repro: repro/fix-formatter-with-tuple.py (ruff_formatter_idempotency).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/statement/with.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/statement/with.py
+index 9c8b42562879269afdcffdc30a8e88f528934e93..ea0e1dbaf5a3288a2269d4d807f3fc3c933759e1 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/statement/with.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/statement/with.py
+@@ -367,3 +367,14 @@ with (
+     # Bar
+ ):
+     pass
++
++# A single tuple context manager keeps its extra parentheses: `with (a, b):` has two
++# context managers.
++with ((a, b)):
++    pass
++
++with((a,)):
++    pass
++
++with ((aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, cccccccccccccccccccccccccccc)):
++    pass
+diff --git a/crates/ruff_python_formatter/src/statement/stmt_with.rs b/crates/ruff_python_formatter/src/statement/stmt_with.rs
+index e6876755eb4392ee5fe43af9c92d994dfd9684e9..2350acdd712ffbd070c74ddd916a908154f3000b 100644
+--- a/crates/ruff_python_formatter/src/statement/stmt_with.rs
++++ b/crates/ruff_python_formatter/src/statement/stmt_with.rs
+@@ -1,6 +1,6 @@
+ use ruff_formatter::{FormatContext, FormatError, format_args, write};
+ use ruff_python_ast::PythonVersion;
+-use ruff_python_ast::{StmtWith, WithItem};
++use ruff_python_ast::{Expr, StmtWith, WithItem};
+ use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
+ use ruff_text_size::{Ranged, TextRange};
+ 
+@@ -288,6 +288,27 @@ impl<'a> WithItemsLayout<'a> {
+                 return Ok(Self::Parenthesized);
+             }
+ 
++            // A single tuple context manager keeps an extra pair of parentheses: `with (a, b):` has
++            // two context managers.
++            // ```python
++            // with ((a, b)):
++            //     pass
++            // ```
++            // Unless an element can't be a context manager, which makes it a tuple anyway:
++            // `with (a, *b):` and `with (x := a, y := b):`.
++            if single.optional_vars.is_none()
++                && single.context_expr.as_tuple_expr().is_some_and(|tuple| {
++                    !tuple.is_empty()
++                        && tuple.iter().all(|element| match element {
++                            Expr::Starred(_) => false,
++                            Expr::Named(_) => context.is_expression_parenthesized(element.into()),
++                            _ => true,
++                        })
++                })
++            {
++                return Ok(Self::Parenthesized);
++            }
++
+             // Preserve the parentheses around the context expression instead of parenthesizing the entire
+             // with items.
+             if context.is_expression_parenthesized((&single.context_expr).into()) {
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@statement__with.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@statement__with.py.snap
+index d80b5d030becb3b2999db06932cfa36b9ea4277c..e919e90f25ef2fe174d8ca9313d9df3828fccd8a 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@statement__with.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@statement__with.py.snap
+@@ -373,6 +373,17 @@ with (
+     # Bar
+ ):
+     pass
++
++# A single tuple context manager keeps its extra parentheses: `with (a, b):` has two
++# context managers.
++with ((a, b)):
++    pass
++
++with((a,)):
++    pass
++
++with ((aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, cccccccccccccccccccccccccccc)):
++    pass
+ ```
+ 
+ ## Outputs
+@@ -805,6 +816,23 @@ with (
+     # Bar
+ ):
+     pass
++
++# A single tuple context manager keeps its extra parentheses: `with (a, b):` has two
++# context managers.
++with ((a, b)):
++    pass
++
++with ((a,)):
++    pass
++
++with (
++    (
++        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
++        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,
++        cccccccccccccccccccccccccccc,
++    )
++):
++    pass
+ ```
+ 
+ 
+@@ -1267,4 +1295,21 @@ with (
+     # Bar
+ ):
+     pass
++
++# A single tuple context manager keeps its extra parentheses: `with (a, b):` has two
++# context managers.
++with ((a, b)):
++    pass
++
++with ((a,)):
++    pass
++
++with (
++    (
++        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
++        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,
++        cccccccccccccccccccccccccccc,
++    )
++):
++    pass
+ ```

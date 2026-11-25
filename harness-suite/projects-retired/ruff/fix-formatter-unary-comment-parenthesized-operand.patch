@@ -1,0 +1,68 @@
+Formatter: an end-of-line comment after a unary operator in a comparison that is itself a
+parenthesized operand (`(i>+#\na)*_`) moved on every run (variant of
+fix-formatter-unary-comment-idempotency).
+Regression test included; fuzz repro: repro/fix-formatter-unary-comment-parenthesized-operand.py (ruff_formatter_idempotency).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/compare.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/compare.py
+index 3411d43026bb1cd4155980d879da4a9120afcabc..b61ee00203c4f1cd20948b42b2b2292be3e26477 100644
+--- a/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/compare.py
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/expression/compare.py
+@@ -201,3 +201,10 @@ Mte5,d]
+     Mte5,
+     d,
+ ]
++
++# Fuzz regression: the same comment when the comparison is a parenthesized operand of a
++# binary expression
++(i>+#
++a)*_
++(A+~#
++a)/T
+diff --git a/crates/ruff_python_formatter/src/expression/binary_like.rs b/crates/ruff_python_formatter/src/expression/binary_like.rs
+index 4f21698df17dcb8b882bd8cec4638c8dc568339f..a78ac2f659487856e75178b5ebc976d03e622435 100644
+--- a/crates/ruff_python_formatter/src/expression/binary_like.rs
++++ b/crates/ruff_python_formatter/src/expression/binary_like.rs
+@@ -936,7 +936,11 @@ impl Format<PyFormatContext<'_>> for Operand<'_> {
+             let trailing_after_parentheses_start = trailing
+                 .iter()
+                 .position(|comment| {
++                    // A trailing comment can start inside the expression: an end-of-line
++                    // comment after the operator of a unary rightmost operand
++                    // (`(a < +  # comment\n b) * c`) trails the whole binary-like expression.
+                     comment.is_unformatted()
++                        && comment.start() >= expression.end()
+                         && matches!(
+                             SimpleTokenizer::new(
+                                 f.context().source(),
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@expression__compare.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@expression__compare.py.snap
+index ed8ce403322de42a6de36030f94b44aa64f2d1e2..035138b0118dfe15bc9c87672e84cc0d01eb5d18 100644
+--- a/crates/ruff_python_formatter/tests/snapshots/format@expression__compare.py.snap
++++ b/crates/ruff_python_formatter/tests/snapshots/format@expression__compare.py.snap
+@@ -207,6 +207,13 @@ Mte5,d]
+     Mte5,
+     d,
+ ]
++
++# Fuzz regression: the same comment when the comparison is a parenthesized operand of a
++# binary expression
++(i>+#
++a)*_
++(A+~#
++a)/T
+ ```
+ 
+ ## Output
+@@ -454,4 +461,13 @@ c = (
+     a < +Mte5,  #
+     d,
+ ]
++
++# Fuzz regression: the same comment when the comparison is a parenthesized operand of a
++# binary expression
++(
++    i > +a  #
++) * _
++(
++    A + ~a  #
++) / T
+ ```

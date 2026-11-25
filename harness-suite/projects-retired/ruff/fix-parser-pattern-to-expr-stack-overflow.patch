@@ -1,0 +1,63 @@
+Grow the stack in pattern_to_expr: an invalid deeply nested pattern (`case [[[...]]]():`)
+recursed without stacker and overflowed the 1 MiB wasm stack.
+Regression test included; fuzz repro: repro/fix-parser-pattern-to-expr-stack-overflow.py (ruff_parse_simple).
+
+diff --git a/crates/ruff_python_parser/src/parser/recovery.rs b/crates/ruff_python_parser/src/parser/recovery.rs
+index 22b8e120b1b44e920475a0802010f8941b04f759..df23cd876c29ac6f81028d4536ebc931cf1e7bbb 100644
+--- a/crates/ruff_python_parser/src/parser/recovery.rs
++++ b/crates/ruff_python_parser/src/parser/recovery.rs
+@@ -2,6 +2,8 @@ use ruff_python_ast::name::Name;
+ use ruff_python_ast::{self as ast, Expr, ExprContext, Pattern};
+ use ruff_text_size::{Ranged, TextLen, TextRange};
+ 
++use super::{STACK_RED_ZONE, STACK_SIZE};
++
+ /// Convert the given [`Pattern`] to an [`Expr`].
+ ///
+ /// This is used to convert an invalid use of pattern to their equivalent expression
+@@ -26,6 +28,14 @@ use ruff_text_size::{Ranged, TextLen, TextRange};
+ /// with both the pattern and name present. This is because it cannot be converted to an expression
+ /// without dropping one of them as there's no way to represent `x as y` as a valid expression.
+ pub(super) fn pattern_to_expr(pattern: Pattern) -> Expr {
++    // The conversion recurses once per nesting level of the pattern, and the parser accepts
++    // arbitrarily deep patterns (it grows the stack while parsing them), so grow the stack here
++    // as well. Without this, an invalid deeply nested pattern such as `case [[[...]]]():`
++    // overflows the stack.
++    stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, || pattern_to_expr_impl(pattern))
++}
++
++fn pattern_to_expr_impl(pattern: Pattern) -> Expr {
+     match pattern {
+         Pattern::MatchSingleton(ast::PatternMatchSingleton {
+             range,
+diff --git a/crates/ruff_python_parser/src/parser/tests.rs b/crates/ruff_python_parser/src/parser/tests.rs
+index 8c856712d0f68d543f7c3fd6914f728428779125..c70916ccffa9cea7dac70efbd07fb90c381308cd 100644
+--- a/crates/ruff_python_parser/src/parser/tests.rs
++++ b/crates/ruff_python_parser/src/parser/tests.rs
+@@ -437,6 +437,26 @@ fn nested_invalid_mapping_pattern_keys_grow_stack() {
+     assert!(!parsed.errors().is_empty());
+ }
+ 
++#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
++#[test]
++fn nested_invalid_pattern_to_expr_grows_stack() {
++    // An invalid class pattern (`[...]()`) or complex literal pattern (`[...]+1j`) converts the
++    // whole deeply nested pattern to an expression during error recovery (fuzz: ruff_parse_simple).
++    let depth = 100_000;
++    for suffix in ["()", "+1j"] {
++        let src = format!(
++            "match x:\n    case {}{}{}:\n        pass\n",
++            "[".repeat(depth),
++            "]".repeat(depth),
++            suffix
++        );
++        let parsed = crate::parse_unchecked(&src, ParseOptions::from(Mode::Module));
++        assert!(!parsed.errors().is_empty());
++        // Dropping the AST is recursive too; do it on a large stack so the test checks the parser.
++        stacker::grow(256 * 1024 * 1024, move || drop(parsed));
++    }
++}
++
+ #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+ #[test]
+ fn binary_paren_interplay_grows_stack() {

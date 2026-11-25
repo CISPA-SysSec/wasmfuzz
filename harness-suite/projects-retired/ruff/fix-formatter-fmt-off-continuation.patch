@@ -1,0 +1,81 @@
+Formatter: in fmt: off code, a line continuation followed by an empty line lost one empty line
+per run until the continuation joined the next statement.
+Regression test included; fuzz repro: repro/fix-formatter-fmt-off-continuation.py (ruff_formatter_idempotency).
+
+diff --git a/crates/ruff_python_formatter/resources/test/fixtures/ruff/fmt_on_off/line_continuation.py b/crates/ruff_python_formatter/resources/test/fixtures/ruff/fmt_on_off/line_continuation.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e3bdf9915a57603ebf388760881742228e48c518
+--- /dev/null
++++ b/crates/ruff_python_formatter/resources/test/fixtures/ruff/fmt_on_off/line_continuation.py
+@@ -0,0 +1,11 @@
++# fmt: off
++# A line continuation followed by an empty line ends the logical line: the
++# empty line must stay, or the continuation joins the next statement.
++x \
++
++y = 1
++\
++
++
++z
++# fmt: on
+diff --git a/crates/ruff_python_formatter/src/verbatim.rs b/crates/ruff_python_formatter/src/verbatim.rs
+index 48eeba421607d598c22be545e7d845dd6e1fd21b..201fc962af57e852791a3c0b0251c9928f747f15 100644
+--- a/crates/ruff_python_formatter/src/verbatim.rs
++++ b/crates/ruff_python_formatter/src/verbatim.rs
+@@ -794,7 +794,15 @@ impl Format<PyFormatContext<'_>> for FormatVerbatimStatementRange {
+ 
+                 // Write the line separator that terminates the line, except if it is the last line (that isn't separated by a hard line break).
+                 if logical_line.has_trailing_newline {
+-                    hard_line_break().fmt(f)?;
++                    // A line continuation followed by an empty line (`x \\\n\n`) ends the
++                    // logical line with that empty line, so the text ends with a newline. The
++                    // printer skips a hard line break at the start of a line, which would
++                    // join the next line onto the continuation: write an empty line instead.
++                    if f.context().source()[trimmed_line_range].ends_with(['\n', '\r']) {
++                        empty_line().fmt(f)?;
++                    } else {
++                        hard_line_break().fmt(f)?;
++                    }
+                 }
+             }
+ 
+diff --git a/crates/ruff_python_formatter/tests/snapshots/format@fmt_on_off__line_continuation.py.snap b/crates/ruff_python_formatter/tests/snapshots/format@fmt_on_off__line_continuation.py.snap
+new file mode 100644
+index 0000000000000000000000000000000000000000..e9750032da80c58ba235cada9cdd4ac9379e06b7
+--- /dev/null
++++ b/crates/ruff_python_formatter/tests/snapshots/format@fmt_on_off__line_continuation.py.snap
+@@ -0,0 +1,33 @@
++---
++source: crates/ruff_python_formatter/tests/fixtures.rs
++input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/fmt_on_off/line_continuation.py
++---
++## Input
++```python
++# fmt: off
++# A line continuation followed by an empty line ends the logical line: the
++# empty line must stay, or the continuation joins the next statement.
++x \
++
++y = 1
++\
++
++
++z
++# fmt: on
++```
++
++## Output
++```python
++# fmt: off
++# A line continuation followed by an empty line ends the logical line: the
++# empty line must stay, or the continuation joins the next statement.
++x \
++
++y = 1
++\
++
++
++z
++# fmt: on
++```
