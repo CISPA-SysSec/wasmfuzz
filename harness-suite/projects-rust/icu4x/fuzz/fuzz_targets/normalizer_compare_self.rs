@@ -9,16 +9,10 @@ use icu_normalizer::DecomposingNormalizerBorrowed;
 use utf16_iter::Utf16CharsEx;
 use utf8_iter::Utf8CharsEx;
 
-// Local modification: icu_normalizer 2.2.0 (and upstream main as of 2026-09)
-// `normalize_utf8()` returns `Cow::Borrowed` of *ill-formed* input via
-// `split_normalized_utf8()` -> `from_utf8_unchecked`, because
-// `IsNormalizedSinkUtf8::write_char` matches the U+FFFD emitted for an
-// ill-formed sequence against the ill-formed bytes. That yields an invalid
-// `&str` (UB). It is reported separately; to keep this harness useful the
-// Cow-returning API is only used on well-formed input and the sound
-// `normalize_utf8_to()` path is used otherwise. Set ICU4X_FUZZ_UNSOUND_UTF8=1
-// at build time to exercise the buggy path.
-const CHECK_UNSOUND: bool = option_env!("ICU4X_FUZZ_UNSOUND_UTF8").is_some();
+// Local modification: is_normalized_utf8() returns false for ill-formed input since
+// upstream 5600ae1 (the U+FFFD of an ill-formed sequence no longer counts as normalized),
+// so compare it against is_normalized() of the lossy string only for well-formed input.
+// normalize_utf8() also became sound there; keep a check that it returns well-formed UTF-8.
 
 fuzz_target!(|data: &[u8]| {
     let well_formed = String::from_utf8_lossy(data);
@@ -36,7 +30,7 @@ fuzz_target!(|data: &[u8]| {
 
     let is_normalized_nfd_str = nfd.is_normalized(&well_formed);
     let is_normalized_nfd_utf8 = nfd.is_normalized_utf8(data);
-    assert_eq!(is_normalized_nfd_str, is_normalized_nfd_utf8);
+    assert_eq!(is_normalized_nfd_str && valid, is_normalized_nfd_utf8);
     let is_normalized_nfd_utf16 = nfd.is_normalized_utf16(&utf16);
     assert_eq!(is_normalized_nfd_utf16, is_normalized_nfd_str);
 
@@ -44,15 +38,8 @@ fuzz_target!(|data: &[u8]| {
     let nfd_str_iter: String = nfd.normalize_iter(well_formed.chars()).collect();
     assert_eq!((&*nfd_str), (&*nfd_str_iter));
 
-    let nfd_utf8: std::borrow::Cow<str> = if valid || CHECK_UNSOUND {
-        let r = nfd.normalize_utf8(data);
-        assert!(core::str::from_utf8(r.as_bytes()).is_ok(), "normalize_utf8 returned ill-formed str");
-        r
-    } else {
-        let mut out = String::new();
-        let _ = nfd.normalize_utf8_to(data, &mut out);
-        out.into()
-    };
+    let nfd_utf8 = nfd.normalize_utf8(data);
+    assert!(core::str::from_utf8(nfd_utf8.as_bytes()).is_ok(), "normalize_utf8 returned ill-formed str");
     let nfd_utf8_iter: String = nfd.normalize_iter(data.chars()).collect();
     assert_eq!((&*nfd_utf8), (&*nfd_utf8_iter));
 
@@ -81,7 +68,7 @@ fuzz_target!(|data: &[u8]| {
 
     let is_normalized_nfc_str = nfc.is_normalized(&well_formed);
     let is_normalized_nfc_utf8 = nfc.is_normalized_utf8(data);
-    assert_eq!(is_normalized_nfc_str, is_normalized_nfc_utf8);
+    assert_eq!(is_normalized_nfc_str && valid, is_normalized_nfc_utf8);
     let is_normalized_nfc_utf16 = nfc.is_normalized_utf16(&utf16);
     assert_eq!(is_normalized_nfc_utf16, is_normalized_nfc_str);
 
@@ -89,15 +76,8 @@ fuzz_target!(|data: &[u8]| {
     let nfc_str_iter: String = nfc.normalize_iter(well_formed.chars()).collect();
     assert_eq!((&*nfc_str), (&*nfc_str_iter));
 
-    let nfc_utf8: std::borrow::Cow<str> = if valid || CHECK_UNSOUND {
-        let r = nfc.normalize_utf8(data);
-        assert!(core::str::from_utf8(r.as_bytes()).is_ok(), "normalize_utf8 returned ill-formed str");
-        r
-    } else {
-        let mut out = String::new();
-        let _ = nfc.normalize_utf8_to(data, &mut out);
-        out.into()
-    };
+    let nfc_utf8 = nfc.normalize_utf8(data);
+    assert!(core::str::from_utf8(nfc_utf8.as_bytes()).is_ok(), "normalize_utf8 returned ill-formed str");
     let nfc_utf8_iter: String = nfc.normalize_iter(data.chars()).collect();
     assert_eq!((&*nfc_utf8), (&*nfc_utf8_iter));
 
@@ -126,7 +106,7 @@ fuzz_target!(|data: &[u8]| {
 
     let is_normalized_nfkd_str = nfkd.is_normalized(&well_formed);
     let is_normalized_nfkd_utf8 = nfkd.is_normalized_utf8(data);
-    assert_eq!(is_normalized_nfkd_str, is_normalized_nfkd_utf8);
+    assert_eq!(is_normalized_nfkd_str && valid, is_normalized_nfkd_utf8);
     let is_normalized_nfkd_utf16 = nfkd.is_normalized_utf16(&utf16);
     assert_eq!(is_normalized_nfkd_utf16, is_normalized_nfkd_str);
 
@@ -134,15 +114,8 @@ fuzz_target!(|data: &[u8]| {
     let nfkd_str_iter: String = nfkd.normalize_iter(well_formed.chars()).collect();
     assert_eq!((&*nfkd_str), (&*nfkd_str_iter));
 
-    let nfkd_utf8: std::borrow::Cow<str> = if valid || CHECK_UNSOUND {
-        let r = nfkd.normalize_utf8(data);
-        assert!(core::str::from_utf8(r.as_bytes()).is_ok(), "normalize_utf8 returned ill-formed str");
-        r
-    } else {
-        let mut out = String::new();
-        let _ = nfkd.normalize_utf8_to(data, &mut out);
-        out.into()
-    };
+    let nfkd_utf8 = nfkd.normalize_utf8(data);
+    assert!(core::str::from_utf8(nfkd_utf8.as_bytes()).is_ok(), "normalize_utf8 returned ill-formed str");
     let nfkd_utf8_iter: String = nfkd.normalize_iter(data.chars()).collect();
     assert_eq!((&*nfkd_utf8), (&*nfkd_utf8_iter));
 
@@ -171,7 +144,7 @@ fuzz_target!(|data: &[u8]| {
 
     let is_normalized_nfkc_str = nfkc.is_normalized(&well_formed);
     let is_normalized_nfkc_utf8 = nfkc.is_normalized_utf8(data);
-    assert_eq!(is_normalized_nfkc_str, is_normalized_nfkc_utf8);
+    assert_eq!(is_normalized_nfkc_str && valid, is_normalized_nfkc_utf8);
     let is_normalized_nfkc_utf16 = nfkc.is_normalized_utf16(&utf16);
     assert_eq!(is_normalized_nfkc_utf16, is_normalized_nfkc_str);
 
@@ -179,15 +152,8 @@ fuzz_target!(|data: &[u8]| {
     let nfkc_str_iter: String = nfkc.normalize_iter(well_formed.chars()).collect();
     assert_eq!((&*nfkc_str), (&*nfkc_str_iter));
 
-    let nfkc_utf8: std::borrow::Cow<str> = if valid || CHECK_UNSOUND {
-        let r = nfkc.normalize_utf8(data);
-        assert!(core::str::from_utf8(r.as_bytes()).is_ok(), "normalize_utf8 returned ill-formed str");
-        r
-    } else {
-        let mut out = String::new();
-        let _ = nfkc.normalize_utf8_to(data, &mut out);
-        out.into()
-    };
+    let nfkc_utf8 = nfkc.normalize_utf8(data);
+    assert!(core::str::from_utf8(nfkc_utf8.as_bytes()).is_ok(), "normalize_utf8 returned ill-formed str");
     let nfkc_utf8_iter: String = nfkc.normalize_iter(data.chars()).collect();
     assert_eq!((&*nfkc_utf8), (&*nfkc_utf8_iter));
 

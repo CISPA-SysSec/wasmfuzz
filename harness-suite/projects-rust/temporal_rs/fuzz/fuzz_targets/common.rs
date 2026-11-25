@@ -10,3 +10,17 @@ pub fn provider() -> &'static ZoneInfo64TzdbProvider<'static> {
         ZoneInfo64TzdbProvider::zoneinfo64_provider_for_testing().expect("zoneinfo64 data")
     })
 }
+
+/// Build the provider from a static constructor. wasmfuzz runs `_initialize` (and with it
+/// `__wasm_call_ctors`) once per instance with its own fuel budget before the per-execution
+/// instruction limit applies, so the zoneinfo64 setup no longer counts against every
+/// execution (where it exceeded small instruction limits, and a trap resets the instance, so
+/// the OnceLock never stayed initialised). On native targets this runs before main.
+#[used]
+#[link_section = ".init_array"]
+static INIT_PROVIDER: extern "C" fn() = {
+    extern "C" fn init_provider() {
+        let _ = provider();
+    }
+    init_provider
+};

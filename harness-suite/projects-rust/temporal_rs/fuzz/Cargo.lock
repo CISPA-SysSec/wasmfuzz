@@ -355,7 +355,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "temporal_rs"
+name = "temporal"
 version = "0.2.6"
 dependencies = [
  "calendrical_calculations",
@@ -375,7 +375,7 @@ version = "0.0.0"
 dependencies = [
  "arbitrary",
  "libfuzzer-sys",
- "temporal_rs",
+ "temporal",
  "timezone_provider",
 ]
 

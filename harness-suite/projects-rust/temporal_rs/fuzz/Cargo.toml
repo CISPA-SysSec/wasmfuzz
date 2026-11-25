@@ -2,6 +2,8 @@
 # (chromium/src/third_party/rust/chromium_crates_io/Cargo.toml):
 #   temporal_rs: default-features = false, features = ["float64_representable_durations"]
 #   temporal_capi: features = ["zoneinfo64"] -> time zones come from ICU4C's zoneinfo64.res
+# Upstream moved the crate to crates/temporal and renamed it `temporal` (crates/temporal_rs is now a
+# re-export shim without feature forwarding); it is imported under the old name temporal_rs.
 # Dependency versions in Cargo.lock are aligned with Chromium's Cargo.lock.
 
 [package]
@@ -16,8 +18,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1.4", features = ["derive"] }
-temporal_rs = { path = "../repo", default-features = false, features = ["float64_representable_durations"] }
-timezone_provider = { path = "../repo/provider", default-features = false, features = ["zoneinfo64"] }
+temporal_rs = { package = "temporal", path = "../repo/crates/temporal", default-features = false, features = ["float64_representable_durations"] }
+timezone_provider = { path = "../repo/crates/provider", default-features = false, features = ["zoneinfo64"] }
 
 [workspace]
 members = ["."]
