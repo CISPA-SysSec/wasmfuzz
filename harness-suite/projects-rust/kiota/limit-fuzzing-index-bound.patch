@@ -1,0 +1,61 @@
+Decline export indices from 2^18 on in --cfg fuzzing builds
+
+handle_name/handle_level/handle_expr push placeholder slots until the
+table reaches the record's "in"/"il"/"ie" index. Skipped and
+out-of-order indices are valid (arena other/sparse-name-index) and
+kiota's own trimmed fixtures keep original indices up to 145684, so
+upstream has no bound: one record with "ie":34888884009 (truncated to
+u32) makes a 16 KB export take 24 GB and 53 s natively, and runs a wasm
+exec out of fuel or memory. Fuzzing builds decline indices >= 2^18,
+which keeps each table at a few MB. Repro in suite-repros.
+Upstream: none (no related issue or PR; open issues #3 and #5 are
+soundness reports, checked 2026-11-22).
+
+diff --git a/src/parser.rs b/src/parser.rs
+index ca221a9..f9fc0e6 100644
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -1330,15 +1330,18 @@ impl Parser {
+             return Ok(false);
+         }
+         if let Some(idx) = v.get("in").and_then(|x| x.as_u64()) {
+-            self.handle_name(idx as u32, v)?;
++            let idx = table_index(idx)?;
++            self.handle_name(idx, v)?;
+             return Ok(false);
+         }
+         if let Some(idx) = v.get("il").and_then(|x| x.as_u64()) {
+-            self.handle_level(idx as u32, v)?;
++            let idx = table_index(idx)?;
++            self.handle_level(idx, v)?;
+             return Ok(false);
+         }
+         if let Some(idx) = v.get("ie").and_then(|x| x.as_u64()) {
+-            self.handle_expr(idx as u32, v)?;
++            let idx = table_index(idx)?;
++            self.handle_expr(idx, v)?;
+             return Ok(false);
+         }
+         if let Some(d) = v.get("axiom") {
+@@ -1703,3 +1706,21 @@ fn rec_sort_key(name: &str) -> (u8, u32) {
+     }
+     (3, 0)
+ }
++
++/// Exclusive bound on `in`/`il`/`ie` indices in fuzzing builds (see `table_index`).
++#[cfg(fuzzing)]
++const MAX_FUZZ_INDEX: u64 = 1 << 18;
++
++/// The name, level and expression tables grow up to each record's index, so one
++/// record with `"ie":34888884009` makes a 16 KB export take 24 GB and 53 s.
++/// Fuzzing builds decline indices from `MAX_FUZZ_INDEX` on.
++#[inline(always)]
++fn table_index(idx: u64) -> Result<u32, TcError> {
++    #[cfg(fuzzing)]
++    if idx >= MAX_FUZZ_INDEX {
++        return Err(TcError::Decline(format!(
++            "export index {idx} is past the fuzzing bound {MAX_FUZZ_INDEX}"
++        )));
++    }
++    Ok(idx as u32)
++}

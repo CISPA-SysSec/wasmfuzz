@@ -1,0 +1,135 @@
+Bound recursion on wasm32 (and in --cfg fuzzing builds): decline past 2048
+
+Native checking runs on 2 GiB thread stacks and has no recursion limit. On
+wasm32 guest calls run on the engine's native stack (wasmfuzz: 8 MiB for
+run-input, 32 MiB per fuzzing worker), so deep evaluation would end in a
+stack-overflow trap instead of a verdict. A Nest guard at the recursive
+steps (eval_node, apply_new, whnf_head_uncached, value_type_uncached,
+unify_general, infer_nonvar, bignum_via_force) counts their nesting and declines
+(unsupported!) past MAX_NEST = 2048. Native builds without --cfg fuzzing
+compile the guard to nothing.
+Upstream: none (no related issue or PR; issues #2-#12 are soundness, OOM and
+loose-bvar reports, checked 2026-11-22).
+
+diff --git a/src/checker/conv.rs b/src/checker/conv.rs
+index 327c1bd..32a5e45 100644
+--- a/src/checker/conv.rs
++++ b/src/checker/conv.rs
+@@ -92,6 +92,7 @@ impl TypeChecker<'_, '_> {
+ 
+     #[inline]
+     fn unify_general<const RIGID: bool>(&mut self, depth: u32, x: V, y: V) -> bool {
++        let _nest = crate::outcome::Nest::enter();
+         let (kx, ky) = (self.vals().kind(x), self.vals().kind(y));
+         let cacheable = is_cacheable(kx) || is_cacheable(ky);
+         let neg_eligible = kx != VT::Lam && ky != VT::Lam;
+diff --git a/src/checker/eval.rs b/src/checker/eval.rs
+index 6c0225f..665c673 100644
+--- a/src/checker/eval.rs
++++ b/src/checker/eval.rs
+@@ -38,6 +38,7 @@ impl TypeChecker<'_, '_> {
+     }
+ 
+     fn eval_node(&mut self, depth: u32, env: E, e: ExprId, node: ExprNode) -> V {
++        let _nest = crate::outcome::Nest::enter();
+         if node.loose == 0 {
+             let Some(ls) = self.vals().env_lsub(env) else {
+                 return memo!(
+@@ -401,6 +402,7 @@ impl TypeChecker<'_, '_> {
+ 
+     #[inline(never)]
+     fn apply_new(&mut self, depth: u32, f: V, a: V) -> V {
++        let _nest = crate::outcome::Nest::enter();
+         match self.val(f) {
+             Value::Lam { body: clo, .. } => {
+                 let clo_env = clo.env;
+@@ -500,6 +502,7 @@ impl TypeChecker<'_, '_> {
+     }
+ 
+     fn value_type_uncached(&mut self, depth: u32, v: V) -> V {
++        let _nest = crate::outcome::Nest::enter();
+         match self.val(v) {
+             Value::Sort { level } => {
+                 let s = self.ctx.succ(level);
+@@ -586,6 +589,7 @@ impl TypeChecker<'_, '_> {
+     }
+ 
+     fn whnf_head_uncached(&mut self, depth: u32, v: V) -> V {
++        let _nest = crate::outcome::Nest::enter();
+         if let Some(r) = self.store_lookup(depth, v) {
+             return r;
+         }
+diff --git a/src/checker/infer.rs b/src/checker/infer.rs
+index 2e6bcd8..29d32b2 100644
+--- a/src/checker/infer.rs
++++ b/src/checker/infer.rs
+@@ -119,6 +119,7 @@ impl TypeChecker<'_, '_> {
+         e: ExprId,
+         node: ExprNode,
+     ) -> V {
++        let _nest = crate::outcome::Nest::enter();
+         match node.expr {
+             Var { dbj_idx } => {
+                 return self
+diff --git a/src/outcome.rs b/src/outcome.rs
+index ce0b999..32ed70b 100644
+--- a/src/outcome.rs
++++ b/src/outcome.rs
+@@ -67,6 +67,45 @@ impl fmt::Display for CheckError {
+ 
+ impl Error for CheckError {}
+ 
++/// Nesting of the recursive evaluation, conversion and inference steps (`Nest::enter`
++/// in eval_node, apply_new, whnf_head_uncached, value_type_uncached, unify_general and
++/// infer_nonvar). Native checking runs on 2 GiB stacks and has no limit; on wasm32
++/// (and in `--cfg fuzzing` builds, so native replays agree) guest calls run on the
++/// engine's native stack (wasmfuzz: 8 MiB for run-input, 32 MiB per fuzzing worker),
++/// so past `MAX_NEST` nested steps the export is declined.
++#[cfg(any(target_family = "wasm", fuzzing))]
++pub(crate) const MAX_NEST: u32 = 2048;
++
++#[cfg(any(target_family = "wasm", fuzzing))]
++thread_local! {
++    static NEST: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
++}
++
++pub(crate) struct Nest(());
++
++impl Nest {
++    #[inline(always)]
++    pub(crate) fn enter() -> Nest {
++        #[cfg(any(target_family = "wasm", fuzzing))]
++        NEST.with(|n| {
++            let d = n.get();
++            if d >= MAX_NEST {
++                unsupported!("recursion deeper than {MAX_NEST} nested steps");
++            }
++            n.set(d + 1);
++        });
++        Nest(())
++    }
++}
++
++#[cfg(any(target_family = "wasm", fuzzing))]
++impl Drop for Nest {
++    #[inline(always)]
++    fn drop(&mut self) {
++        NEST.with(|n| n.set(n.get() - 1));
++    }
++}
++
+ pub(crate) fn decline<A>(msg: impl Into<String>) -> Result<A, Box<dyn Error>> {
+     Err(Box::new(Decline(msg.into())))
+ }
+diff --git a/src/checker/eval/reduction.rs b/src/checker/eval/reduction.rs
+index 8e88df2..19fb4d0 100644
+--- a/src/checker/eval/reduction.rs
++++ b/src/checker/eval/reduction.rs
+@@ -883,6 +883,7 @@ impl TypeChecker<'_, '_> {
+     }
+ 
+     fn bignum_via_force(&mut self, depth: u32, v: V) -> Option<BigUint> {
++        let _nest = crate::outcome::Nest::enter();
+         if self.value_has_free_bvar(v) {
+             return None;
+         }

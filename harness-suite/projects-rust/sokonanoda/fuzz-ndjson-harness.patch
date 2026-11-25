@@ -1,0 +1,132 @@
+Add a cargo-fuzz target `ndjson` (upstream has none)
+
+A lean4export NDJSON stream checked as the arena runs `sokonanoda --stdin
+--nat-extension --string-extension --axiom-allow-all`, on one thread:
+Config::to_export_file_from_bytes (new: parses from memory as a mapped
+file is parsed, with the same panic-to-error mapping as to_export_file),
+then check_all_declars. sokonanoda rejects and declines by panicking with
+Rejection/Decline payloads; the fuzzing build aborts on panic, so a panic
+hook (installed from a static constructor) ends the test case through
+wasmfuzz's exit_testcase import for those payloads. Any other panic is a
+finding.
+Upstream: none (no fuzz targets upstream, checked 2026-11-22).
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..9827857
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,22 @@
++[package]
++name = "sokonanoda-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2021"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++sokonanoda = { path = ".." }
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "ndjson"
++path = "fuzz_targets/ndjson.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/ndjson.rs b/fuzz/fuzz_targets/ndjson.rs
+new file mode 100644
+index 0000000..af0c28c
+--- /dev/null
++++ b/fuzz/fuzz_targets/ndjson.rs
+@@ -0,0 +1,59 @@
++//! A lean4export NDJSON stream checked as the arena runs `sokonanoda --stdin
++//! --nat-extension --string-extension --axiom-allow-all`, on one thread: the export is
++//! parsed from memory (as a mapped file is), then `check_all_declars` checks every
++//! declaration in file order.
++//!
++//! sokonanoda rejects and declines by panicking with a `Rejection` / `Decline` payload,
++//! which its CLI catches. The fuzzing build aborts on panic, so a panic hook installed
++//! from a static constructor ends the test case through wasmfuzz's `exit_testcase`
++//! import for those two payloads; every other panic is a finding. (Other runners would
++//! see every rejection as a crash: the harness is meant for wasm32 under wasmfuzz.)
++
++#![no_main]
++
++use libfuzzer_sys::fuzz_target;
++use sokonanoda::{AxiomPolicy, Config, Decline, Output, Rejection};
++
++#[cfg(target_family = "wasm")]
++#[link(wasm_import_module = "wasmfuzz")]
++extern "C" {
++    #[link_name = "exit_testcase"]
++    fn wasmfuzz_exit_testcase() -> !;
++}
++
++fn verdict_ends_testcase(payload: &(dyn std::any::Any + Send)) -> bool {
++    payload.is::<Rejection>() || payload.is::<Decline>()
++}
++
++#[used]
++#[link_section = ".init_array"]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        let next = std::panic::take_hook();
++        std::panic::set_hook(Box::new(move |info| {
++            #[cfg(target_family = "wasm")]
++            if verdict_ends_testcase(info.payload()) {
++                unsafe { wasmfuzz_exit_testcase() }
++            }
++            next(info)
++        }));
++    }
++    init
++};
++
++fuzz_target!(|data: &[u8]| {
++    let config = Config {
++        export_file_path: None,
++        use_stdin: false,
++        axiom_policy: AxiomPolicy::AllowAll,
++        num_threads: 1,
++        parse_only: false,
++        nat_extension: true,
++        string_extension: true,
++        output: Output::default(),
++    };
++    let Ok(export) = config.to_export_file_from_bytes(data) else {
++        return;
++    };
++    let _ = export.check_all_declars();
++});
+diff --git a/src/config.rs b/src/config.rs
+index 9413499..a2c9068 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -112,6 +112,21 @@ impl Config {
+         }
+     }
+ 
++    /// Parses an export held in memory, as `to_export_file` parses a mapped file
++    /// (`export_file_path`, `use_stdin` and `num_threads` > 1 are not consulted).
++    pub fn to_export_file_from_bytes(self, input: &[u8]) -> Result<ExportFile, Box<dyn Error>> {
++        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            parse_export_mapped(input, self)
++        })) {
++            Ok(result) => result,
++            Err(payload) => match CheckError::from_panic(payload) {
++                CheckError::Rejected(r) => Err(Box::new(r)),
++                CheckError::Declined(d) => Err(Box::new(d)),
++                CheckError::Internal(payload) => std::panic::resume_unwind(payload),
++            },
++        }
++    }
++
+     fn parse(self) -> Result<ExportFile, Box<dyn Error>> {
+         let use_stdin = self.use_stdin || self.export_file_path.as_deref() == Some(Path::new("-"));
+         if use_stdin {

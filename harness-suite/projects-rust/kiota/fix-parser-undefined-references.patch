@@ -1,0 +1,164 @@
+Reject export records with undefined or malformed references instead of panicking
+
+The name and level record decoders indexed their tables directly and
+unwrapped field values: a name whose "pre" is not yet defined panicked
+with index out of bounds (parser.rs handle_name), as did a level, sort or
+universe argument naming an undefined level (level_at), and a "succ",
+"param", "sort" or "bvar" value that is not a number hit unwrap() on
+None. These now reject like the expression decoder already does for an
+undefined expression index ("... index N is out of range" / "field `k`
+must be a u32"). The first was found by a wasmfuzz smoke run within
+seconds (repro in suite-repros); the others are the same pattern next to
+it. Regression test in tests/exports.rs.
+Upstream: none (no related issue or PR; open issues #3 and #5 are
+soundness reports, checked 2026-11-22).
+
+diff --git a/src/parser.rs b/src/parser.rs
+index 174030e..ca221a9 100644
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -221,8 +221,17 @@ impl Parser {
+         }
+     }
+ 
+-    fn level_at(&self, i: u32) -> Level {
+-        self.levels[i as usize].clone()
++    fn level_at(&self, i: u32) -> Result<Level, TcError> {
++        self.levels
++            .get(i as usize)
++            .cloned()
++            .ok_or_else(|| TcError::Reject(format!("level index {i} is out of range")))
++    }
++    fn name_at(&self, i: u32) -> Result<&str, TcError> {
++        self.names
++            .get(i as usize)
++            .map(|s| s.as_str())
++            .ok_or_else(|| TcError::Reject(format!("name index {i} is out of range")))
+     }
+     fn expr_at(&self, i: u32) -> Result<Expr, TcError> {
+         match self.exprs.get(i as usize) {
+@@ -232,11 +241,11 @@ impl Parser {
+         }
+     }
+ 
+-    fn handle_name(&mut self, idx: u32, v: &Value) {
++    fn handle_name(&mut self, idx: u32, v: &Value) -> Result<(), TcError> {
+         let full = if let Some(s) = v.get("str") {
+             let pre = Self::get_u32(s, "pre");
+             let seg = Self::get_str(s, "str");
+-            let parent = &*self.names[pre as usize];
++            let parent = self.name_at(pre)?;
+             if parent.is_empty() {
+                 seg.to_string()
+             } else {
+@@ -245,7 +254,7 @@ impl Parser {
+         } else if let Some(n) = v.get("num") {
+             let pre = Self::get_u32(n, "pre");
+             let i = n.get("i").and_then(|x| x.as_u64()).unwrap_or(0);
+-            let parent = &*self.names[pre as usize];
++            let parent = self.name_at(pre)?;
+             if parent.is_empty() {
+                 format!("{}", i)
+             } else {
+@@ -266,19 +275,20 @@ impl Parser {
+             }
+         }
+         self.names[idx as usize] = Rc::new(full);
++        Ok(())
+     }
+ 
+-    fn handle_level(&mut self, idx: u32, v: &Value) {
++    fn handle_level(&mut self, idx: u32, v: &Value) -> Result<(), TcError> {
+         let l = if let Some(a) = v.get("succ") {
+-            level::succ(self.level_at(a.as_u64().unwrap() as u32))
++            level::succ(self.level_at(Self::index_value(a, "succ")?)?)
+         } else if let Some(m) = v.get("max") {
+             let (a, b) = Self::pair_u32(m);
+-            level::max(self.level_at(a), self.level_at(b))
++            level::max(self.level_at(a)?, self.level_at(b)?)
+         } else if let Some(m) = v.get("imax") {
+             let (a, b) = Self::pair_u32(m);
+-            level::imax(self.level_at(a), self.level_at(b))
++            level::imax(self.level_at(a)?, self.level_at(b)?)
+         } else if let Some(p) = v.get("param") {
+-            level::param(p.as_u64().unwrap() as u32)
++            level::param(Self::index_value(p, "param")?)
+         } else {
+             level::zero()
+         };
+@@ -286,20 +296,28 @@ impl Parser {
+             self.levels.push(level::zero());
+         }
+         self.levels[idx as usize] = l;
++        Ok(())
++    }
++
++    /// A record field that must hold an index (a u32).
++    fn index_value(x: &Value, k: &str) -> Result<u32, TcError> {
++        x.as_u64()
++            .and_then(|n| u32::try_from(n).ok())
++            .ok_or_else(|| TcError::Reject(format!("field `{k}` must be a u32")))
+     }
+ 
+     fn handle_expr(&mut self, idx: u32, v: &Value) -> Result<(), TcError> {
+         let e = if let Some(l) = v.get("sort") {
+-            expr::sort(self.level_at(l.as_u64().unwrap() as u32))
++            expr::sort(self.level_at(Self::index_value(l, "sort")?)?)
+         } else if let Some(c) = v.get("const") {
+             let name = Self::get_u32(c, "name");
+             let us = Self::get_vec_u32(c, "us")
+                 .into_iter()
+                 .map(|i| self.level_at(i))
+-                .collect();
++                .collect::<Result<_, _>>()?;
+             expr::const_(name, us)
+         } else if let Some(b) = v.get("bvar") {
+-            expr::bvar(b.as_u64().unwrap() as u32)
++            expr::bvar(Self::index_value(b, "bvar")?)
+         } else if let Some(a) = v.get("app") {
+             let f = self.expr_at(Self::get_u32(a, "fn"))?;
+             let x = self.expr_at(Self::get_u32(a, "arg"))?;
+@@ -1312,11 +1330,11 @@ impl Parser {
+             return Ok(false);
+         }
+         if let Some(idx) = v.get("in").and_then(|x| x.as_u64()) {
+-            self.handle_name(idx as u32, v);
++            self.handle_name(idx as u32, v)?;
+             return Ok(false);
+         }
+         if let Some(idx) = v.get("il").and_then(|x| x.as_u64()) {
+-            self.handle_level(idx as u32, v);
++            self.handle_level(idx as u32, v)?;
+             return Ok(false);
+         }
+         if let Some(idx) = v.get("ie").and_then(|x| x.as_u64()) {
+diff --git a/tests/exports.rs b/tests/exports.rs
+index eab8331..779bfc6 100644
+--- a/tests/exports.rs
++++ b/tests/exports.rs
+@@ -1692,3 +1692,25 @@ fn a_prop_field_after_a_data_field_mentioned_under_a_binder_is_not_projected() {
+         "[projProp6] cannot project a Prop field that comes after a dependent data field",
+     );
+ }
++
++/// Records that name an undefined parent name or level, or carry a non-index
++/// value, reject instead of panicking (index out of bounds / unwrap on None).
++#[test]
++fn records_with_undefined_or_malformed_references_reject() {
++    for export in [
++        "{\"in\":10,\"str\":{\"pre\":9,\"str\":\"_@\"}}\n",
++        "{\"in\":1,\"num\":{\"pre\":7,\"i\":0}}\n",
++        "{\"il\":1,\"succ\":5}\n",
++        "{\"il\":1,\"max\":[0,5]}\n",
++        "{\"il\":1,\"succ\":\"x\"}\n",
++        "{\"il\":1,\"param\":-1}\n",
++        "{\"ie\":0,\"sort\":5}\n",
++        "{\"ie\":0,\"bvar\":\"x\"}\n",
++        "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"c\"}}\n{\"ie\":0,\"const\":{\"name\":1,\"us\":[3]}}\n",
++    ] {
++        match Parser::new().run(Cursor::new(export)) {
++            Err(TcError::Reject(_)) => {}
++            other => panic!("{export:?}: expected a rejection, got {other:?}"),
++        }
++    }
++}

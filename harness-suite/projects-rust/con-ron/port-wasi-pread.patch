@@ -1,0 +1,29 @@
+wasm32-wasip1 has no positional read: olean_fs::pread exists for unix and windows only
+
+Upstream added olean_fs.rs (the .olean reader's file access) with a `pread` helper
+under #[cfg(unix)] / #[cfg(windows)]; on wasm32-wasip1 neither applies and the crate
+does not compile. std::os::wasi::fs::FileExt is unstable, so the wasi branch seeks and
+reads through &File (every read names its offset, nothing relies on the cursor).
+The ndjson harness never opens .olean files; this only makes the crate build.
+Upstream: none (wasm32 is not an upstream target; checked 2026-11-24).
+
+diff --git a/crates/con-ron/src/olean_fs.rs b/crates/con-ron/src/olean_fs.rs
+index 1aa8ba3..2bcde0b 100644
+--- a/crates/con-ron/src/olean_fs.rs
++++ b/crates/con-ron/src/olean_fs.rs
+@@ -100,6 +100,15 @@ fn pread(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<usize>
+     f.seek_read(buf, off)
+ }
+ 
++/// wasm32-wasip1: `std::os::wasi::fs::FileExt` is unstable, so seek and read
++/// through `&File` (the handle's cursor moves; every read here names its offset).
++#[cfg(target_os = "wasi")]
++fn pread(mut f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
++    use std::io::{Read, Seek, SeekFrom};
++    f.seek(SeekFrom::Start(off))?;
++    f.read(buf)
++}
++
+ /// con-leche: ConLeche/Frontend/CheckerIO.lean:370-379 ModelIO.read
+ /// **A positional read of an open file**: the bytes from `off` up to `off + len`
+ /// or the end of the file, whichever comes first.  The end is where a read

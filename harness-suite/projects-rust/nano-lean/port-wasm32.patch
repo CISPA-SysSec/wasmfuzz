@@ -1,0 +1,246 @@
+Build the library for wasm32-wasip1 (no new behaviour on native targets)
+
+- mimalloc/libmimalloc-sys/notify move to non-wasm target dependencies; the
+  library only uses mimalloc in release_import_memory, now a no-op on wasm,
+  and notify only in nl-watch.
+- term/ptr.rs: wasm32 addresses fit the 48-bit tagged pointers; the
+  EnvObj size budget assert is 64-bit only.
+- value_checker/tables.rs: fx() is the 64-bit FxHash on 32-bit targets too
+  (rustc-hash's FxHasher is usize wide there), so it agrees with fx_at; else
+  memo tables rehash entries away from where probe_hashed looks.
+- resource.rs: the stack guard reads __stack_low/__stack_high and takes the
+  shadow stack pointer from a local's address; on_stack runs inline (no
+  threads).
+- blake3 for build.rs uses its pure feature: the suite's CC/CFLAGS target wasm.
+- memmap2 advice, the threaded read_exact_at import and the signal handlers
+  are unix-only.
+Upstream: none (no related issues/PRs upstream, checked 2026-11-24).
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 4582e37..86127af 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -28,8 +28,6 @@ rustc-hash = "2.1.3"
+ bumpalo = { version = "3.20.3", features = ["collections"] }
+ hashbrown = "0.17.1"
+ smallvec = { version = "1", features = ["union"] }
+-mimalloc = "0.1.52"
+-libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
+ indicatif = "0.18.6"
+ olean-export = "0.6.0"
+ memmap2 = "0.9.11"
+@@ -39,6 +37,11 @@ libc = "0.2"
+ clap = { version = "4.6.7", features = ["derive"] }
+ toml = "1.1.8"
+ blake3 = "1.8.7"
++
++# wasm32-wasip1 builds (fuzzing) have no C allocator build or file watching.
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
++mimalloc = "0.1.52"
++libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
+ notify = "8.2.1"
+ 
+ [dev-dependencies]
+@@ -83,4 +86,5 @@ overflow-checks = true
+ 
+ [build-dependencies]
+ lalrpop = "0.23.1"
+-blake3 = "1.8.7"
++# The suite's CC/CFLAGS target wasm, so the build script's copy skips the C SIMD code.
++blake3 = { version = "1.8.7", features = ["pure"] }
+diff --git a/src/fast.rs b/src/fast.rs
+index ec3998e..189f6ec 100644
+--- a/src/fast.rs
++++ b/src/fast.rs
+@@ -136,7 +136,9 @@ impl Config {
+ /// # Safety
+ ///
+ /// `handler` must be async-signal-safe.
++#[cfg_attr(target_family = "wasm", allow(unused_variables))]
+ pub unsafe fn on_signals(handler: extern "C" fn(libc::c_int)) {
++    #[cfg(not(target_family = "wasm"))]
+     for sig in [libc::SIGINT, libc::SIGTERM] {
+         // SAFETY: the caller guarantees the handler is async-signal-safe.
+         unsafe { libc::signal(sig, handler as *const () as libc::sighandler_t) };
+@@ -152,7 +154,14 @@ fn budget_exhausted<T>(r: &Result<T, Failure>) -> bool {
+ /// Returns freed import buffers to the OS. Up to `KEEP_FREED_THREADS` workers, later frees stay
+ /// mapped for reuse, which saves instructions; beyond that, each worker would keep its peak
+ /// declaration resident, so frees are purged as usual.
++#[cfg_attr(target_family = "wasm", allow(unused_variables))]
+ pub fn release_import_memory(threads: usize) {
++    #[cfg(not(target_family = "wasm"))]
++    release_mimalloc(threads);
++}
++
++#[cfg(not(target_family = "wasm"))]
++fn release_mimalloc(threads: usize) {
+     const MI_OPTION_PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
+     const KEEP_FREED_THREADS: usize = 16;
+     // SAFETY: plain mimalloc calls, and -1 disables the purge delay.
+diff --git a/src/import/blean.rs b/src/import/blean.rs
+index 5cbc164..3e86b50 100644
+--- a/src/import/blean.rs
++++ b/src/import/blean.rs
+@@ -4,7 +4,9 @@ use super::importer::{BYTES_PER_LINE, Importer};
+ use crate::error::{ExportError, Result, invalid};
+ use crate::term::arena::Arena;
+ use crate::term::intern::Store;
+-use memmap2::{Advice, Mmap};
++#[cfg(unix)]
++use memmap2::Advice;
++use memmap2::Mmap;
+ use olean_export::{Counts, Record, Sink, blean, ndjson::Ndjson};
+ use serde_json::Value;
+ use std::fmt::Display;
+@@ -372,8 +374,11 @@ pub(super) fn map(file: &File) -> io::Result<Option<Mmap>> {
+     }
+     // SAFETY: the export must not be modified or truncated while mapped (truncation raises SIGBUS).
+     let map = unsafe { Mmap::map(file)? };
+-    map.advise(Advice::Sequential).ok();
+-    map.advise(Advice::WillNeed).ok();
++    #[cfg(unix)]
++    {
++        map.advise(Advice::Sequential).ok();
++        map.advise(Advice::WillNeed).ok();
++    }
+     Ok(Some(map))
+ }
+ 
+diff --git a/src/import/mod.rs b/src/import/mod.rs
+index bf13879..4f4fc51 100644
+--- a/src/import/mod.rs
++++ b/src/import/mod.rs
+@@ -15,6 +15,7 @@ use scan::Batch;
+ use std::fs::File;
+ use std::io::{self, Read};
+ use std::mem::replace;
++#[cfg(unix)]
+ use std::os::unix::fs::FileExt;
+ use std::path::{Path, PathBuf};
+ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+@@ -41,6 +42,7 @@ pub fn import_with(arena: &Arena, path: impl AsRef<Path>, threads: usize) -> Res
+         drop(map);
+         return im.finish();
+     }
++    #[cfg(unix)]
+     if threads > 1 && len > 2 * PAR_CHUNK {
+         return import_lines(arena, &file, len, threads - 1, PAR_CHUNK, len);
+     }
+@@ -107,6 +109,7 @@ impl Pipe {
+ 
+ /// Scanners read and scan fixed chunks with positioned reads, this thread builds in order, and
+ /// one more replays the dependencies it logs. `hint` sizes the tables and is 0 for unknown.
++#[cfg(unix)]
+ fn import_lines<'a>(
+     arena: &'a Arena,
+     file: &File,
+diff --git a/src/resource.rs b/src/resource.rs
+index b6ab86b..bdde293 100644
+--- a/src/resource.rs
++++ b/src/resource.rs
+@@ -26,11 +26,27 @@ pub(crate) fn stack_floor() -> usize {
+         }
+         (base as usize + size, size)
+     };
++    // wasm-ld defines both symbols around the stack region; only their addresses are taken.
++    #[cfg(target_family = "wasm")]
++    let (top, size) = {
++        unsafe extern "C" {
++            static __stack_low: u8;
++            static __stack_high: u8;
++        }
++        let low = &raw const __stack_low as usize;
++        let high = &raw const __stack_high as usize;
++        (high, high - low)
++    };
+     top - size + STACK_RED_ZONE.min(size / 2)
+ }
+ 
+ /// Run `f` on a fresh thread with a `bytes` stack, for recursion deeper than the caller's.
++/// wasm32-wasip1 has no threads, so `f` runs on the caller's stack there.
++#[cfg_attr(target_family = "wasm", allow(unused_variables))]
+ pub(crate) fn on_stack<T: Send>(bytes: usize, f: impl FnOnce() -> T + Send) -> T {
++    #[cfg(target_family = "wasm")]
++    return f();
++    #[cfg(not(target_family = "wasm"))]
+     thread::scope(|s| {
+         thread::Builder::new()
+             .stack_size(bytes)
+@@ -51,6 +67,12 @@ pub(crate) fn stack_exhausted(floor: usize) -> bool {
+         std::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags));
+         #[cfg(target_arch = "x86_64")]
+         std::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags));
++        // The shadow stack pointer is a wasm global; a local whose address escapes lives on it.
++        #[cfg(target_family = "wasm")]
++        {
++            let probe = 0u8;
++            sp = std::hint::black_box(&raw const probe) as usize;
++        }
+     }
+     sp < floor
+ }
+diff --git a/src/term/ptr.rs b/src/term/ptr.rs
+index 14d4276..4be087e 100644
+--- a/src/term/ptr.rs
++++ b/src/term/ptr.rs
+@@ -55,8 +55,8 @@ impl fmt::Display for NamePtr<'_> {
+ /// The tagged pointers below keep data in the top 16 bits, which holds while user space
+ /// addresses fit in 48 bits. That is the default on x86_64 and aarch64 for Linux, macOS and
+ /// Windows. Construction panics on a wider address, so a 57 bit process fails loudly instead
+-/// of truncating.
+-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
++/// of truncating. wasm32 addresses are 32 bits wide, so they fit as well.
++#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "wasm32")))]
+ compile_error!("tagged pointers need a 64 bit target with 48 bit user addresses");
+ 
+ const ADDR: u64 = 0x0000_ffff_ffff_ffff;
+diff --git a/src/value_checker/tables.rs b/src/value_checker/tables.rs
+index 00c2e32..7ef6283 100644
+--- a/src/value_checker/tables.rs
++++ b/src/value_checker/tables.rs
+@@ -287,7 +287,11 @@ const RECYCLE_KEEP: usize = 1 << 13;
+ 
+ #[inline]
+ pub(super) fn fx<K: Hash + ?Sized>(k: &K) -> u64 {
+-    FxBuildHasher.hash_one(k)
++    #[cfg(target_pointer_width = "64")]
++    return FxBuildHasher.hash_one(k);
++    // rustc-hash's FxHasher is usize wide, but `fx_at` is the 64 bit one everywhere.
++    #[cfg(not(target_pointer_width = "64"))]
++    fx_at(FX_K, k)
+ }
+ 
+ /// The multiplier of `fx`, kept in a field by hot callers since loading it is one instruction
+@@ -308,10 +312,22 @@ struct FxAt {
+ }
+ 
+ impl Hasher for FxAt {
++    #[cfg(target_pointer_width = "64")]
+     fn write(&mut self, _: &[u8]) {
+         unimplemented!("fx_at hashes words only")
+     }
+ 
++    /// `fx` is `fx_at` on narrower targets, so it takes every key there.
++    #[cfg(not(target_pointer_width = "64"))]
++    fn write(&mut self, bytes: &[u8]) {
++        for c in bytes.chunks(8) {
++            let mut w = [0u8; 8];
++            w[..c.len()].copy_from_slice(c);
++            self.write_u64(u64::from_le_bytes(w));
++        }
++        self.write_u64(bytes.len() as u64);
++    }
++
+     #[inline(always)]
+     fn write_u64(&mut self, w: u64) {
+         self.h = self.h.wrapping_add(w).wrapping_mul(self.k);
+diff --git a/src/value_checker/value.rs b/src/value_checker/value.rs
+index 22383cb..3949d3f 100644
+--- a/src/value_checker/value.rs
++++ b/src/value_checker/value.rs
+@@ -253,4 +253,5 @@ pub fn key(v: V<'_>) -> usize {
+     v as *const Val as usize
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(size_of::<EnvObj<'_>>() == 32);

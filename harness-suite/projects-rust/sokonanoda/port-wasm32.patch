@@ -1,0 +1,175 @@
+Build the library for wasm32-wasip1 (no new behaviour on native targets)
+
+- mimalloc, libc and memmap2 move to non-wasm target dependencies: mimalloc
+  is only the CLI's global allocator, libc only the terminal-width ioctl
+  (no terminal on wasm: None), memmap2 only maps an export file (read whole
+  on wasm).
+- on_big_stack (lib.rs) runs the inductive pass and the serial checker
+  inline on wasm32, which has no threads; on native targets it spawns the
+  same scoped thread with the 2 GiB STACK_SIZE and joins it, as before.
+Upstream: none (no related issue or PR; issues #2-#12 are soundness, OOM and
+loose-bvar reports, checked 2026-11-22).
+
+diff --git a/Cargo.toml b/Cargo.toml
+index adbca48..f3285bc 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -34,10 +34,13 @@ serde = { version = "1.0.229", features = ["derive"] }
+ bumpalo = { version = "3.20.3", features = ["collections"] }
+ hashbrown = "0.17.1"
+ smallvec = { version = "1", features = ["union"] }
++clap = { version = "4.6.7", features = ["derive"] }
++
++# wasm32-wasip1 builds (fuzzing): no C allocator, no mmap, no terminal ioctl.
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
+ mimalloc = "0.1.52"
+ libc = "0.2.189"
+ memmap2 = "0.9.11"
+-clap = { version = "4.6.7", features = ["derive"] }
+ 
+ [lints.clippy]
+ pedantic = { level = "warn", priority = -1 }
+diff --git a/src/checker/context.rs b/src/checker/context.rs
+index 7574f13..a9fb7bd 100644
+--- a/src/checker/context.rs
++++ b/src/checker/context.rs
+@@ -42,11 +42,8 @@ impl NameSource for Terms {
+ 
+ impl ExportFile {
+     pub(crate) fn check_inductives(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+-        std::thread::scope(|scope| {
+-            std::thread::Builder::new()
+-                .name("inductives".into())
+-                .stack_size(crate::STACK_SIZE)
+-                .spawn_scoped(scope, || {
++        {
++            crate::on_big_stack(Some("inductives"), || {
+                     let (blocks, local) = {
+                         let arena = Bump::new();
+                         let mut ctx = TcCtx::new(self, &arena);
+@@ -129,7 +126,6 @@ impl ExportFile {
+                     self.nat_red = vec![None; self.terms.names.items.len()];
+                     self.name_cache = self.terms.mk_name_cache(&mut self.nat_red);
+                 })?
+-                .join()
+                 .map_err(crate::outcome::CheckError::from_panic)
+                 .map_err(|error| -> Box<dyn std::error::Error> {
+                     match error {
+@@ -140,7 +136,7 @@ impl ExportFile {
+                         }
+                     }
+                 })
+-        })
++        }
+     }
+ 
+     pub fn num_declars(&self) -> usize {
+diff --git a/src/checker/tc.rs b/src/checker/tc.rs
+index d6c9f40..f8b3826 100644
+--- a/src/checker/tc.rs
++++ b/src/checker/tc.rs
+@@ -120,14 +120,9 @@ impl ExportFile {
+     /// Check all declarations in this export file using a single thread.
+     pub(crate) fn check_all_declars_serial(&self, report: &Reporter) {
+         let total = self.declars.len();
+-        std::thread::scope(|sco| {
+-            std::thread::Builder::new()
+-                .stack_size(crate::STACK_SIZE)
+-                .spawn_scoped(sco, || self.run_session(report, (0, total), || None))
+-                .unwrap()
+-                .join()
+-                .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+-        });
++        crate::on_big_stack(None, || self.run_session(report, (0, total), || None))
++            .unwrap()
++            .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+     }
+ 
+     /// Check all declarations in this export file, spawning `num_threads` as
+diff --git a/src/lib.rs b/src/lib.rs
+index ab44865..73905d0 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -13,3 +13,25 @@ pub use config::{AxiomPolicy, Config, DisallowedAxiom, Output};
+ pub use outcome::{CheckError, Decline, Rejection};
+ 
+ pub(crate) const STACK_SIZE: usize = 2 * 1024 * 1024 * 1024;
++
++/// Runs `f` on a scoped thread with a `STACK_SIZE` stack and joins it (`Err(payload)`
++/// when it panicked). wasm32-wasip1 has no threads: `f` runs on the calling thread
++/// there, and a panic aborts the module.
++pub(crate) fn on_big_stack<T: Send>(
++    name: Option<&str>,
++    f: impl FnOnce() -> T + Send,
++) -> std::io::Result<std::thread::Result<T>> {
++    #[cfg(target_family = "wasm")]
++    {
++        let _ = name;
++        Ok(Ok(f()))
++    }
++    #[cfg(not(target_family = "wasm"))]
++    std::thread::scope(|scope| {
++        let mut builder = std::thread::Builder::new().stack_size(STACK_SIZE);
++        if let Some(name) = name {
++            builder = builder.name(name.to_owned());
++        }
++        Ok(builder.spawn_scoped(scope, f)?.join())
++    })
++}
+diff --git a/src/main.rs b/src/main.rs
+index 2c63ece..eb2a4be 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -11,6 +11,7 @@ use std::path::PathBuf;
+ use std::thread;
+ use std::time::Instant;
+ 
++#[cfg(not(target_family = "wasm"))]
+ #[global_allocator]
+ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+ 
+diff --git a/src/report.rs b/src/report.rs
+index a2396b0..a69e162 100644
+--- a/src/report.rs
++++ b/src/report.rs
+@@ -44,6 +44,12 @@ impl Status {
+     }
+ }
+ 
++#[cfg(target_family = "wasm")]
++fn terminal_width() -> Option<usize> {
++    None
++}
++
++#[cfg(not(target_family = "wasm"))]
+ fn terminal_width() -> Option<usize> {
+     let mut ws = libc::winsize {
+         ws_row: 0,
+diff --git a/src/config.rs b/src/config.rs
+index a389a33..9413499 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -121,6 +121,7 @@ impl Config {
+             parse_export_file(io::stdin(), self, input_len)
+         } else if let Some(pathbuf) = self.export_file_path.as_ref() {
+             match OpenOptions::new().read(true).truncate(false).open(pathbuf) {
++                #[cfg(not(target_family = "wasm"))]
+                 Ok(file) => {
+                     let map =
+                         unsafe { memmap2::Mmap::map(&file) }.map_err(|e| -> Box<dyn Error> {
+@@ -128,6 +129,15 @@ impl Config {
+                         })?;
+                     parse_export_mapped(&map, self)
+                 }
++                // wasm32-wasip1 has no mmap: read the file whole.
++                #[cfg(target_family = "wasm")]
++                Ok(mut file) => {
++                    let mut bytes = Vec::new();
++                    io::Read::read_to_end(&mut file, &mut bytes).map_err(|e| -> Box<dyn Error> {
++                        Box::from(format!("Failed to read export file: {e:?}"))
++                    })?;
++                    parse_export_mapped(&bytes, self)
++                }
+                 Err(e) => Err(Box::from(format!("Failed to open export file: {e:?}"))),
+             }
+         } else {

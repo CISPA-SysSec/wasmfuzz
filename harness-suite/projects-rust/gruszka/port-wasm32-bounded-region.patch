@@ -1,0 +1,203 @@
+Port the term region and the worker tables to wasm32
+
+Gruszka reserves its term region (16 + 8 + 8 bytes for every u32 term id:
+128 GiB of address space) and its worker tables (values, environments,
+slots, spines: 2^28 to 2^32 entries each) with mmap(MAP_NORESERVE), so
+that pages are made on first write and a term read needs no bounds check.
+wasm32-wasip1 has no mmap and a 4 GiB address space (ID_SPACE * 16 does
+not even fit a 32-bit usize), so there (and in --cfg fuzzing builds, so
+native replays agree) the region is a zeroed heap block that is never
+freed and a worker table a heap block freed with the table (pushed before
+it is read, so not zeroed; `vm::release` is only called on unix already),
+the region holds
+2^19 term ids (16 MiB), the layout's block and overflow arenas are at
+least 2^16 ids instead of 2^20, and the worker tables hold 2^16 values,
+2^16 environments, 2^18 slots and 2^18 spine words. ID_LIMIT (2^31) stays
+the bound that tags LL_POOL references. A file whose MAIN leaves no room
+for the arenas declines ("no room for block arenas"), and a declaration
+that fills a table declines, as at the native limits. Reads stay at live
+ids (MAIN or the current arena: `Worker::term_live`, asserted in
+release-da builds; the arena fixtures and the smoke corpus pass a
+release-da build of the harness), so no read reaches past the block.
+`layout` also starts handing slabs out from the first again, so that one
+process can lay out (and check) one export after another, as wasmfuzz
+runs input after input in one instance.
+Upstream: none (gruszka has no wasm target; no issues or PRs, checked 2026-11-22).
+
+diff --git a/src/env.rs b/src/env.rs
+index 11f79b8..8c87b59 100644
+--- a/src/env.rs
++++ b/src/env.rs
+@@ -95,7 +95,19 @@ unsafe impl Send for Region {}
+ 
+ /// Ids at or past this are not term ids (LL_POOL).
+ pub const ID_LIMIT: u64 = 1 << 31;
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
+ const ID_SPACE: usize = 1 << 32;
++/// wasm32 has no sparse reservations (and a 4 GiB address space): the
++/// region is a zeroed heap block of 2^19 ids (16 MiB), and the layout's
++/// arenas are at least 2^16 ids. Term ids stay below `TERM_LIMIT`; ids past
++/// it are read only where a term id is not live (asserted in release-da).
++#[cfg(any(target_family = "wasm", fuzzing))]
++const ID_SPACE: usize = 1 << 19;
++const TERM_LIMIT: u64 = if (ID_SPACE as u64) < ID_LIMIT { ID_SPACE as u64 } else { ID_LIMIT };
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
++const MIN_ARENA: u64 = 1 << 20;
++#[cfg(any(target_family = "wasm", fuzzing))]
++const MIN_ARENA: u64 = 1 << 16;
+ 
+ #[cfg(unix)]
+ mod vm {
+@@ -127,6 +139,30 @@ mod vm {
+     }
+ }
+ 
++/// wasm32: no virtual memory to reserve. The region is a zeroed heap block
++/// that is never freed; a worker table is a heap block freed with the table
++/// (it is written before it is read: pushes), not zeroed, as zeroing it would
++/// cost every input that reaches a worker. Pages are not given back
++/// (`release` is only called on unix).
++#[cfg(not(unix))]
++mod vm {
++    use std::alloc::Layout;
++    fn layout(bytes: usize) -> Option<Layout> {
++        Layout::from_size_align(bytes.max(1), 64).ok()
++    }
++    pub fn reserve(bytes: usize) -> *mut u8 {
++        layout(bytes).map_or(std::ptr::null_mut(), |l| unsafe { std::alloc::alloc_zeroed(l) })
++    }
++    pub fn table(bytes: usize) -> *mut u8 {
++        layout(bytes).map_or(std::ptr::null_mut(), |l| unsafe { std::alloc::alloc(l) })
++    }
++    pub fn free(p: *mut u8, bytes: usize) {
++        if let Some(l) = layout(bytes) {
++            unsafe { std::alloc::dealloc(p, l) }
++        }
++    }
++}
++
+ static REGION: std::sync::OnceLock<Region> = std::sync::OnceLock::new();
+ 
+ pub fn region() -> &'static Region {
+@@ -155,7 +191,7 @@ impl Region {
+     }
+     /// MAIN's arena (ids from 0), room for `cap` nodes.
+     pub fn main_cols(&self, cap: usize) -> Cols {
+-        Cols::at(self, 0, cap.min(ID_LIMIT as usize / 2))
++        Cols::at(self, 0, cap.min(TERM_LIMIT as usize / 2))
+     }
+     /// After MAIN is loaded: the two overflow arenas, then two slabs per
+     /// worker share the ids left below 2^31. Returns the number of workers
+@@ -165,17 +201,17 @@ impl Region {
+     pub fn layout(&self, main_len: usize, workers: usize) -> Result<usize, String> {
+         use std::sync::atomic::Ordering::Relaxed;
+         let first = (main_len as u64 + 0xffff) & !0xffff;
+-        let room = ID_LIMIT.saturating_sub(first);
++        let room = TERM_LIMIT.saturating_sub(first);
+         // a quarter of the room each (at most 2^28 ids, 6 GiB of nodes)
+         let mut big = (room / 4).min(1 << 28) & !0xffff;
+         let rest = room - 2 * big;
+         let mut workers = workers.max(1);
+         let mut s = (rest / (2 * workers) as u64).min(1 << 28) & !0xffff;
+-        if s < 1 << 20 {
+-            workers = (rest / (2 << 20)) as usize;
+-            s = 1 << 20;
++        if s < MIN_ARENA {
++            workers = (rest / (2 * MIN_ARENA)) as usize;
++            s = MIN_ARENA;
+         }
+-        if big < 1 << 20 || workers == 0 {
++        if big < MIN_ARENA || workers == 0 {
+             return Err(format!("no room for block arenas next to {main_len} MAIN nodes"));
+         }
+         // knobs builds: SK_SLAB_IDS=n makes the slabs n ids, a multiple of 4096 (to test the
+@@ -198,6 +234,8 @@ impl Region {
+         }
+         self.first.store((first + 2 * big) as u32, Relaxed);
+         self.slab.store(s as u32, Relaxed);
++        // a new layout hands its slabs out from the first (the fuzz harness lays out once per input)
++        self.next.store(0, Relaxed);
+         let b = (Cols::at(self, first as u32, big as usize), Cols::at(self, (first + big) as u32, big as usize));
+         *self.big.lock().unwrap() = Some(b);
+         Ok(workers)
+@@ -209,7 +247,7 @@ impl Region {
+         assert!(s != 0, "block arenas taken before the layout");
+         let k = self.next.fetch_add(1, Relaxed) as u64;
+         let base = self.first.load(Relaxed) as u64 + k * s;
+-        assert!(base + s <= ID_LIMIT, "more block arenas than the layout has");
++        assert!(base + s <= TERM_LIMIT, "more block arenas than the layout has");
+         Cols::at(self, base as u32, s as usize)
+     }
+ }
+@@ -243,7 +281,10 @@ impl<T: Copy> Default for Slab<T> {
+ 
+ impl<T: Copy> Slab<T> {
+     pub fn new(cap: usize) -> Slab<T> {
++        #[cfg(unix)]
+         let p = vm::reserve(cap * std::mem::size_of::<T>()) as *mut T;
++        #[cfg(not(unix))]
++        let p = vm::table(cap * std::mem::size_of::<T>()) as *mut T;
+         assert!(!p.is_null(), "cannot reserve a worker table's address range");
+         Slab { p, len: 0, soft: cap - cap / 8, cap, hw: 0 }
+     }
+@@ -330,6 +371,15 @@ impl<T: Copy> Slab<T> {
+     }
+ }
+ 
++#[cfg(not(unix))]
++impl<T: Copy> Drop for Slab<T> {
++    fn drop(&mut self) {
++        if self.cap != 0 {
++            vm::free(self.p as *mut u8, self.cap * std::mem::size_of::<T>());
++        }
++    }
++}
++
+ impl<T: Copy> std::ops::Deref for Slab<T> {
+     type Target = [T];
+     #[inline(always)]
+diff --git a/src/tc.rs b/src/tc.rs
+index fc89984..f58bd7e 100644
+--- a/src/tc.rs
++++ b/src/tc.rs
+@@ -274,10 +274,24 @@ pub(crate) fn dstack_pop() {
+         d.borrow_mut().pop();
+     });
+ }
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
+ const VALS_CAP: usize = 1 << 28;
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
+ const VALS_FULL: &str = "value arena limit (2^28 values per declaration)";
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
+ const ENVS_CAP: usize = 1 << 28;
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
+ const SLOTS_CAP: usize = 1 << 31;
++/// wasm32: the worker tables are zeroed heap blocks, not reserved ranges
++/// (env.rs `vm`), so they are sized for small inputs.
++#[cfg(any(target_family = "wasm", fuzzing))]
++const VALS_CAP: usize = 1 << 16;
++#[cfg(any(target_family = "wasm", fuzzing))]
++const VALS_FULL: &str = "value arena limit (2^16 values per declaration)";
++#[cfg(any(target_family = "wasm", fuzzing))]
++const ENVS_CAP: usize = 1 << 16;
++#[cfg(any(target_family = "wasm", fuzzing))]
++const SLOTS_CAP: usize = 1 << 18;
+ /// Milestone 36: regions (region.rs) open once a session's arena holds
+ /// this many values, and roll back only past `REGION_MIN` values made.
+ const REGION_AT: usize = 1 << 22;
+diff --git a/src/tc/spines.rs b/src/tc/spines.rs
+index af33806..7676656 100644
+--- a/src/tc/spines.rs
++++ b/src/tc/spines.rs
+@@ -17,7 +17,11 @@ pub const F_FV_KNOWN: u32 = 1 << 29;
+ pub const F_FV: u32 = 1 << 30;
+ const FREE: (u32, u32) = (0, EMPTY);
+ /// room of a worker's spine words (16 GiB of address space)
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
+ pub const SPINE_WORDS: usize = 1 << 32;
++/// wasm32: a heap block (env.rs `vm`), 1 MiB
++#[cfg(any(target_family = "wasm", fuzzing))]
++pub const SPINE_WORDS: usize = 1 << 18;
+ 
+ #[derive(Default)]
+ pub struct Spines {

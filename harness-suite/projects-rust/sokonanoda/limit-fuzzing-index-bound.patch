@@ -1,0 +1,72 @@
+Decline export indices from 2^18 on in --cfg fuzzing builds
+
+The parser's name/level/expression tables are dense vectors that grow up
+to each record's "in"/"il"/"ie" index. The arena requires skipped and
+out-of-order indices to be accepted, and trimmed exports keep large
+original indices, so upstream has no bound: one record with
+"in":444444445 makes a 16 KB input allocate a 3.5 GB table (3 s
+natively; on wasm32 a raw_vec "capacity overflow" panic). Fuzzing builds
+decline indices >= 2^18 (the largest in the arena and nano-lean fixtures
+is far below that; kiota's trimmed fixtures reach 145684), which keeps
+each table at a few MB. Repro in suite-repros.
+Upstream: none (no related issue or PR, checked 2026-11-22).
+
+diff --git a/src/frontend/parser.rs b/src/frontend/parser.rs
+index dcf8b31..17ae39d 100644
+--- a/src/frontend/parser.rs
++++ b/src/frontend/parser.rs
+@@ -615,6 +615,10 @@ fn undefined_index(kind: &str, idx: u32) -> ! {
+     reject!("export references {kind} index {idx} before it is defined")
+ }
+ 
++/// Exclusive bound on `in`/`il`/`ie` indices in fuzzing builds (see `check_index`).
++#[cfg(fuzzing)]
++const MAX_FUZZ_INDEX: usize = 1 << 18;
++
+ #[inline(always)]
+ fn put_at<T: Copy>(v: &mut Vec<Option<T>>, i: usize, x: T) {
+     if i == v.len() {
+@@ -662,13 +666,26 @@ impl Parser {
+         }
+     }
+ 
++    /// Indices address dense tables that grow up to them, so one record with
++    /// `"in":444444445` asks for a multi-GB table (on wasm32 a "capacity overflow"
++    /// panic). Fuzzing builds decline indices from `MAX_FUZZ_INDEX` on.
++    #[inline(always)]
++    fn check_index(expected: BackRef) -> usize {
++        let i = expected.index() as usize;
++        #[cfg(fuzzing)]
++        if i >= MAX_FUZZ_INDEX {
++            unsupported!("export index {i} is past the fuzzing bound {MAX_FUZZ_INDEX}");
++        }
++        i
++    }
++
+     fn push_name(&mut self, expected: BackRef, n: Name) {
+         ensure!(
+             self.terms.names.find(&n).is_none(),
+             "Attempted to insert duplicate Name"
+         );
+         let id = NameId::new(self.terms.names.insert_unique(n), false);
+-        put_at(&mut self.names_by_idx, expected.index() as usize, id);
++        put_at(&mut self.names_by_idx, Self::check_index(expected), id);
+     }
+ 
+     fn push_level(&mut self, expected: BackRef, l: Level) {
+@@ -677,13 +694,13 @@ impl Parser {
+             "Attempted to insert duplicate Level"
+         );
+         let id = LevelId::new(self.terms.levels.insert_unique(l), false);
+-        put_at(&mut self.levels_by_idx, expected.index() as usize, id);
++        put_at(&mut self.levels_by_idx, Self::check_index(expected), id);
+     }
+ 
+     #[inline(always)]
+     fn push_expr(&mut self, expected: BackRef, node: ExprNode) {
+         let id = ExprId::new(self.terms.exprs.push(node), false);
+-        put_at(&mut self.exprs_by_idx, expected.index() as usize, id);
++        put_at(&mut self.exprs_by_idx, Self::check_index(expected), id);
+     }
+ 
+     fn get_name(&self, idx: u32) -> NameId {

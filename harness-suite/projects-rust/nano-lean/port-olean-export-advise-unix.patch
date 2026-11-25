@@ -1,0 +1,16 @@
+olean-export 0.6.0: memmap2::Advice is unix-only; skip the WillNeed hint
+elsewhere (Olean::map, the only lib use). Applied with patch -p1 in prepare.sh.
+Upstream: none.
+
+diff --git a/src/olean.rs b/src/olean.rs
+index 5a5e2d9..64bf08f 100644
+--- a/src/olean.rs
++++ b/src/olean.rs
+@@ -90,6 +90,7 @@ impl Image {
+         // it is being read is undefined behaviour, the same assumption Lean makes when it maps them.
+         #[allow(unsafe_code)]
+         let bytes = unsafe { MmapOptions::new().populate().map(&file)? };
++        #[cfg(unix)]
+         bytes.advise(memmap2::Advice::WillNeed)?;
+         if bytes.len() < 96 || &bytes[..5] != b"olean" {
+             return Err(Error::NotOlean);

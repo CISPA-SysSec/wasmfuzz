@@ -1,0 +1,34 @@
+Hand deep work up after 1024 nesting levels instead of 8192 (fuzzing)
+
+Pestka's checker recurses one native frame chain per level of nested work
+(whnf of a major, an argument's type, a Nat argument, a closure) and hands
+what lies past `deepAt` levels up to the outermost level, where it is
+worked out on a shallow stack (OneDeepJob). Natively main runs on a
+256 MiB thread; under wasmfuzz the generated code's frames live on the
+engine's 32 MiB native stack, and the arena fixture
+perf__unfold-before-literal-bad traps with a stack overflow (at 8192)
+before it reaches the bound. At 1024 levels it does not. The bound only
+moves where work resumes, not what is checked: the 226 arena fixtures
+give the same verdicts at 1024 as at 8192 (130 accepted, 96 rejected;
+native build of the harness). The `verify deepAt` example follows the
+constant. Applied to the Aver source before the crate is generated (Aver
+has no cfg), so this build only.
+Upstream: none (a fuzzing limit; no issues upstream, checked 2026-11-22).
+
+diff --git a/check/tc.av b/check/tc.av
+index 11c3ea3..ddb8816 100644
+--- a/check/tc.av
++++ b/check/tc.av
+@@ -1881,10 +1881,10 @@ decision OneDeepJob
+ 
+ fn deepAt() -> Int
+     ? "How deep work may nest before what it needs is handed up to the outermost level (OneDeepJob)."
+-    8192
++    1024
+ 
+ verify deepAt
+-    deepAt() => 8192
++    deepAt() => 1024
+ 
+ fn jobDone(j: Job, st: St) -> Result<St, Fail>
+     ? "At the outermost level (OneDeepJob), a job handed up from too deep worked out on a shallow stack, from the state it came with set back as finishing would leave it, and its result held for the rest of the declaration (HandedUpHeld): a whnf, a type, or the answer for a pair. Each outermost level takes the state out of the failure in its own match, so that it has one owner (HandedUpHeld)."

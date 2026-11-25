@@ -1,0 +1,56 @@
+Add a cargo-fuzz target `ndjson` (upstream has none)
+
+A lean4export NDJSON stream checked as the arena runs `kiota --use-stdin`:
+Parser::run reads the export from memory line by line and checks each
+declaration as it is encountered, on the calling thread (the CLI uses a
+1 GiB-stack worker thread). Reject/Decline/Other results are verdicts;
+panics are findings.
+Upstream: none (no fuzz targets upstream, checked 2026-11-22).
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..9254cf6
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,22 @@
++[package]
++name = "kiota-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2021"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++kiota = { path = ".." }
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "ndjson"
++path = "fuzz_targets/ndjson.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/ndjson.rs b/fuzz/fuzz_targets/ndjson.rs
+new file mode 100644
+index 0000000..082b0dd
+--- /dev/null
++++ b/fuzz/fuzz_targets/ndjson.rs
+@@ -0,0 +1,13 @@
++//! A lean4export NDJSON stream checked as the arena runs `kiota --use-stdin`: the parser
++//! reads the export line by line and checks each declaration as it is encountered
++//! (kiota's CLI does this on a 1 GiB-stack thread; here on the calling thread).
++//! Rejections, declines and input errors are verdicts; panics are findings.
++
++#![no_main]
++
++use libfuzzer_sys::fuzz_target;
++
++fuzz_target!(|data: &[u8]| {
++    let mut parser = kiota::parser::Parser::new();
++    let _ = parser.run(data);
++});

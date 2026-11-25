@@ -1,0 +1,107 @@
+Build kefir's wasm32-wasip1 checker for fuzzing (--cfg fuzzing only)
+
+kefir already builds for wasm32-wasip1 (the arena's kefir-wasm entry), with
+a 256 MiB linear-memory stack, a 2 GiB initial memory and MAX_DEPTH
+400 000, sized for Node running it on a 2 GiB engine stack. Under
+--cfg fuzzing (build.rs sees CARGO_CFG_FUZZING):
+- the module links with the suite's 16 MiB stack (FUZZING_STACK_BYTES,
+  also the CHECK_STACK the stack guard measures against) and no
+  --initial-memory, since fuzzers cap linear memory far below 2 GiB;
+- STACK_BUDGET keeps a quarter of the stack (at most 64 MiB, as before)
+  for the frames between checks, so it does not underflow on 16 MiB;
+- MAX_DEPTH is 4096: wasm guest calls run on the engine's native stack,
+  which wasmfuzz keeps at 8 MiB (run-input) to 32 MiB (fuzzing workers).
+Builds without the cfg are unchanged.
+Upstream: none (issues disabled upstream, no PRs, checked 2026-11-22).
+
+diff --git a/build.rs b/build.rs
+index c01bd1c..55f2ca9 100644
+--- a/build.rs
++++ b/build.rs
+@@ -13,19 +13,26 @@ use std::{env, fs, path::PathBuf, process::Command};
+ fn main() {
+     // Every wasm build links with the stack the kernel's guard assumes and
+     // with the trapping memory limit, whatever flags the caller passes.
++    let fuzzing = env::var_os("CARGO_CFG_FUZZING").is_some();
+     if env::var("CARGO_CFG_TARGET_FAMILY").is_ok_and(|f| f.split(',').any(|f| f == "wasm")) {
+         println!(
+             "cargo:rustc-link-arg=-zstack-size={}",
+-            wasm_layout::STACK_BYTES
++            if fuzzing {
++                wasm_layout::FUZZING_STACK_BYTES
++            } else {
++                wasm_layout::STACK_BYTES
++            }
+         );
+         println!(
+             "cargo:rustc-link-arg=--max-memory={}",
+             wasm_layout::MAX_MEMORY_BYTES
+         );
+-        println!(
+-            "cargo:rustc-link-arg=--initial-memory={}",
+-            wasm_layout::INITIAL_MEMORY_BYTES
+-        );
++        if !fuzzing {
++            println!(
++                "cargo:rustc-link-arg=--initial-memory={}",
++                wasm_layout::INITIAL_MEMORY_BYTES
++            );
++        }
+     }
+     // Any failure aborts Cargo's build script; no fallback or placeholder identity.
+     // OUT_DIR is Cargo-owned. Supported attribution additionally requires the
+diff --git a/src/check/environment/kernel.rs b/src/check/environment/kernel.rs
+index 31eb2ca..1be9d02 100644
+--- a/src/check/environment/kernel.rs
++++ b/src/check/environment/kernel.rs
+@@ -704,16 +704,31 @@ const NONE: u32 = u32::MAX;
+ /// introduce uncharged list copies or buffers spanning recursive inference.
+ const LEVEL_ARGS: usize = 16;
+ /// Optional attempt limits: exceeding either ends this attempt only.
++#[cfg(not(fuzzing))]
+ const MAX_DEPTH: u32 = 400_000;
++/// Fuzzing builds: wasm guest calls run on the engine's native stack, which
++/// wasmfuzz keeps at 8 MiB (run-input) to 32 MiB (fuzzing workers), not the
++/// 2 GiB engine stack scripts/wasm/run-wasm.mjs asks Node for.
++#[cfg(fuzzing)]
++const MAX_DEPTH: u32 = 4096;
+ /// Stack reserved for the checking thread (`Run::check`).
+ #[cfg(not(target_family = "wasm"))]
+ pub(crate) const CHECK_STACK: usize = 2 << 30;
+ /// wasm32: the linear-memory stack, passed to the linker by `build.rs`.
+-#[cfg(target_family = "wasm")]
++#[cfg(all(target_family = "wasm", not(fuzzing)))]
+ pub(crate) const CHECK_STACK: usize = crate::resource::wasm_layout::STACK_BYTES as usize;
++#[cfg(all(target_family = "wasm", fuzzing))]
++pub(crate) const CHECK_STACK: usize =
++    crate::resource::wasm_layout::FUZZING_STACK_BYTES as usize;
+ /// Stack the kernel may use below its thread's base before an attempt ends:
+-/// the reservation less a margin for the frames between checks.
+-const STACK_BUDGET: usize = CHECK_STACK - (64 << 20);
++/// the reservation less a margin for the frames between checks (a quarter
++/// of the 16 MiB fuzzing stack).
++const STACK_BUDGET: usize = CHECK_STACK
++    - if CHECK_STACK / 4 < (64 << 20) {
++        CHECK_STACK / 4
++    } else {
++        64 << 20
++    };
+ thread_local! {
+     /// Approximate base of the checking thread's stack (0 when unknown).
+     static STACK_BASE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+diff --git a/src/resource/wasm_layout.rs b/src/resource/wasm_layout.rs
+index 2bdaa0f..8d0c1de 100644
+--- a/src/resource/wasm_layout.rs
++++ b/src/resource/wasm_layout.rs
+@@ -3,6 +3,11 @@
+ 
+ /// Linear-memory stack: the checking thread's stack on wasm (`CHECK_STACK`).
+ pub(crate) const STACK_BYTES: u64 = 256 << 20;
++/// Fuzzing builds (`--cfg fuzzing`, which `build.rs` sees as `CARGO_CFG_FUZZING`):
++/// the harness suite's 16 MiB stack, and no initial-memory reservation (fuzzers cap
++/// linear memory far below 2 GiB).
++#[allow(dead_code)]
++pub(crate) const FUZZING_STACK_BYTES: u64 = 16 << 20;
+ /// Maximum linear memory: 64 MiB below 4 GiB. The stack is placed first, so an
+ /// overflow wraps below address 0 to the top of the 32-bit space; this gap keeps
+ /// any such frame outside memory, where the access traps instead of writing heap.

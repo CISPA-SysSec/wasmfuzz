@@ -1,0 +1,32 @@
+Build the library for wasm32-wasip1: mimalloc only on non-wasm targets
+
+mimalloc is the CLI's global allocator (main.rs) and does not build for
+wasm32-wasip1; the library does not use it. It becomes a non-wasm target
+dependency and the #[global_allocator] is cfg'd to non-wasm, so native
+builds are unchanged.
+Upstream: none (no related issue or PR; open issues #3 and #5 are
+soundness reports, checked 2026-11-22).
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 7a81bf7..a8ce1fa 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -19,6 +19,9 @@ path = "src/main.rs"
+ serde_json = "1"
+ rustc-hash = "2"
+ num-bigint = "0.5.1"
++
++# Only the CLI's global allocator; mimalloc does not build for wasm32-wasip1.
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
+ mimalloc = "0.1"
+ 
+ [lints.rust]
+diff --git a/src/main.rs b/src/main.rs
+index 9dfc58d..7b19fd2 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,3 +1,4 @@
++#[cfg(not(target_family = "wasm"))]
+ #[global_allocator]
+ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+ 

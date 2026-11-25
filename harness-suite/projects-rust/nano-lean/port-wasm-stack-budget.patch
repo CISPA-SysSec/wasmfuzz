@@ -1,0 +1,42 @@
+Bound the stack guard's view of the shadow stack on wasm
+
+On wasm32 the stack guard can only see the shadow stack (a local whose address escapes),
+but the same recursion also runs on the engine's native stack, which fills far faster:
+with the default floor (1 MiB above __stack_low of a 16 MiB stack) wasmfuzz's 32 MiB
+native stack overflows before the guard trips on every deep-recursion input tried (37/37).
+Declining after 1 MiB of shadow stack avoids that (37/37 decline or reject; 4 MiB still
+overflows 13/37) and leaves every fixture verdict identical to native nano-lean.
+Upstream: none (wasm32 is not an upstream target).
+
+diff --git a/src/resource.rs b/src/resource.rs
+index bdde293..83a43a7 100644
+--- a/src/resource.rs
++++ b/src/resource.rs
+@@ -2,6 +2,8 @@ use crate::kernel::Error;
+ use std::{fmt, thread};
+ 
+ const STACK_RED_ZONE: usize = 1 << 20;
++#[cfg(target_family = "wasm")]
++const WASM_STACK_BUDGET: usize = 1 << 20;
+ 
+ /// Lowest address the calling thread's recursion may reach before it declines.
+ /// The red zone stays free for the unguarded leaves below the last guard.
+@@ -28,14 +30,16 @@ pub(crate) fn stack_floor() -> usize {
+     };
+     // wasm-ld defines both symbols around the stack region; only their addresses are taken.
+     #[cfg(target_family = "wasm")]
+-    let (top, size) = {
++    let (top, size): (usize, usize) = {
+         unsafe extern "C" {
+             static __stack_low: u8;
+             static __stack_high: u8;
+         }
+         let low = &raw const __stack_low as usize;
+         let high = &raw const __stack_high as usize;
+-        (high, high - low)
++        // The guard sees only the shadow stack, which grows far slower than the engine's
++        // native stack the same recursion runs on; decline after WASM_STACK_BUDGET of it.
++        return high - WASM_STACK_BUDGET.min((high - low) / 2);
+     };
+     top - size + STACK_RED_ZONE.min(size / 2)
+ }

@@ -1,0 +1,28 @@
+Lower the conversion recursion cap on wasm32 (and in --cfg fuzzing builds)
+
+CONV_DEPTH (8192) caps the nesting of whnf / is_def_eq / infer_type and
+turns deeper recursion into a decline; it is sized for an 8 MB C stack.
+On wasm32 guest calls run on the engine's native stack with larger
+frames (wasmfuzz: 8 MiB for run-input, 32 MiB per fuzzing worker), and
+the arena's perf/unfold-before-literal-bad overflowed it at 8192. The
+cap is 4096 there; native builds without --cfg fuzzing keep 8192.
+Upstream: none (no related issue or PR; open issues #3 and #5 are
+soundness reports, checked 2026-11-22).
+
+diff --git a/src/tc.rs b/src/tc.rs
+index 4b32139..219a5a2 100644
+--- a/src/tc.rs
++++ b/src/tc.rs
+@@ -158,7 +158,12 @@ const MAX_FALLBACK_TRIES: u32 = 4;
+ /// Lean has no 2048 cap; `WellFounded.Nat.fix` / UTF-8 decode proofs nest
+ /// `Nat.rec` conversion past that (Init `utf8DecodeChar?.assemble₃._proof_3`).
+ /// Kept well under typical C-stack (~8MB) so this is a decline, not a segfault.
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
+ const CONV_DEPTH: u32 = 8_192;
++/// wasm32 guest calls run on the engine's native stack, where these frames are
++/// larger (wasmfuzz: 8 MiB for run-input, 32 MiB per fuzzing worker).
++#[cfg(any(target_family = "wasm", fuzzing))]
++const CONV_DEPTH: u32 = 4_096;
+ 
+ /// `KIOTA_NO_DECIDE_SHORTCUT=1` (opt-in, for measurement): `whnf_core`
+ /// never normalizes the `Decidable` instance of an `ite`, `dite` or

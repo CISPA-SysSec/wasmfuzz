@@ -1,0 +1,55 @@
+Add a library target for the fuzz crate
+
+Gruszka is a binary-only crate. src/lib.rs declares the kernel's modules
+as `pub mod` (main.rs keeps its own `mod` declarations and is unchanged),
+and susz's `mmap` feature, which only main.rs uses (memmap2 does not
+build for wasm32-wasip1), is enabled for non-wasm targets only. The
+cfg(fuzzing) of the wasm32 limits is declared to check-cfg.
+Upstream: none (checked 2026-11-22).
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 7934124..1b24c6a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -11,7 +11,7 @@ categories = ["mathematics", "command-line-utilities"]
+ exclude = ["data/", "tests/", "target-knobs/", "arena-draft/", "STATUS.md"]
+ 
+ [dependencies]
+-susz = { version = "0.1.1", features = ["mmap"] }
++susz = "0.1.1"
+ num-bigint = "0.4"
+ num-traits = "0.2"
+ num-integer = "0.1"
+@@ -19,6 +19,10 @@ rustc-hash = "2"
+ smallvec = { version = "1", features = ["union"] }
+ mimalloc = { version = "0.1.52", default-features = false, optional = true }
+ 
++# memory-mapped files (main.rs); wasm32 has no mmap
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
++susz = { version = "0.1.1", features = ["mmap"] }
++
+ [features]
+ default = ["mimalloc"]
+ cnt = []
+@@ -36,3 +40,7 @@ debug = 1
+ [profile.release-da]
+ inherits = "release"
+ debug-assertions = true
++
++# the wasm32/fuzzing limits (port-wasm32-bounded-region) are cfg(fuzzing)
++[lints.rust]
++unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
+diff --git a/src/lib.rs b/src/lib.rs
+new file mode 100644
+index 0000000..963cccf
+--- /dev/null
++++ b/src/lib.rs
+@@ -0,0 +1,8 @@
++//! The kernel as a library (the fuzz targets; `main.rs` is the command).
++
++pub mod env;
++pub mod induct;
++pub mod level;
++pub mod nat;
++pub mod quot;
++pub mod tc;

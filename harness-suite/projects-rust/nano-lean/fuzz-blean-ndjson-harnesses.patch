@@ -1,0 +1,114 @@
+Add cargo-fuzz targets `blean` and `ndjson` (upstream has none)
+
+Both import the input with import::import_bytes and check every own
+declaration with the value core, as nl-fast does by default (fresh session
+after a failure or past 16 MiB). `blean` takes inputs with the blean magic,
+`ndjson` all others. Budgets are cut from nl-fast's 200M steps / 4 GiB per
+declaration to 1M steps / 64 MiB.
+Upstream: none (no fuzz targets or fuzzing issues, checked 2026-11-22).
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..4f033ad
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,28 @@
++[package]
++name = "nano-lean-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2024"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++nano-lean = { path = ".." }
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "blean"
++path = "fuzz_targets/blean.rs"
++test = false
++doc = false
++
++[[bin]]
++name = "ndjson"
++path = "fuzz_targets/ndjson.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/blean.rs b/fuzz/fuzz_targets/blean.rs
+new file mode 100644
+index 0000000..761022f
+--- /dev/null
++++ b/fuzz/fuzz_targets/blean.rs
+@@ -0,0 +1,12 @@
++#![no_main]
++
++mod check;
++
++use libfuzzer_sys::fuzz_target;
++use nano_lean::import::blean;
++
++fuzz_target!(|data: &[u8]| {
++    if blean::sniff(data) {
++        check::check(data);
++    }
++});
+diff --git a/fuzz/fuzz_targets/check.rs b/fuzz/fuzz_targets/check.rs
+new file mode 100644
+index 0000000..b726ad6
+--- /dev/null
++++ b/fuzz/fuzz_targets/check.rs
+@@ -0,0 +1,29 @@
++//! Imports an export and checks its own declarations with the value core, as `nl-fast` does
++//! by default.
++
++use nano_lean::checker::{Adapter, Core, Limits};
++use nano_lean::import;
++use nano_lean::term::arena::Arena;
++use nano_lean::value_checker::Session;
++
++/// `nl-fast` allows 200M steps and 4 GiB per declaration; fuzz inputs are a few KiB.
++const LIMITS: Limits = Limits {
++    steps: 1_000_000,
++    arena_bytes: 64 << 20,
++};
++const SESSION_BYTES: usize = 16 << 20;
++
++pub fn check(data: &[u8]) {
++    let arena = Arena::new();
++    let Ok(store) = import::import_bytes(&arena, data) else {
++        return;
++    };
++    let mut session = Session::new(&store);
++    let mut adapter = Adapter::new(&store);
++    for idx in store.own..store.declars.len() as u32 {
++        let r = Core::Value.check(&store, &mut session, idx, LIMITS, &mut adapter, false);
++        if r.is_err() || session.arena().allocated_bytes() > SESSION_BYTES {
++            session.reset();
++        }
++    }
++}
+diff --git a/fuzz/fuzz_targets/ndjson.rs b/fuzz/fuzz_targets/ndjson.rs
+new file mode 100644
+index 0000000..ab18f4d
+--- /dev/null
++++ b/fuzz/fuzz_targets/ndjson.rs
+@@ -0,0 +1,12 @@
++#![no_main]
++
++mod check;
++
++use libfuzzer_sys::fuzz_target;
++use nano_lean::import::blean;
++
++fuzz_target!(|data: &[u8]| {
++    if !blean::sniff(data) {
++        check::check(data);
++    }
++});

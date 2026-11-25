@@ -1,0 +1,147 @@
+Add a cargo-fuzz target `ndjson` (upstream has none)
+
+A lean4export NDJSON stream, checked as `con-ron FILE.ndjson` does in check_main
+(con_ron_core::driver::check_main since upstream moved the driver into the core):
+reserved pins, built-in prelude, streaming parse (parse_source over the input in
+CHUNK_SIZE chunks, as FileChunks reads the file), prepare_d, the embedded Nat-op
+pins and check_phase in the default --verified mode on one worker (build_index,
+the frozen tier, every record's run_job in order from one worker_state until the
+first failure, as the pool does with one worker). The pins and the prelude state
+are built once from a static constructor; each input takes the state wasmfuzz's
+snapshot restores, other runners rebuild it after the first input.
+Upstream: none (no fuzz targets upstream, checked 2026-11-24).
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..286c435
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,27 @@
++[package]
++name = "con-ron-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2021"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++con-ron = { path = "../crates/con-ron", default-features = false }
++con-ron-core = { path = "../crates/con-ron-core" }
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++# As the workspace's release profile: the Aeneas model is the checked-arithmetic one.
++[profile.release]
++overflow-checks = true
++
++[[bin]]
++name = "ndjson"
++path = "fuzz_targets/ndjson.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/ndjson.rs b/fuzz/fuzz_targets/ndjson.rs
+new file mode 100644
+index 0000000..903e711
+--- /dev/null
++++ b/fuzz/fuzz_targets/ndjson.rs
+@@ -0,0 +1,95 @@
++//! A lean4export NDJSON stream checked as `con-ron FILE.ndjson` does
++//! (`con_ron_core::driver::check_main::check_main`): the reserved pins and the built-in
++//! prelude, the streaming parse, `prepare_d`, the embedded Nat-op pins, and the check phase
++//! in the default `--verified` mode on one worker.
++
++#![no_main]
++
++use std::sync::{LazyLock, Mutex};
++
++use con_ron::driver;
++use con_ron_core::arena::checker;
++use con_ron_core::arena::monad::AState;
++use con_ron_core::arena::pins::{intern_reserved_pins, max_nat_size_default};
++use con_ron_core::arena::store::PersTier;
++use con_ron_core::arena::stream_index;
++use con_ron_core::frontend::export_c::{self, ChunkSource};
++use con_ron_core::frontend::nat_op_ground::DeclUsedConsts;
++use con_ron_core::frontend::prelude;
++use con_ron_core::frontend::prepare::{self, PreludeIx};
++use con_ron_core::kernel::env::CheckMode;
++use con_ron_core::kernel::nat_op_pins::NatOpPinSet;
++use con_ron_core::kernel::pins_decode;
++use libfuzzer_sys::fuzz_target;
++
++// The embedded pin text, the reserved pins and the built-in prelude do not depend on the
++// input, so they are built from a static constructor (before the first input). wasmfuzz
++// restores that snapshot for every input, so each one takes the prelude state built there;
++// a runner without snapshots builds it afresh after the first input.
++static PINS: LazyLock<Vec<NatOpPinSet>> = LazyLock::new(|| {
++    pins_decode::decode_embedded().unwrap_or_else(|e| panic!("embedded pins: {}", driver::message(&e)))
++});
++static PRELUDE: Mutex<Option<(AState, PreludeIx)>> = Mutex::new(None);
++
++fn prelude_state() -> (AState, PreludeIx) {
++    let pers: &PersTier = &PersTier::empty();
++    let mut st = AState::empty();
++    if let Err(e) = intern_reserved_pins(pers, &mut st) {
++        panic!("reserved pins: {}", driver::message(&e));
++    }
++    match prelude::builtin_prelude_e(pers, &mut st) {
++        Ok(p) => (st, p),
++        Err((e, _)) => panic!("built-in prelude: {}", driver::message(&e)),
++    }
++}
++
++#[used]
++#[link_section = ".init_array"]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        LazyLock::force(&PINS);
++        *PRELUDE.lock().unwrap() = Some(prelude_state());
++    }
++    init
++};
++
++/// The input handed out as the binary's file reads do (`FileChunks`): `CHUNK_SIZE` at a time.
++struct SliceChunks<'a>(&'a [u8]);
++
++impl ChunkSource for SliceChunks<'_> {
++    fn next_chunk(&mut self) -> Vec<u8> {
++        let n = self.0.len().min(export_c::CHUNK_SIZE);
++        let (head, rest) = self.0.split_at(n);
++        self.0 = rest;
++        head.to_vec()
++    }
++}
++
++fuzz_target!(|data: &[u8]| {
++    let pers: &PersTier = &PersTier::empty();
++    let built = PRELUDE.lock().unwrap().take();
++    let (mut st, prelude_ix) = built.unwrap_or_else(prelude_state);
++    let Ok(parsed) = export_c::parse_source(pers, &mut st, &mut SliceChunks(data)) else {
++        return;
++    };
++    let Ok(prepared) = prepare::prepare_d(pers, &mut st, prelude_ix, parsed.decls, &DeclUsedConsts) else {
++        return;
++    };
++    let Ok(ipins) = checker::intern_all_pins(pers, &mut st, &PINS, &max_nat_size_default()) else {
++        return;
++    };
++    // check_main's check phase (`check_phase`) on one worker: the index, the frozen tier,
++    // every record's job in order from one worker state until the first failure.
++    let ds = &prepared.decls;
++    let Ok(ix) = stream_index::build_index(pers, &mut st, stream_index::stream_index_empty(), ds, 0) else {
++        return;
++    };
++    let tier: PersTier = checker::freeze_tier(&mut st.store, ix);
++    let mut w = checker::worker_state(&st.pins);
++    for k in 0..ds.len() {
++        if checker::run_job(&tier, &mut w, &CheckMode::Verified, &ipins, None, ds, k as u64).is_err() {
++            break;
++        }
++    }
++    let _ = checker::thaw_tier(&mut st.store, tier);
++});

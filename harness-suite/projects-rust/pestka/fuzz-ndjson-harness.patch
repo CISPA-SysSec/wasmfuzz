@@ -1,0 +1,169 @@
+Add a cargo-fuzz target `ndjson` (upstream has none)
+
+A lean4export NDJSON stream checked as the arena's `pestka` entry runs
+`bin/arena-run FILE 4` (susz pack --no-index, then pestka FILE.susz 4),
+on one worker on the calling thread: packed in memory by susz 0.1.4 (the
+arena's packer), then checked by the generated crate's `main` with
+Aver's capability providers bound in the harness (Args: `export.susz 1`;
+Disk: the packed bytes, read-only; Console: dropped). The crate is
+generated with --single-thread (the native entry is multi-threaded; on
+one worker the verdict is the same, and wasm32-wasip1 has no threads).
+The providers are installed once per process and read the current
+input, as wasmfuzz runs input after input in one instance (in-process
+replays of the 226 arena fixtures give the per-process verdicts).
+Every panic is a finding (main aborts on a panic: aver.toml panic =
+"abort").
+Upstream: none (no fuzz targets upstream; no issues, PR #1 is the
+author's own, checked 2026-11-22).
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..e736c1f
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,30 @@
++[package]
++name = "pestka-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2024"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++# the Rust that aver 0.37.0 generates from main.av (`aver compile --single-thread` into .build)
++pestka = { path = "../.build" }
++aver-rt = "=0.4.21"
++susz = "0.1.4"
++
++# The arena's packer, susz 0.1.4 from crates.io (unpacked next to the repo), with an
++# in-memory pack and its parallel reader gated to unix
++[patch.crates-io]
++susz = { path = "../../susz" }
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "ndjson"
++path = "fuzz_targets/ndjson.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/ndjson.rs b/fuzz/fuzz_targets/ndjson.rs
+new file mode 100644
+index 0000000..a568b28
+--- /dev/null
++++ b/fuzz/fuzz_targets/ndjson.rs
+@@ -0,0 +1,109 @@
++//! A lean4export NDJSON stream checked as the arena runs `bin/arena-run FILE 4`, on one
++//! worker: packed into Susz in memory as `susz pack --no-index` packs it (an export the
++//! packer finds invalid is rejected, one it cannot pack declined), then checked by
++//! Pestka's `main` (`pestka FILE.susz 1`) on the calling thread. Pestka reaches its input
++//! only through Aver's capability providers, which a process installs once; the harness
++//! binds `Args` to that command line, `Disk` to the packed bytes of the current input
++//! (`Disk.size`, `Disk.readBytesAt`; every other operation fails as a missing file would),
++//! and `Console` to nothing (the verdict is also main's status). Panics are findings.
++
++#![no_main]
++
++use aver_rt::provider::{
++    CapabilityProvider, ProviderBinding, ProviderContext, ProviderFault, ProviderValue, StandardArgsProvider,
++};
++use aver_rt::AverInt;
++use libfuzzer_sys::fuzz_target;
++use std::sync::{Arc, Mutex, Once};
++
++const PATH: &str = "export.susz";
++// The capability contracts aver 0.37.0 compiles into the generated crate (provider_support.rs).
++const ARGS: &str = "sha256:8326d0f27169e1b73a9f45b8a2d2f3f0d89d6c6e4eb64dc646781082ee585265";
++const CONSOLE: &str = "sha256:878f543df5342a616fddc83b61f1e035931cc24b89bfc523a52de5b0525a62b4";
++const DISK: &str = "sha256:7a010547d81840dbcfc2bde61c8a21e0bf6796fc0ace3d90ab634fbf3b378d8a";
++const CONSOLE_OPS: [&str; 4] = ["Console.error", "Console.print", "Console.readLine", "Console.warn"];
++const DISK_OPS: [&str; 14] = [
++    "Disk.appendBytes", "Disk.appendText", "Disk.delete", "Disk.deleteDir", "Disk.exists", "Disk.listDir",
++    "Disk.makeDir", "Disk.readBytes", "Disk.readBytesAt", "Disk.readText", "Disk.size", "Disk.sync",
++    "Disk.writeBytes", "Disk.writeText",
++];
++
++/// The packed input: wasmfuzz runs input after input in one instance.
++static FILE: Mutex<Vec<u8>> = Mutex::new(Vec::new());
++
++/// One read-only file held in memory (`FILE`).
++struct MemoryDisk;
++
++impl CapabilityProvider for MemoryDisk {
++    fn identity(&self) -> &str {
++        "pestka-fuzz.Disk/memory"
++    }
++    fn fingerprint(&self) -> &str {
++        "pestka-fuzz"
++    }
++    fn invoke(&self, cx: &ProviderContext, args: &[ProviderValue]) -> Result<ProviderValue, ProviderFault> {
++        use ProviderValue as V;
++        let fail = |m: &str| Ok(V::ResultErr(Box::new(V::String(m.to_string()))));
++        let file = FILE.lock().unwrap();
++        match (cx.operation.as_str(), args) {
++            ("Disk.exists", [V::String(p)]) => Ok(V::Bool(p == PATH)),
++            ("Disk.size", [V::String(p)]) if p == PATH => {
++                Ok(V::ResultOk(Box::new(V::Int(AverInt::from_i64(file.len() as i64)))))
++            }
++            ("Disk.readBytesAt", [V::String(p), V::Int(at), V::Int(n)]) if p == PATH => {
++                let (Some(at), Some(n)) = (at.to_i64(), n.to_i64()) else {
++                    return fail("Disk.readBytesAt: offset and length must fit a 64-bit integer");
++                };
++                if at < 0 || n < 0 {
++                    return fail("Disk.readBytesAt: offset and length must be non-negative");
++                }
++                let lo = (at as u64).min(file.len() as u64) as usize;
++                let hi = (lo as u64).saturating_add(n as u64).min(file.len() as u64) as usize;
++                Ok(V::ResultOk(Box::new(V::Bytes(file[lo..hi].to_vec()))))
++            }
++            ("Disk.readBytes", [V::String(p)]) if p == PATH => Ok(V::ResultOk(Box::new(V::Bytes(file.clone())))),
++            _ => fail("No such file or directory (os error 44)"),
++        }
++    }
++}
++
++/// Console output dropped.
++struct Quiet;
++
++impl CapabilityProvider for Quiet {
++    fn identity(&self) -> &str {
++        "pestka-fuzz.Console/quiet"
++    }
++    fn fingerprint(&self) -> &str {
++        "pestka-fuzz"
++    }
++    fn invoke(&self, cx: &ProviderContext, _args: &[ProviderValue]) -> Result<ProviderValue, ProviderFault> {
++        match cx.operation.as_str() {
++            "Console.readLine" => Ok(ProviderValue::ResultErr(Box::new(ProviderValue::String("no input".into())))),
++            _ => Ok(ProviderValue::Unit),
++        }
++    }
++}
++
++fn install() {
++    static ONCE: Once = Once::new();
++    ONCE.call_once(|| {
++        pestka::install_provider_bindings(vec![
++            ProviderBinding::new("Args", ARGS, ["Args.get"], Arc::new(StandardArgsProvider::new(vec![PATH.into(), "1".into()]))),
++            ProviderBinding::new("Console", CONSOLE, CONSOLE_OPS, Arc::new(Quiet)),
++            ProviderBinding::new("Disk", DISK, DISK_OPS, Arc::new(MemoryDisk)),
++        ])
++        .expect("provider bindings");
++    });
++}
++
++fuzz_target!(|data: &[u8]| {
++    let opts = susz::pack::Options { index: false, threads: 1 };
++    // the packer's Invalid is a rejection, Cannot a decline
++    let Ok((bytes, _)) = susz::pack::pack_bytes_to_vec(data, &opts) else {
++        return;
++    };
++    install();
++    *FILE.lock().unwrap() = bytes;
++    let _ = pestka::aver_generated::entry::main();
++});

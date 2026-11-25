@@ -1,0 +1,111 @@
+Build palladium for wasm32-wasip1: bound recursion by the wasm stacks
+
+Checking runs on worker threads with 256 MiB to 4 GiB stacks, sized for
+MAX_DEPTH = 200 000 nested infer/whnf/def-eq calls. wasm32-wasip1 has no
+threads, and its guest calls run on the engine's native stack (wasmfuzz:
+8 MiB for run-input, 32 MiB per fuzzing worker): a whnf/reduce_nat chain
+~60 000 levels deep (arena test perf/unfold-before-literal-bad) overflows
+it. On wasm32 (and in --cfg fuzzing builds, so native replays agree)
+MAX_DEPTH is 4096. The five depth guards in tc.rs also fault when less
+than 2 MiB of the 16 MiB linear-memory stack (from __stack_low) is left;
+util::stack_exhausted is false on native targets. Both end the declaration
+with the existing "recursion depth exceeded" fault.
+Upstream: none (no issues upstream; PRs #1-#3 are the author's own, checked 2026-11-22).
+
+diff --git a/src/tc.rs b/src/tc.rs
+index e0626a1..2b5b4bb 100644
+--- a/src/tc.rs
++++ b/src/tc.rs
+@@ -25,7 +25,12 @@ pub fn fault<T>(msg: impl Into<String>) -> R<T> {
+ }
+ 
+ /// Recursion depth limit (M8).
++#[cfg(not(any(target_family = "wasm", fuzzing)))]
+ const MAX_DEPTH: u32 = 200_000;
++/// wasm32: guest calls run on the engine's native stack (wasmfuzz: 8 MiB for run-input,
++/// 32 MiB for fuzzing workers), which ~60 000 whnf/reduce_nat levels already exhaust.
++#[cfg(any(target_family = "wasm", fuzzing))]
++const MAX_DEPTH: u32 = 4096;
+ /// Largest numeral the kernel computes: 2^27 bits = 16 MiB.
+ const MAX_NAT_BITS: u64 = 1 << 27;
+ /// Largest exponent / shift amount accepted by `Nat.pow` / `Nat.shiftLeft` reduction.
+@@ -765,7 +770,7 @@ impl<'e> Checker<'e> {
+ 
+     fn infer_ctx(&mut self, t: TermId, check: bool) -> R<TermId> {
+         self.depth += 1;
+-        if self.depth > MAX_DEPTH {
++        if self.depth > MAX_DEPTH || crate::util::stack_exhausted() {
+             self.depth -= 1;
+             return fault("recursion depth exceeded");
+         }
+@@ -993,7 +998,7 @@ impl<'e> Checker<'e> {
+     /// The old implementation: binders are opened by substituting into the body.
+     fn infer_subst(&mut self, t: TermId, check: bool) -> R<TermId> {
+         self.depth += 1;
+-        if self.depth > MAX_DEPTH {
++        if self.depth > MAX_DEPTH || crate::util::stack_exhausted() {
+             self.depth -= 1;
+             return fault("recursion depth exceeded");
+         }
+@@ -1250,7 +1255,7 @@ impl<'e> Checker<'e> {
+     /// Weak head normal form without delta (and without extensions).
+     pub fn whnf_core(&mut self, t: TermId, cheap_rec: bool, cheap_proj: bool) -> R<TermId> {
+         self.depth += 1;
+-        if self.depth > MAX_DEPTH {
++        if self.depth > MAX_DEPTH || crate::util::stack_exhausted() {
+             self.depth -= 1;
+             return fault("recursion depth exceeded");
+         }
+@@ -1787,7 +1792,7 @@ impl<'e> Checker<'e> {
+     /// Weak head normal form (with delta and literal extensions).
+     pub fn whnf(&mut self, t: TermId) -> R<TermId> {
+         self.depth += 1;
+-        if self.depth > MAX_DEPTH {
++        if self.depth > MAX_DEPTH || crate::util::stack_exhausted() {
+             self.depth -= 1;
+             return fault("recursion depth exceeded");
+         }
+@@ -2320,7 +2325,7 @@ impl<'e> Checker<'e> {
+ 
+     fn is_def_eq_core(&mut self, t: TermId, s: TermId) -> R<bool> {
+         self.depth += 1;
+-        if self.depth > MAX_DEPTH {
++        if self.depth > MAX_DEPTH || crate::util::stack_exhausted() {
+             self.depth -= 1;
+             return fault("recursion depth exceeded");
+         }
+diff --git a/src/util.rs b/src/util.rs
+index dbb23a9..2978553 100644
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -193,6 +193,30 @@ pub fn mix(a: u64, b: u64) -> u64 {
+     y ^ (y >> 32)
+ }
+ 
++/// wasm32-wasip1 has no threads, so checking runs on the module's linear-memory stack
++/// (16 MiB in the fuzzing build) instead of a multi-GiB worker stack, and `MAX_DEPTH`
++/// alone would overflow it. True when less than `WASM_STACK_MARGIN` of it is left; the
++/// recursion guards then fault as they do at `MAX_DEPTH`.
++#[cfg(target_family = "wasm")]
++#[inline]
++pub fn stack_exhausted() -> bool {
++    const WASM_STACK_MARGIN: usize = 2 << 20;
++    unsafe extern "C" {
++        static __stack_low: u8;
++    }
++    let probe = 0u8;
++    let sp = std::hint::black_box(&raw const probe) as usize;
++    let low = &raw const __stack_low as usize;
++    sp < low + WASM_STACK_MARGIN
++}
++
++/// Native workers run on stacks sized for `MAX_DEPTH` (see main.rs).
++#[cfg(not(target_family = "wasm"))]
++#[inline]
++pub fn stack_exhausted() -> bool {
++    false
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;

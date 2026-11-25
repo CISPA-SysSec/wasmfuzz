@@ -1,0 +1,154 @@
+Reject (or decline) malformed export records instead of panicking
+
+Three parser sites panicked on malformed input:
+- go1_general unwrapped the record's "ie"/"il"/"in" index for every term
+  record, so a term record without one (e.g. a forallE with no "ie") hit
+  `Option::unwrap()` on None; it now rejects ("export record is missing
+  its index").
+- do_proj expected the projection index to fit in u16; a larger "idx"
+  now rejects.
+- get_uparams unwrapped the level of each declared universe parameter; a
+  parameter name no level record mentions now declines (interning it
+  would make a later record for the same level a duplicate).
+The first was found by a 10-second wasmfuzz smoke run (repro in
+suite-repros); the other two by reading the surrounding code.
+Regression tests in parser/tests.rs.
+Upstream: none (no related issue or PR, checked 2026-11-22).
+
+diff --git a/src/frontend/parser.rs b/src/frontend/parser.rs
+index abd22cd..dcf8b31 100644
+--- a/src/frontend/parser.rs
++++ b/src/frontend/parser.rs
+@@ -708,7 +708,11 @@ impl Parser {
+         let mut levels = Vec::with_capacity(name_idxs.len());
+         for name_idx in name_idxs.iter().copied() {
+             let name = self.get_name(name_idx);
+-            let i = self.terms.levels.find(&Level::Param(name)).unwrap();
++            // A universe parameter that no level record of the export names: decline
++            // (interning it here would make a later record for it a duplicate).
++            let Some(i) = self.terms.levels.find(&Level::Param(name)) else {
++                unsupported!("universe parameter without a level record")
++            };
+             levels.push(LevelId::new(i, false));
+         }
+         LevelsId::new(self.terms.lists.intern_ref(&levels[..]), false)
+@@ -1185,7 +1189,8 @@ impl Parser {
+ 
+     #[inline]
+     fn do_proj(&mut self, idx: BackRef, type_name: u32, proj_idx: usize, struct_: u32) {
+-        let proj_idx = u16::try_from(proj_idx).expect("projection index does not fit in u16");
++        let proj_idx = u16::try_from(proj_idx)
++            .unwrap_or_else(|_| reject!("projection index {proj_idx} does not fit in u16"));
+         let ty_name = self.get_name(type_name);
+         let structure = self.get_expr(struct_);
+         let node = ExprNode::proj(ty_name, proj_idx, structure, self.node(structure));
+@@ -1227,6 +1232,9 @@ impl Parser {
+     }
+ 
+     fn go1_general(&mut self, line: &str) -> Result<(), Box<dyn Error>> {
++        fn need_idx(idx: Option<BackRef>) -> BackRef {
++            idx.unwrap_or_else(|| reject!("export record is missing its index"))
++        }
+         use ExportJsonVal::{
+             Axiom, Defn, ExprApp, ExprBVar, ExprConst, ExprLambda, ExprLet, ExprMData, ExprPi,
+             ExprProj, ExprSort, Inductive, LevelIMax, LevelMax, LevelParam, LevelSucc, Metadata,
+@@ -1240,34 +1248,34 @@ impl Parser {
+             Metadata(json_val) => {
+                 check_semver(&json_val)?;
+             }
+-            NameStr { pre, str } => self.do_name_str(assigned_idx.unwrap(), pre, &str),
+-            NameNum { pre, i } => self.do_name_num(assigned_idx.unwrap(), pre, u64::from(i)),
+-            NatLit(big_uint) => self.do_nat_lit(assigned_idx.unwrap(), big_uint)?,
+-            StrLit(cow_str) => self.do_str_lit(assigned_idx.unwrap(), &cow_str)?,
+-            LevelSucc(l) => self.do_succ(assigned_idx.unwrap(), l),
+-            LevelMax([l, r]) => self.do_max(assigned_idx.unwrap(), l, r),
+-            LevelIMax([l, r]) => self.do_imax(assigned_idx.unwrap(), l, r),
+-            LevelParam(var_idx) => self.do_level_param(assigned_idx.unwrap(), var_idx),
+-            ExprSort(level) => self.do_sort(assigned_idx.unwrap(), level),
++            NameStr { pre, str } => self.do_name_str(need_idx(assigned_idx), pre, &str),
++            NameNum { pre, i } => self.do_name_num(need_idx(assigned_idx), pre, u64::from(i)),
++            NatLit(big_uint) => self.do_nat_lit(need_idx(assigned_idx), big_uint)?,
++            StrLit(cow_str) => self.do_str_lit(need_idx(assigned_idx), &cow_str)?,
++            LevelSucc(l) => self.do_succ(need_idx(assigned_idx), l),
++            LevelMax([l, r]) => self.do_max(need_idx(assigned_idx), l, r),
++            LevelIMax([l, r]) => self.do_imax(need_idx(assigned_idx), l, r),
++            LevelParam(var_idx) => self.do_level_param(need_idx(assigned_idx), var_idx),
++            ExprSort(level) => self.do_sort(need_idx(assigned_idx), level),
+             ExprMData { .. } => return decline("Expr.mdata is not supported"),
+-            ExprConst { name, levels } => self.do_const(assigned_idx.unwrap(), name, &levels),
+-            ExprApp { fun, arg } => self.do_app(assigned_idx.unwrap(), fun, arg),
+-            ExprBVar(dbj_idx) => self.do_bvar(assigned_idx.unwrap(), dbj_idx)?,
++            ExprConst { name, levels } => self.do_const(need_idx(assigned_idx), name, &levels),
++            ExprApp { fun, arg } => self.do_app(need_idx(assigned_idx), fun, arg),
++            ExprBVar(dbj_idx) => self.do_bvar(need_idx(assigned_idx), dbj_idx)?,
+             ExprLambda { binder_type, body } => {
+-                self.do_lambda(assigned_idx.unwrap(), binder_type, body);
++                self.do_lambda(need_idx(assigned_idx), binder_type, body);
+             }
+-            ExprPi { binder_type, body } => self.do_pi(assigned_idx.unwrap(), binder_type, body),
++            ExprPi { binder_type, body } => self.do_pi(need_idx(assigned_idx), binder_type, body),
+             ExprLet {
+                 ty,
+                 value,
+                 body,
+                 nondep,
+-            } => self.do_let(assigned_idx.unwrap(), ty, value, body, nondep),
++            } => self.do_let(need_idx(assigned_idx), ty, value, body, nondep),
+             ExprProj {
+                 type_name,
+                 idx,
+                 structure: struct_,
+-            } => self.do_proj(assigned_idx.unwrap(), type_name, idx, struct_),
++            } => self.do_proj(need_idx(assigned_idx), type_name, idx, struct_),
+             Axiom {
+                 name,
+                 ty,
+diff --git a/src/frontend/parser/tests.rs b/src/frontend/parser/tests.rs
+index 0644981..ea5e436 100644
+--- a/src/frontend/parser/tests.rs
++++ b/src/frontend/parser/tests.rs
+@@ -111,3 +111,44 @@ fn reject_undefined_binder_type() {
+         "export references expression index 99 before it is defined"
+     );
+ }
++
++fn check_export(export: &str) -> Result<(), crate::outcome::CheckError> {
++    use crate::outcome::{CheckError, Rejection};
++    std::panic::catch_unwind(|| parse_export_mapped(export.as_bytes(), Config::default()))
++        .map_err(CheckError::from_panic)?
++        .map_err(|e| CheckError::Rejected(Rejection(e.to_string())))?
++        .check_all_declars()
++}
++
++fn assert_rejected_with(export: &str, message: &str) {
++    match check_export(export) {
++        Err(crate::outcome::CheckError::Rejected(r)) => {
++            assert!(r.0.contains(message), "unexpected rejection: {r}");
++        }
++        Err(crate::outcome::CheckError::Declined(d)) => panic!("expected a rejection, got {d}"),
++        Err(crate::outcome::CheckError::Internal(_)) => panic!("expected a rejection, got a panic"),
++        Ok(()) => panic!("expected a rejection, got acceptance"),
++    }
++}
++
++#[test]
++fn reject_record_without_index() {
++    assert_rejected_with(
++        "{\"ie\":0,\"sort\":0}\n{\"forallE\":{\"binderInfo\":\"default\",\"body\":0,\"name\":0,\"type\":0}}\n",
++        "missing its index",
++    );
++}
++
++#[test]
++fn reject_projection_index_beyond_u16() {
++    assert_rejected_with(
++        "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"S\"}}\n{\"ie\":0,\"sort\":0}\n{\"ie\":1,\"proj\":{\"typeName\":1,\"idx\":70000,\"struct\":0}}\n",
++        "does not fit in u16",
++    );
++}
++
++#[test]
++fn decline_universe_parameter_without_level_record() {
++    let export = "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"u\"}}\n{\"in\":2,\"str\":{\"pre\":0,\"str\":\"f\"}}\n{\"il\":1,\"succ\":0}\n{\"ie\":0,\"sort\":1}\n{\"axiom\":{\"name\":2,\"levelParams\":[1],\"type\":0,\"isUnsafe\":false}}\n";
++    assert!(matches!(check_export(export), Err(crate::outcome::CheckError::Declined(_))));
++}

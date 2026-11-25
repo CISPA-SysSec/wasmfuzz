@@ -1,0 +1,74 @@
+Add a cargo-fuzz target `ndjson` (upstream has none)
+
+A lean4export NDJSON stream, loaded by the sequential reference loader
+(parse::load) and checked declaration by declaration in file order on one
+Checker, as one `palladium` worker does: the first rejection ends the
+check; a fault (resource limit) replaces the checker and checking goes on;
+the store is reset past RESET_TERMS terms, as in main.rs.
+Upstream: none (no fuzz targets upstream, checked 2026-11-22).
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..fccb352
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,22 @@
++[package]
++name = "palladium-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2021"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++palladium = { path = ".." }
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "ndjson"
++path = "fuzz_targets/ndjson.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/ndjson.rs b/fuzz/fuzz_targets/ndjson.rs
+new file mode 100644
+index 0000000..d805f63
+--- /dev/null
++++ b/fuzz/fuzz_targets/ndjson.rs
+@@ -0,0 +1,31 @@
++//! A lean4export NDJSON stream checked as `palladium FILE` does, on one worker: the
++//! sequential loader (`parse::load`, the reference the parallel loader must agree with),
++//! then every declaration in file order on one `Checker`. A rejection ends the check, as
++//! the CLI exits on the first one; a fault (resource limit) replaces the checker and the
++//! rest are still checked, as a worker does; the store is reset past `RESET_TERMS`.
++
++#![no_main]
++
++use libfuzzer_sys::fuzz_target;
++use palladium::parse;
++use palladium::tc::{Checker, Fail};
++
++/// main.rs: a worker recreates its store between declarations past this many terms.
++const RESET_TERMS: usize = 250_000;
++
++fuzz_target!(|data: &[u8]| {
++    let Ok(env) = parse::load(data) else {
++        return;
++    };
++    let mut checker = Checker::new(&env);
++    for p in 0..env.raw.decls.len() {
++        if checker.store.num_terms() > RESET_TERMS {
++            checker.reset();
++        }
++        match checker.check_decl(p as u32) {
++            Ok(()) => {}
++            Err(Fail::Reject(_)) => return,
++            Err(Fail::Fault(_)) => checker = Checker::new(&env),
++        }
++    }
++});

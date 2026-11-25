@@ -1,0 +1,161 @@
+Add a cargo-fuzz target `ndjson` (upstream has none)
+
+A lean4export NDJSON stream checked as the arena runs `scripts/arena-run
+FILE 4` (susz pack --no-index, then gruszka FILE.susz), on one worker on
+the calling thread: packed in memory by susz 0.1.4 (the arena's packer),
+loaded, and checked in file order to the first failure, with the
+overflow-arena rerun of main.rs. gruszka's lockfile pins susz 0.1.1 for
+reading; the fuzz crate reads with the patched 0.1.4 as well (read.rs and
+index.rs are identical, canon.rs and format.rs differ in a few lines, and
+0.1.1 does not build for wasm32 either). The deliberate "a worker table
+is full" panic ends the test case through wasmfuzz's exit_testcase; every
+other panic is a finding (main.rs would decline with "internal error").
+Upstream: none (no fuzz targets upstream, checked 2026-11-22).
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..a637d59
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,29 @@
++[package]
++name = "gruszka-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2024"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++gruszka = { path = "..", default-features = false }
++susz = "0.1.4"
++
++# The arena's packer, susz 0.1.4 from crates.io (unpacked next to the repo), with an
++# in-memory pack and its parallel reader gated to unix; gruszka reads with it too
++# (its lockfile pins 0.1.1, whose reader is the same and which does not build for wasm32)
++[patch.crates-io]
++susz = { path = "../../susz" }
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++[[bin]]
++name = "ndjson"
++path = "fuzz_targets/ndjson.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/ndjson.rs b/fuzz/fuzz_targets/ndjson.rs
+new file mode 100644
+index 0000000..15ee8a1
+--- /dev/null
++++ b/fuzz/fuzz_targets/ndjson.rs
+@@ -0,0 +1,106 @@
++//! A lean4export NDJSON stream checked as the arena runs `scripts/arena-run FILE 4`, on
++//! one worker: the export is packed into Susz in memory (`susz pack --no-index`), loaded,
++//! and its declarations are checked in file order on the calling thread, stopping at the
++//! first failure (the verdict is the first failure in file order on any number of
++//! workers). A declaration whose blocks do not fit the worker's arena runs again in the
++//! overflow arenas, as in main.rs.
++//!
++//! main.rs turns a panic in a declaration into a decline. The one panic that is a limit
++//! by design is a worker table filling up between two of the checker's slow ticks
++//! (`Slab::full`, "a worker table is full"); a panic hook installed from a static
++//! constructor ends the test case through wasmfuzz's `exit_testcase` import for it. Every
++//! other panic is a finding. A trap (that exit, out of fuel, out of memory) makes wasmfuzz
++//! reset the instance; an input that returns leaves its state to the next one.
++
++#![no_main]
++
++use gruszka::{env, tc};
++use libfuzzer_sys::fuzz_target;
++use std::sync::atomic::AtomicU32;
++
++/// Linear-memory stack a worker may use before deep recursion declines (main.rs: the
++/// worker's stack less a quarter; the fuzzing build has a 16 MiB stack, and the engine's
++/// native stack runs out long before the linear one).
++const STACK_LIMIT: usize = 2 << 20;
++
++#[cfg(target_family = "wasm")]
++#[link(wasm_import_module = "wasmfuzz")]
++unsafe extern "C" {
++    #[link_name = "exit_testcase"]
++    fn wasmfuzz_exit_testcase() -> !;
++}
++
++#[allow(dead_code)]
++fn verdict_ends_testcase(payload: &(dyn std::any::Any + Send)) -> bool {
++    let msg = payload
++        .downcast_ref::<String>()
++        .map(|s| s.as_str())
++        .or_else(|| payload.downcast_ref::<&str>().copied())
++        .unwrap_or("");
++    msg.starts_with("a worker table is full")
++}
++
++#[used]
++#[unsafe(link_section = ".init_array")]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        let next = std::panic::take_hook();
++        std::panic::set_hook(Box::new(move |info| {
++            #[cfg(target_family = "wasm")]
++            if verdict_ends_testcase(info.payload()) {
++                unsafe { wasmfuzz_exit_testcase() }
++            }
++            next(info)
++        }));
++    }
++    init
++};
++
++/// Leaks a value for the run of one input; `reclaim` frees it afterwards (the checker's
++/// worker takes `'static` references, as main.rs's workers do).
++fn lend<T>(x: T) -> &'static T {
++    Box::leak(Box::new(x))
++}
++unsafe fn reclaim<T: ?Sized>(x: &'static T) {
++    drop(unsafe { Box::from_raw(x as *const T as *mut T) });
++}
++
++fuzz_target!(|data: &[u8]| {
++    let opts = susz::pack::Options { index: false, threads: 1 };
++    // the packer's Invalid is a rejection, Cannot a decline
++    let Ok((bytes, _)) = susz::pack::pack_bytes_to_vec(data, &opts) else {
++        return;
++    };
++    // wasmfuzz runs input after input in one instance (until a trap or a periodic reset):
++    // the region and its layout are reused, everything else is freed after the input
++    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
++    if let Ok(env) = env::load_part(bytes, None) {
++        let env: &'static env::Env<'static> = lend(env);
++        if env::region().layout(env.main.len(), 1).is_ok() {
++            tc::set_workers(1);
++            let shared = lend(tc::Shared::new(env.main.len(), env.consts.len()));
++            let first_fail = lend(AtomicU32::new(u32::MAX));
++            let mut w = tc::Worker::new(env, shared, first_fail, STACK_LIMIT);
++            for d in 0..env.decl_rows.len() as u32 {
++                let mut r = w.check_decl(d);
++                if w.arena_full && !matches!(r, Ok(()) | Err(tc::Stop::Cancel)) {
++                    let mut g = env::region().big.lock().unwrap();
++                    let big = g.as_mut().expect("overflow arenas taken before the layout");
++                    w.swap_big(big);
++                    r = w.check_decl(d);
++                    w.swap_big(big);
++                }
++                if r.is_err() {
++                    break;
++                }
++            }
++            drop(w);
++            unsafe {
++                reclaim(first_fail);
++                reclaim(shared);
++            }
++        }
++        unsafe { reclaim(env) };
++    }
++    unsafe { reclaim(bytes) };
++});

@@ -24,6 +24,7 @@ comrak-gfm_footnotes.wasm,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0
 comrak-gfm_sourcepos.wasm,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0
 comrak-parse.wasm,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0
 comrak-quadratic.wasm,0,1,1,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0
+con-ron-ndjson.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 dav1d-decode.wasm,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 dav2d-decode.wasm,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 expat-xml_parse_US-ASCII.wasm,1,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0,0
@@ -131,6 +132,7 @@ goblin-parse.wasm,1,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,1
 goblin-parse_elf.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 graphite-font.wasm,1,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,1
 graphite-segment.wasm,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1
+gruszka-ndjson.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 harfbuzz-hb-shape.wasm,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0
 harfrust-fuzz_shape.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 html5ever-fuzz_document_parse.wasm,1,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0
@@ -154,6 +156,8 @@ jsoncpp.wasm,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,1,0
 jxl-oxide-libfuzzer-decode.wasm,0,0,1,0,0,1,0,0,1,1,0,0,0,0,0,0,0,1
 jxl-rs-decode.wasm,0,0,1,0,0,1,1,0,1,1,0,0,0,0,0,0,0,1
 jxl-rs-decode_header.wasm,0,0,1,0,0,1,1,0,1,0,0,0,0,0,0,0,0,0
+kefir-ndjson.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
+kiota-ndjson.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 lcms-cms_overwrite_transform.wasm,0,0,0,1,0,0,1,0,0,0,1,0,0,0,0,0,0,0
 lcms-cms_transform.wasm,0,0,0,1,0,0,1,0,0,0,1,1,0,0,0,0,0,0
 lcms-cms_transform_all.wasm,1,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,1
@@ -229,6 +233,8 @@ mbedtls-fuzz_server.wasm,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,1
 mbedtls-fuzz_x509crl.wasm,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0
 mbedtls-fuzz_x509crt.wasm,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 mbedtls-fuzz_x509csr.wasm,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+nano-lean-blean.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
+nano-lean-ndjson.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 openjpeg-opj_decompress_J2K.wasm,0,1,1,0,1,0,1,0,0,1,1,0,0,0,0,0,0,0
 openjpeg-opj_decompress_JP2.wasm,0,0,0,0,1,0,1,0,0,0,1,0,0,0,0,0,0,1
 openssl-acert.wasm,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0,1
@@ -268,7 +274,9 @@ openthread-trel.wasm,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,0,0
 orlp-slotmap-basic_slot_map.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 orlp-slotmap-dense_slot_map.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 orlp-slotmap-hop_slot_map.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
+palladium-ndjson.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 pcre2-fuzzcheck.wasm,1,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0
+pestka-ndjson.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 poppler-doc.wasm,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0
 poppler-page_label.wasm,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0
 poppler-page_search.wasm,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -319,6 +327,7 @@ sequoia-key_packet_from_bytes.wasm,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0
 sequoia-message_from_bytes.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 sequoia-packet_pile_from_bytes.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 sequoia-rawcert_from_bytes.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
+sokonanoda-ndjson.wasm,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0
 sqlite-ossfuzz.wasm,1,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,1
 stb-png_read.wasm,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 stb-stbi_read.wasm,1,0,0,1,0,0,1,0,0,0,1,0,0,0,0,0,0,1

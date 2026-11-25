@@ -1,0 +1,49 @@
+Lower the work, live-memory and reader-buffer budgets in --cfg fuzzing builds
+
+kefir charges every checking step against WORK_CHARGED (2^48 units) and
+every managed allocation against MANAGED_LIVE_BYTES (16 GiB); exhausting
+either declines with a resource code. Under fuzzing an exec should end
+in about a second and within wasmfuzz's 8-512 MiB memory cap, so the
+fuzzing build uses 2^24 work units (the arena and nano-lean fixtures
+charge at most 2.3M, 0.06 s natively) and 256 MiB. READER_BUFFER_BYTES
+drops from 64 KiB to 4 KiB: the framer zero-fills the buffer on every
+check, a byte loop at opt-level s that cost ~1.2M of the ~1.3M wasm
+instructions of a header-only exec. The reported resource_profile
+identity is computed by build.rs, which does not see the cfg on cross
+builds, so it still names the production profile.
+Upstream: none (issues disabled upstream, no PRs, checked 2026-11-22).
+
+diff --git a/src/resource/profile.rs b/src/resource/profile.rs
+index 003a18f..7009755 100644
+--- a/src/resource/profile.rs
++++ b/src/resource/profile.rs
+@@ -13,8 +13,17 @@ pub(crate) const DIAGNOSTIC_LIVE_BYTES: u64 = 67108864;
+ pub(crate) const EMERGENCY_BYTES: u64 = 4096;
+ pub(crate) const INPUT_BYTES: u64 = 68_719_476_736;
+ pub(crate) const JSON_DEPTH: u32 = 128;
++#[cfg(not(fuzzing))]
+ pub(crate) const MANAGED_LIVE_BYTES: u64 = 17179869184;
++// Fuzzing: 256 MiB (wasmfuzz caps linear memory at 8-512 MiB per run).
++#[cfg(fuzzing)]
++pub(crate) const MANAGED_LIVE_BYTES: u64 = 268435456;
++#[cfg(not(fuzzing))]
+ pub(crate) const READER_BUFFER_BYTES: usize = 65536;
++// Fuzzing: 4 KiB. The framer zero-fills this buffer for every check, which at
++// opt-level s is a byte loop: 64 KiB cost ~1.2M wasm instructions per exec.
++#[cfg(fuzzing)]
++pub(crate) const READER_BUFFER_BYTES: usize = 4096;
+ pub(crate) const RECORD_BYTES: usize = 16777216;
+ pub(crate) const REDUCTION_PATH: u32 = 4194304;
+ pub(crate) const REPORT_BYTES: u64 = 1048576;
+@@ -22,7 +31,11 @@ pub(crate) const STDERR_BYTES: u64 = 256;
+ pub(crate) const STRUCTURE_DEPTH: u32 = 65536;
+ pub(crate) const TABLE_ENTRIES_EACH: u64 = 4294967296;
+ pub(crate) const TERMINAL_WORK: u64 = 16777216;
++#[cfg(not(fuzzing))]
+ pub(crate) const WORK_CHARGED: u64 = 281474976710656;
++// Fuzzing: 2^24 units (the arena fixtures charge at most 2.3M), keeping an exec near 1 s.
++#[cfg(fuzzing)]
++pub(crate) const WORK_CHARGED: u64 = 16777216;
+ pub(crate) const WORKLIST_FRAMES: usize = 1048576;
+ 
+ // Ignored-test profile and build-time manifest inputs only. Production ENTRIES

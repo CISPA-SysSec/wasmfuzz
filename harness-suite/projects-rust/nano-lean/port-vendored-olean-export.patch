@@ -1,0 +1,14 @@
+Point the fuzz workspace at the olean-export copy vendored by prepare.sh.
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 4f033ad..5432595 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -26,3 +26,7 @@ name = "ndjson"
+ path = "fuzz_targets/ndjson.rs"
+ test = false
+ doc = false
++
++[patch.crates-io]
++# olean-export 0.6.0 vendored by prepare.sh (with its port- patch).
++olean-export = { path = "../../olean-export" }

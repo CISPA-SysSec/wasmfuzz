@@ -1,0 +1,139 @@
+Reject loose bound variables instead of panicking
+
+eval, eval_spine, infer_value and infer_nonvar looked up a de Bruijn
+variable in the closure environment / local context with
+.expect("... loose bvar ..."), so an export whose declaration (or a
+definition unfolded while checking an inductive, which sokonanoda checks
+while parsing, before the definitions) contains a variable not bound by
+an enclosing binder crashed the checker with an internal error. Lean's
+kernel rejects such terms ("type checker does not support loose bound
+variables"); these sites now reject too. Found by the arena's
+bugs/loose-bvar-value test and nano-lean's invalid-loose-bvar fixtures;
+repro inputs in suite-repros. Regression tests in infer.rs.
+Upstream: open issue intgrah/sokonanoda#6 (by jasisz, 2026-10-27) reports this
+exit-3 internal error on the arena's loose-bvar-value test; no fix yet.
+
+diff --git a/src/checker/eval.rs b/src/checker/eval.rs
+index 665c673..3f08afd 100644
+--- a/src/checker/eval.rs
++++ b/src/checker/eval.rs
+@@ -29,10 +29,9 @@ impl TypeChecker<'_, '_> {
+     pub(crate) fn eval(&mut self, depth: u32, env: E, e: ExprId) -> V {
+         let node = *self.ctx.node(e);
+         if let Expr::Var { dbj_idx } = node.expr {
+-            return self
+-                .vals()
+-                .env_lookup(env, dbj_idx)
+-                .expect("eval: loose bvar");
++            return self.vals().env_lookup(env, dbj_idx).unwrap_or_else(|| {
++                crate::outcome::reject!("expression has a loose bound variable")
++            });
+         }
+         self.eval_node(depth, env, e, node)
+     }
+@@ -145,10 +144,11 @@ impl TypeChecker<'_, '_> {
+             return self.eval_spine(depth, env, f, rev_args);
+         }
+         match first {
+-            Expr::Var { dbj_idx } => self
+-                .vals()
+-                .env_lookup(env, dbj_idx)
+-                .expect("eval: loose bvar"),
++            Expr::Var { dbj_idx } => {
++                self.vals().env_lookup(env, dbj_idx).unwrap_or_else(|| {
++                    crate::outcome::reject!("expression has a loose bound variable")
++                })
++            }
+             Expr::Sort { level } => {
+                 let level = match self.vals().env_lsub(env) {
+                     Some(ls) => {
+diff --git a/src/checker/infer.rs b/src/checker/infer.rs
+index 29d32b2..9059604 100644
+--- a/src/checker/infer.rs
++++ b/src/checker/infer.rs
+@@ -101,10 +101,9 @@ impl TypeChecker<'_, '_> {
+     ) -> V {
+         let node = *self.ctx.node(e);
+         if let Var { dbj_idx } = node.expr {
+-            return self
+-                .vals()
+-                .ctx_lookup(ctx, dbj_idx)
+-                .expect("loose bvar in infer");
++            return self.vals().ctx_lookup(ctx, dbj_idx).unwrap_or_else(|| {
++                crate::outcome::reject!("expression has a loose bound variable")
++            });
+         }
+         self.infer_nonvar(flag, depth, env, ctx, e, node)
+     }
+@@ -122,10 +121,9 @@ impl TypeChecker<'_, '_> {
+         let _nest = crate::outcome::Nest::enter();
+         match node.expr {
+             Var { dbj_idx } => {
+-                return self
+-                    .vals()
+-                    .ctx_lookup(ctx, dbj_idx)
+-                    .expect("loose bvar in infer");
++                return self.vals().ctx_lookup(ctx, dbj_idx).unwrap_or_else(|| {
++                    crate::outcome::reject!("expression has a loose bound variable")
++                });
+             }
+             Sort { level } => {
+                 if let (Check, Some(info)) = (flag, self.declar_info)
+@@ -450,3 +448,57 @@ impl TypeChecker<'_, '_> {
+         ensure!(self.def_eq_at(0, val_ty, declared), "def_eq failed");
+     }
+ }
++
++#[cfg(test)]
++mod loose_bvar_tests {
++    use crate::config::Config;
++    use crate::frontend::parser::parse_export_mapped;
++    use crate::outcome::CheckError;
++
++    fn check(export: &str) -> Result<(), CheckError> {
++        std::panic::catch_unwind(|| parse_export_mapped(export.as_bytes(), Config::default()))
++            .map_err(CheckError::from_panic)?
++            .map_err(|e| CheckError::Rejected(crate::outcome::Rejection(e.to_string())))?
++            .check_all_declars()
++    }
++
++    fn assert_loose_bvar_rejected(export: &str) {
++        match check(export) {
++            Err(CheckError::Rejected(r)) => {
++                assert!(r.0.contains("loose bound variable"), "unexpected rejection: {r}");
++            }
++            Err(CheckError::Declined(d)) => panic!("expected a rejection, got decline {d}"),
++            Err(CheckError::Internal(_)) => panic!("expected a rejection, got an internal panic"),
++            Ok(()) => panic!("expected a rejection, got acceptance"),
++        }
++    }
++
++    /// `axiom bad : #1` (type inference meets the loose variable).
++    #[test]
++    fn rejects_loose_bvar_in_axiom_type() {
++        assert_loose_bvar_rejected(
++            r#"{"in":1,"str":{"pre":0,"str":"bad"}}
++{"ie":0,"bvar":1}
++{"axiom":{"name":1,"levelParams":[],"type":0,"isUnsafe":false}}
++"#,
++        );
++    }
++
++    /// `def bad : Type := #0` and an inductive `I : bad`: checking the inductive's type
++    /// unfolds `bad` (evaluation meets the loose variable).
++    #[test]
++    fn rejects_loose_bvar_in_unfolded_value() {
++        assert_loose_bvar_rejected(
++            r#"{"in":1,"str":{"pre":0,"str":"bad"}}
++{"il":1,"succ":0}
++{"ie":0,"sort":1}
++{"ie":1,"bvar":0}
++{"def":{"all":[1],"hints":{"regular":1},"levelParams":[],"name":1,"safety":"safe","type":0,"value":1}}
++{"in":2,"str":{"pre":0,"str":"I"}}
++{"in":3,"str":{"pre":2,"str":"rec"}}
++{"ie":2,"const":{"name":1,"us":[]}}
++{"inductive":{"ctors":[],"recs":[{"all":[2],"isUnsafe":false,"k":false,"levelParams":[],"name":3,"numIndices":0,"numMinors":0,"numMotives":1,"numParams":0,"rules":[],"type":0}],"types":[{"all":[2],"ctors":[],"isRec":false,"isReflexive":false,"isUnsafe":false,"levelParams":[],"name":2,"numIndices":0,"numNested":0,"numParams":0,"type":2}]}}
++"#,
++        );
++    }
++}

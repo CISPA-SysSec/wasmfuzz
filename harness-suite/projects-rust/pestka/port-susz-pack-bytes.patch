@@ -1,0 +1,86 @@
+Pack an export held in memory, and build for wasm32 (susz 0.1.4)
+
+`pack::pack_to_vec` and `pack_file` only read from a path, and file
+round trips through WASI's /tmp do not work under wasmfuzz.
+`pack::pack_bytes_to_vec` packs a byte slice as `pack_to_vec` packs a
+file on one thread (`lines::read_bytes`: one chunk, a newline added after
+a last line without one, as `read_file` does at EOF). The parallel reader
+(`pack::par`) uses std::os::unix::fs::FileExt and is gated to unix; with
+one thread it is not used anyway.
+Upstream: none (no issues at jasisz/susz; PRs #1-#5 are the author's own, checked 2026-11-22).
+
+diff --git a/src/pack/lines.rs b/src/pack/lines.rs
+index 06dc27b..7f45dda 100644
+--- a/src/pack/lines.rs
++++ b/src/pack/lines.rs
+@@ -1016,6 +1016,24 @@ pub fn memnl(b: &[u8], p: usize, lim: usize) -> usize {
+     }
+ }
+ 
++// Packs every line of an export held in memory, as `read_file` packs a
++// file's (one chunk: a last line without a newline gets one).
++pub fn read_bytes(src: &[u8], pk: &mut Pk) -> R<()> {
++    let mut buf: Vec<u8> = Vec::with_capacity(src.len() + 1 + PAD);
++    buf.extend_from_slice(src);
++    if buf.last().is_some_and(|&c| c != b'\n') {
++        buf.push(b'\n');
++    }
++    let lim = buf.len();
++    buf.resize(lim + PAD, 0);
++    let mut rd = Reader::new();
++    rd.lines(pk, &buf, 0, lim)?;
++    if !rd.header_done {
++        return Err("empty file".into());
++    }
++    Ok(())
++}
++
+ // Reads the whole file in chunks, packing every line.
+ pub fn read_file(path: &str, pk: &mut Pk, chunk: usize) -> R<()> {
+     let mut f = std::fs::File::open(path).map_err(|e| cant!("cannot read {path}: {e}"))?;
+diff --git a/src/pack/mod.rs b/src/pack/mod.rs
+index ab0a6f0..d7e0ce9 100644
+--- a/src/pack/mod.rs
++++ b/src/pack/mod.rs
+@@ -7,6 +7,8 @@
+ 
+ pub(crate) mod json;
+ mod lines;
++// positioned reads (std::os::unix::fs::FileExt); wasm32-wasip1 packs on one thread
++#[cfg(unix)]
+ mod par;
+ pub(crate) mod pk;
+ mod write;
+@@ -203,6 +205,19 @@ pub fn pack_to_vec(input: &str, opts: &Options) -> R<(Vec<u8>, Stats)> {
+     Ok((out, st))
+ }
+ 
++/// Packs an export held in memory and returns the packed file's bytes,
++/// as `pack_to_vec` packs a file (read on one thread; the bytes do not
++/// depend on it).
++pub fn pack_bytes_to_vec(input: &[u8], opts: &Options) -> R<(Vec<u8>, Stats)> {
++    let mut pk = pk::Pk::new(input.len());
++    pk.reserve_all(input.len());
++    lines::read_bytes(input, &mut pk)?;
++    pk.finish();
++    let mut out = Vec::new();
++    let st = write::write(pk, &mut out, opts.index, opts.threads)?;
++    Ok((out, st))
++}
++
+ /// Packs the export at `input` into `output`. The file is written under a
+ /// temporary name next to `output` and renamed when complete, so `output`
+ /// never holds a partial file.
+@@ -247,10 +262,12 @@ pub(crate) fn write_vec(pk: pk::Pk, opts: &Options) -> R<(Vec<u8>, Stats)> {
+     Ok((out, st))
+ }
+ 
++#[cfg_attr(not(unix), allow(unused_variables))]
+ fn read(input: &str, opts: &Options) -> R<(pk::Pk, bool)> {
+     let size = std::fs::metadata(input)
+         .map_err(|e| cant!("cannot read {input}: {e}"))?
+         .len() as usize;
++    #[cfg(unix)]
+     if opts.threads > 1 {
+         if let Some(p) = par::parse_parallel(input, opts.threads)? {
+             return Ok((p, true));

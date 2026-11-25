@@ -1,0 +1,85 @@
+Add a cargo-fuzz target `ndjson` (upstream has none)
+
+A lean4export NDJSON stream checked as the arena runs kefir (and kefir-wasm)
+with --axiom-policy=allow-all-declared-axioms: one single-use Run, checking
+on the calling thread (wasm32 has no threads), the report written to a sink.
+The Run, which reserves its report buffers before reading input, is built
+once from a static constructor; each input takes the one in wasmfuzz's
+snapshot, other runners build a fresh one after the first input.
+Upstream: none (no fuzz targets upstream, checked 2026-11-22).
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+new file mode 100644
+index 0000000..95d087c
+--- /dev/null
++++ b/fuzz/Cargo.toml
+@@ -0,0 +1,26 @@
++[package]
++name = "kefir-fuzz"
++version = "0.0.0"
++publish = false
++edition = "2021"
++
++[package.metadata]
++cargo-fuzz = true
++
++[dependencies]
++libfuzzer-sys = "0.4"
++kefir = { path = ".." }
++
++# Prevent this from interfering with workspaces
++[workspace]
++members = ["."]
++
++# As the crate's release profile: the kernel relies on checked arithmetic.
++[profile.release]
++overflow-checks = true
++
++[[bin]]
++name = "ndjson"
++path = "fuzz_targets/ndjson.rs"
++test = false
++doc = false
+diff --git a/fuzz/fuzz_targets/ndjson.rs b/fuzz/fuzz_targets/ndjson.rs
+new file mode 100644
+index 0000000..ace99cb
+--- /dev/null
++++ b/fuzz/fuzz_targets/ndjson.rs
+@@ -0,0 +1,37 @@
++//! A lean4export NDJSON stream checked as the arena runs `kefir
++//! --axiom-policy=allow-all-declared-axioms` (and kefir-wasm): one single-use `Run`,
++//! checking in file order on the calling thread (wasm32 has no threads), the report
++//! written to a sink.
++
++#![no_main]
++
++use std::sync::Mutex;
++
++use kefir::{AxiomPolicy, Run};
++use libfuzzer_sys::fuzz_target;
++
++// A `Run` reserves its report buffers (1 MiB) before it reads input; that does not
++// depend on the input, so one is built from a static constructor. wasmfuzz restores
++// that snapshot for every input, so each takes the run built there; a runner without
++// snapshots builds a fresh one after the first input (a run is single-use).
++static RUN: Mutex<Option<Run>> = Mutex::new(None);
++
++fn new_run() -> Run {
++    Run::new_with_axiom_policy(false, AxiomPolicy::AllowAllDeclaredAxioms)
++}
++
++#[used]
++#[link_section = ".init_array"]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        *RUN.lock().unwrap() = Some(new_run());
++    }
++    init
++};
++
++fuzz_target!(|data: &[u8]| {
++    let built = RUN.lock().unwrap().take();
++    let mut run = built.unwrap_or_else(new_run);
++    let mut input = data;
++    let _ = run.check(&mut input, &mut std::io::sink());
++});
