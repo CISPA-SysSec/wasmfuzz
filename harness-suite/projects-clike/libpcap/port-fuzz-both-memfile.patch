@@ -1,0 +1,56 @@
+diff --git a/testprogs/fuzz/fuzz_both.c b/testprogs/fuzz/fuzz_both.c
+index 35af143..f1514c5 100644
+--- a/testprogs/fuzz/fuzz_both.c
++++ b/testprogs/fuzz/fuzz_both.c
+@@ -9,6 +9,11 @@
+ 
+ FILE * outfile = NULL;
+ 
++#ifdef __wasi__
++/* the capture is read from memory (below), there is no file to remove */
++#define unlink(name) ((void)(name))
++#endif
++
+ static int bufferToFile(const char * name, const uint8_t *Data, size_t Size) {
+     FILE * fd;
+     if (remove(name) != 0) {
+@@ -51,7 +56,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
+ 
+     //initialize output file
+     if (outfile == NULL) {
++#ifdef __wasi__
++        /* no /dev/null on WASI: a 1-byte memory sink (writes are dropped) */
++        static char sink[1];
++        outfile = fmemopen(sink, sizeof sink, "w");
++#else
+         outfile = fopen("/dev/null", "w");
++#endif
+         if (outfile == NULL) {
+             return 0;
+         }
+@@ -65,6 +76,17 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
+         return 0;
+     }
+ 
++#ifdef __wasi__
++    /* no mkstemp() on WASI: read the capture from memory instead of a file */
++    (void)filename; (void)fd;
++    FILE *capture = fmemopen((void *)(Data+1+filterSize), Size-(1+filterSize), "rb");
++    if (capture == NULL) {
++        return 0;
++    }
++    pkts = pcap_fopen_offline(capture, errbuf);
++    if (pkts == NULL) {
++        fclose(capture);
++#else
+     //generate temporary file name
+     snprintf(filename, FILENAME_MAX, "/tmp/libpcap_fuzz_both.XXXXXX");
+     if ((fd = mkstemp(filename)) < 0) {
+@@ -81,6 +103,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
+     //initialize structure
+     pkts = pcap_open_offline(filename, errbuf);
+     if (pkts == NULL) {
++#endif
+         fprintf(outfile, "Couldn't open pcap file %s\n", errbuf);
+         unlink(filename);
+         return 0;

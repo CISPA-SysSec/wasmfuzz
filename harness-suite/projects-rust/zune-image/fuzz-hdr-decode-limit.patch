@@ -1,0 +1,25 @@
+Subject: [PATCH] fuzz: zune-hdr decode_buffer: cap the output size at 64 MiB
+
+HdrDecoder::new uses the default 1 GiB inflate limit, so a header declaring up
+to ~1 GiB of f32 output passes the decoder's own size check and then aborts the
+wasm32 guest (1 GiB heap) in the allocator. Cap it at 64 MiB like the zune-png
+and zune-jpeg targets.
+
+diff --git a/crates/zune-hdr/fuzz/fuzz_targets/decode_buffer.rs b/crates/zune-hdr/fuzz/fuzz_targets/decode_buffer.rs
+index 634ef5e..86207ef 100644
+--- a/crates/zune-hdr/fuzz/fuzz_targets/decode_buffer.rs
++++ b/crates/zune-hdr/fuzz/fuzz_targets/decode_buffer.rs
+@@ -6,7 +6,12 @@ fuzz_target!(|data: &[u8]| {
+     // fuzzed code goes here
+ 
+     use zune_hdr::zune_core::bytestream::ZCursor;
++    use zune_hdr::zune_core::options::DecoderOptions;
++    // The default 1 GiB output limit is the whole wasm32 guest heap; cap it
++    // like the zune-png and zune-jpeg targets do.
++    const MAX_DECODE_BYTES: usize = 64 * 1024 * 1024;
++    let opts = DecoderOptions::default().inflate_set_limit(MAX_DECODE_BYTES);
+     let data = ZCursor::new(data);
+-    let mut decoder = zune_hdr::HdrDecoder::new(data);
++    let mut decoder = zune_hdr::HdrDecoder::new_with_options(data, opts);
+     let _ = decoder.decode();
+ });

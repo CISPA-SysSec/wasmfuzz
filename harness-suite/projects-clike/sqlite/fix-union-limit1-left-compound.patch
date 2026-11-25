@@ -1,0 +1,210 @@
+Subject: [PATCH] select: UNION LIMIT 1 shortcut only with UNION/UNION ALL to its left
+
+multiSelect() codes a compound whose right-most operator is a UNION
+with LIMIT 1 (unionWithLimitOne(), SQLITE_UnionLimit) like a UNION ALL:
+run the SELECTs to the left with the same LIMIT 1 by a recursive
+sqlite3Select(pPrior,&dest), then the right-most SELECT. When the part
+to the left contains an EXCEPT or INTERSECT (or a UNION to the left of
+a UNION ALL), that recursive call codes it with multiSelectByMerge(),
+and two things go wrong:
+
+1. For a materialized subquery, multiSelect() has already turned the
+   SRT_EphemTab destination into SRT_Table. Since 456ef2d (2026-10-29,
+   "Omit code in generateOutputSubroutine() that is dead due to
+   [659805b27cef273d]") generateOutputSubroutine() handles SRT_Table
+   only with SQLITE_ENABLE_UPDATE_DELETE_LIMIT, so the merge falls into
+   the default case: assert(pDest->eDest==SRT_Output) fails on debug
+   builds, and release builds emit the subquery rows as OP_ResultRow
+   of the outer statement (with too few registers) and leave the
+   materialized table empty:
+
+    CREATE TABLE t1(a); INSERT INTO t1 VALUES(10),(20);
+    SELECT * FROM t1 CROSS JOIN
+      (SELECT 1 INTERSECT SELECT 1 UNION SELECT 1 LIMIT 1);
+    -- release: "1|1"; expected "10|1" and "20|1"
+
+   659805b (fa4cadf) made the plain UNION ALL path use the merge for
+   any non-UNION-ALL operator to the left, which is why SRT_Table
+   looked dead, but missed the UNION LIMIT 1 path.
+
+2. The left compound coded on its own ignores collating sequences of
+   SELECTs further to the right, the problem 659805b fixed for UNION
+   ALL (merge1.test 260-310):
+
+    SELECT 'a' EXCEPT SELECT 'A' UNION SELECT 'x' COLLATE NOCASE LIMIT 1;
+    -- returns 'a'; the full compound is {'x'}
+
+Fix: take the shortcut only if unionLimitOneLeftOk(): the operators to
+the left, right to left, are zero or more UNIONs (each inherits the
+LIMIT 1 and takes the shortcut recursively) followed by zero or more
+UNION ALLs (no merge needed). Everything else uses the merge, which
+handles the LIMIT and collations of the whole compound. An assert() in
+the shortcut branch records the invariant. Regression test
+test/unionlimit1.sql (CLI .testcase format), which also checks that a
+UNION/UNION ALL chain still avoids the MERGE.
+
+Found by the suite's sqlite-ossfuzz_debug module (755-byte fuzzer
+input, assert in generateOutputSubroutine()). Changes code generation
+in release builds too (wrong-result fix, not only the assert).
+
+Upstream: not reported; not fixed as of dc9b322 (master 2026-11-23), nor
+in the sqlite.org timeline up to 2026-11-23 19:49. Introduced by
+456ef2d (25ff0ad78e, 2026-10-29) on top of fa4cadf (659805b27c,
+2026-10-29, bug 2026-10-21T19:20:14Z); the collation part predates the
+shallow history.
+---
+diff --git a/src/select.c b/src/select.c
+index f6fc3ec..59e3a5f 100644
+--- a/src/select.c
++++ b/src/select.c
+@@ -3067,6 +3067,26 @@ static int unionWithLimitOne(sqlite3 *db, Select *p){
+   return 1;
+ }
+ 
++/*
++** Return TRUE if the compound operators to the left of p, taken from
++** right to left, are zero or more UNIONs followed by zero or more
++** UNION ALLs.
++**
++** multiSelect() codes a UNION with LIMIT 1 by running the SELECTs to
++** its left (with the same LIMIT 1) and then the right-most SELECT.  That
++** is only correct if the left part never needs multiSelectByMerge(): a
++** UNION to the left inherits the LIMIT 1 and so takes the same path
++** recursively, and a pure UNION ALL needs no merge at all.  But an
++** EXCEPT or INTERSECT, or a UNION to the left of a UNION ALL, would be
++** coded by multiSelectByMerge() on its own, which (1) ignores collating
++** sequences from SELECTs further to the right and (2) does not handle
++** the SRT_Table destination used for a materialized subquery.
++*/
++static int unionLimitOneLeftOk(Select *p){
++  for(p=p->pPrior; p->pPrior && p->op==TK_UNION; p=p->pPrior){}
++  return selectIsUnionAll(p);
++}
++
+ /*
+ ** This routine is called to process a compound query formed from
+ ** two or more separate queries using UNION, UNION ALL, EXCEPT, or
+@@ -3156,7 +3176,9 @@ static int multiSelect(
+     /* If the compound has an ORDER BY clause, then always use the merge
+     ** algorithm. */
+     return multiSelectByMerge(pParse, p, pDest);
+-  }else if( !selectIsUnionAll(p) && !unionWithLimitOne(db,p) ){
++  }else if( !selectIsUnionAll(p)
++         && (!unionWithLimitOne(db,p) || !unionLimitOneLeftOk(p))
++  ){
+     /* If the compound is EXCEPT, INTERSECT, or UNION (anything other than
+     ** UNION ALL) then also always use the merge algorithm.  However, the
+     ** multiSelectByMerge() routine requires that the compound have an
+@@ -3169,11 +3191,14 @@ static int multiSelect(
+     return multiSelectByMerge(pParse, p, pDest);
+   }else{
+     /* For a UNION ALL compound without ORDER BY, or for a UNION with a 
+-    ** LIMIT of exactly 1 and no OFFSET and no ORDER BY, simply run the left
+-    ** query, then run the right query */
++    ** LIMIT of exactly 1 and no OFFSET and no ORDER BY (and a suitable
++    ** left part, see unionLimitOneLeftOk()), simply run the left query,
++    ** then run the right query */
+     int addr = 0;
+     int nLimit = 0;  /* Initialize to suppress harmless compiler warning */
+ 
++    assert( selectIsUnionAll(p) || unionLimitOneLeftOk(p) );
++
+ #ifndef SQLITE_OMIT_EXPLAIN
+     if( pPrior->pPrior==0 ){
+       ExplainQueryPlan((pParse, 1, "COMPOUND QUERY"));
+diff --git a/test/unionlimit1.sql b/test/unionlimit1.sql
+new file mode 100644
+index 0000000..3c973f8
+--- /dev/null
++++ b/test/unionlimit1.sql
+@@ -0,0 +1,90 @@
++#!sqlite3
++#
++# 2026-11-23
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++
++#***********************************************************************
++#
++# A compound SELECT whose rightmost operator is a UNION with LIMIT 1
++# may be coded by running the SELECTs to the left of the UNION first and
++# then the rightmost SELECT.  That shortcut is only valid if the left
++# part never needs a merge (only UNIONs, then UNION ALLs).  Otherwise:
++#
++#   *  The compound to the left is coded by its own sqlite3Select() call,
++#      which sends rows to the SRT_Table destination of a materialized
++#      subquery through multiSelectByMerge().  That routine does not
++#      handle SRT_Table, so the rows were returned as result rows of the
++#      outer statement instead (assert() in generateOutputSubroutine()
++#      on debug builds).
++#
++#   *  The compound to the left ignores collating sequences of SELECTs
++#      to the right, so an EXCEPT to the left uses the wrong collation.
++#
++.open :memory:
++.mode -reset list -colsep ' ' -rowsep ' '
++
++.testcase 100
++CREATE TABLE t1(a);
++INSERT INTO t1 VALUES(10),(20);
++.check ''
++
++.testcase 110
++SELECT * FROM t1 CROSS JOIN
++  (SELECT 1 INTERSECT SELECT 1 UNION SELECT 1 LIMIT 1);
++.check '10 1 20 1'
++
++.testcase 120
++SELECT count(*) FROM t1 CROSS JOIN
++  (SELECT 1 EXCEPT SELECT 2 UNION SELECT 3 LIMIT 1);
++.check '2'
++
++.testcase 130
++WITH c(x) AS MATERIALIZED (SELECT 5 INTERSECT SELECT 5 UNION SELECT 5 LIMIT 1)
++SELECT a, x FROM t1 CROSS JOIN c;
++.check '10 5 20 5'
++
++.testcase 140
++SELECT count(*) FROM t1 CROSS JOIN
++  (SELECT 1 UNION SELECT 2 UNION ALL SELECT 3 UNION SELECT 4 LIMIT 1);
++.check '2'
++
++# UNION and UNION ALL to the left of the UNION still use the shortcut
++#
++.testcase 150
++SELECT * FROM t1 CROSS JOIN
++  (SELECT 5 UNION ALL SELECT 6 UNION SELECT 7 LIMIT 1);
++.check '10 5 20 5'
++
++.testcase 160
++SELECT * FROM t1 CROSS JOIN
++  (SELECT 5 UNION SELECT 6 UNION SELECT 7 LIMIT 1);
++.check '10 5 20 5'
++
++.testcase 170
++EXPLAIN QUERY PLAN
++SELECT * FROM t1 CROSS JOIN
++  (SELECT 5 UNION ALL SELECT 6 UNION SELECT 7 UNION SELECT 8 LIMIT 1);
++.check -notglob '*MERGE*'
++
++# Collating sequences to the right apply to an EXCEPT to the left of
++# the UNION, also with LIMIT 1.
++#
++.testcase 200
++SELECT 'a' EXCEPT SELECT 'A' UNION SELECT 'x' COLLATE NOCASE LIMIT 1;
++.check 'x'
++
++.testcase 210
++.testctrl opt +All -UnionLimit
++SELECT 'a' EXCEPT SELECT 'A' UNION SELECT 'x' COLLATE NOCASE LIMIT 1;
++.check -glob '+All -UnionLimit x'
++
++.testcase 220
++.testctrl opt +All
++.check '+All'

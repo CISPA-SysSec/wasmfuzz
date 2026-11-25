@@ -1,0 +1,131 @@
+Subject: [PATCH] low_memory_pipeline: replace a channel buffer that is sent again
+
+Noise is rendered every time a group is rendered, but a partial render does not
+send the Modular channels whose group data has not been decoded yet. In an LF
+frame with noise whose channels 0 and 1 are complete after the global section
+and whose channel 2 is coded in a group section, a flush therefore sent the
+noise channels of a group that then stayed incomplete, and the next render sent
+them again: InputBuffer::set_buffer asserted that the channel was still empty
+(input_buffers.rs: "chan: 3"). Replace the pending buffer instead, as the simple
+pipeline does, without counting the channel twice. Test:
+test_fuzzer_partial_render_resends_noise.
+
+diff --git a/jxl/src/render/low_memory_pipeline/input_buffers.rs b/jxl/src/render/low_memory_pipeline/input_buffers.rs
+index 97cfc05..116acec 100644
+--- a/jxl/src/render/low_memory_pipeline/input_buffers.rs
++++ b/jxl/src/render/low_memory_pipeline/input_buffers.rs
+@@ -24,15 +24,23 @@ pub(super) struct InputBuffer {
+ }
+ 
+ impl InputBuffer {
+-    // Returns the number of ready channels.
+-    pub(super) fn set_buffer(&self, chan: usize, buf: OwnedRawImage) -> usize {
++    // Returns the number of ready channels, or `None` if `chan` already held a buffer that was
++    // not consumed yet. A re-render can send a channel again before the group got all of its
++    // other channels: noise is rendered on every render of a group, but a Modular channel whose
++    // group data has not been decoded yet is not sent by a partial render. The newer buffer then
++    // replaces the older one, which is passed to `recycle`.
++    pub(super) fn set_buffer(
++        &self,
++        chan: usize,
++        buf: OwnedRawImage,
++        recycle: impl FnOnce(OwnedRawImage),
++    ) -> Option<usize> {
+         assert!(!self.is_ready.load(Ordering::Relaxed));
+-        assert!(
+-            self.data[chan].try_write().unwrap().is_none(),
+-            "chan: {chan}"
+-        );
+-        *self.data[chan].try_write().unwrap() = Some(buf);
+-        self.ready_channels.fetch_add(1, Ordering::AcqRel) + 1
++        if let Some(old) = self.data[chan].try_write().unwrap().replace(buf) {
++            recycle(old);
++            return None;
++        }
++        Some(self.ready_channels.fetch_add(1, Ordering::AcqRel) + 1)
+     }
+ 
+     pub(super) fn new(num_channels: usize) -> Self {
+diff --git a/jxl/src/render/low_memory_pipeline/mod.rs b/jxl/src/render/low_memory_pipeline/mod.rs
+index 899d183..2c78d93 100644
+--- a/jxl/src/render/low_memory_pipeline/mod.rs
++++ b/jxl/src/render/low_memory_pipeline/mod.rs
+@@ -386,12 +386,18 @@ impl RenderPipeline for LowMemoryRenderPipeline {
+                 channel,
+                 T::DATA_TYPE_ID,
+             );
+-            let num_ready = self
+-                .input_buffers
+-                .get(group_id)
+-                .set_buffer(channel, buf.into_raw());
++            let num_ready =
++                self.input_buffers
++                    .get(group_id)
++                    .set_buffer(channel, buf.into_raw(), |old| {
++                        self.shared.buffer_recycler.recycle_raw_buffer(old)
++                    });
+             self.shared.group_chan_complete[group_id][channel].store(complete, Ordering::Relaxed);
+ 
++            // A replaced buffer does not make the group any more ready than it was.
++            let Some(num_ready) = num_ready else {
++                return Ok(());
++            };
+             assert!(num_ready <= self.shared.num_used_channels());
+             if num_ready != self.shared.num_used_channels() {
+                 return Ok(());
+diff --git a/jxl/src/tests/api.rs b/jxl/src/tests/api.rs
+index 533997d..1361f88 100644
+--- a/jxl/src/tests/api.rs
++++ b/jxl/src/tests/api.rs
+@@ -2046,3 +2046,24 @@ fn test_fuzzer_failed_flush_keeps_reference_frame_buffers() {
+         }
+     }
+ }
++
++/// Regression test: noise is rendered every time a group is rendered, but a partial render does
++/// not send the Modular channels whose group data has not been decoded yet. In this LF frame with
++/// noise, channels 0 and 1 are complete after the global section and channel 2 is coded in the
++/// group section, so a flush sent the noise channels of a group that then stayed incomplete, and
++/// the next render sent them again (low_memory_pipeline/input_buffers.rs: assertion failed:
++/// self.data[chan]...is_none(), "chan: 3").
++#[test]
++fn test_fuzzer_partial_render_resends_noise() {
++    let data = include_bytes!("../../tests/testdata/partial_render_resend_noise.jxl");
++    for chunk_size in 1..=data.len() {
++        let _ = decode::<f32>(
++            data,
++            DecodeParams {
++                chunk_size,
++                do_flush: true,
++                ..Default::default()
++            },
++        );
++    }
++}
+diff --git a/jxl/tests/testdata/partial_render_resend_noise.jxl b/jxl/tests/testdata/partial_render_resend_noise.jxl
+new file mode 100644
+index 0000000000000000000000000000000000000000..9debc83970bdc11807ed0205fcb1998ff7694786
+GIT binary patch
+literal 1634
+zcmds%e`s4(6vw|ed0o@H=x$3RYjMl#)Y3mDN`-)6$7^BCmf*^eS`@dY4aGtglnG|w
+z-b=^SXq~?nLua9p{oxd}ldbiyVL)Xg4(vif(4=%Wn68=C)}$LQeb;jngZs~a{6{~$
+z_s)6eo_o%@=ic`u?+O80!!<Ntbj@P%)7eu;CjfoQ>wGNe+|KxxmPcl9Ku07Tne=#0
+zU6s6pD;6amko*w;dA3^_2S_P^tvH;{tpF~60n0fvBl&YH8MtuinMfq!@pxi5etcCN
+zIzb*+Z)0$Z3>4sZ609tlG5Nuy%@f;PZa2_iW#x7nYx#sc%)XHk?M|qhi9Xh13IDmI
+zI0t;bpY<ihe&EsbeX5S@lD|Anvxv8*r+cUK7<p+_$2Le>P5>_wv5{D+uwIZAFZE0j
+zu~<HrXRsNu<Jzqfu~16*;rIKqsGq}KuswNqspM26B^;5`gr&hiG^#JpQSdqnG#-sc
+zLZQ%dD73|8F%>$=p&|G-)>RG_TR|pNG|CI?g!t*C)bK6s30wirHfz>^SS*7hFGS;%
+zM<;)SuAOrqEw%4zZ*17KxrNT4G6FIzl{C8(6qS@B%EMT<)GR8GD${G~XuYbuT~#XO
+zIfNFkmUpE~KD2L#gXMBkTh0ks^OcvwIeN(gwp1*wIx@AOj+&1L#2bg1ODL-@d*%J^
+zv#)<_zQ>Mc;r^_%^I+g$S5vM0Z=SV(v%lTFbnN91Wr_q7#X>PHYZ;{Y0|-9YnnO>w
+z+K-!N@J;Bpd_tEztaj7r$2(tny^b3uc}Z@N&#P4|MHtNZF+I#qED%@-C{e*^JuPJ6
+zeYH7eTU*-!Ay;nEbV+%Po}T*pu`w8iF$HONv^Jg@d+M0LlV1zSvx*Ml=3np&lCyaH
+zOH&n8gGLGh<7tCJDUF0BwcYX;KtP)i-ufgP2YZ;E1YCJ+)r_{*(=l99t5*jIpwQ(U
+zmB;P6N?fse8GE<6Y2VQBkhb^U!J(m$rqv`8ylazLyE(gW?*;WarBbg2wKc|ha&QlS
+z1s}qq@D}g)s9#lG-S<t_!~tuMPK7ZhhlAh2x}HvF(!<}}L-&$>rOaYR{B|ar&7ziV
+zY-Be!F5Ac!=jYG&`+UCkDg$w!ufNIzvhpFQ&i+lg75{@?NPdy63Rjq69KX)o9i*S;
+Z_#MZj`Mhs*RDZU)xnXVXAA6BX{RtR9pAY~5
+
+literal 0
+HcmV?d00001
+

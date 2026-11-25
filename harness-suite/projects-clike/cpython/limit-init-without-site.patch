@@ -1,0 +1,14 @@
+diff --git a/Modules/_xxtestfuzz/fuzzer.c b/Modules/_xxtestfuzz/fuzzer.c
+index 107636f31d..6b105011dc 100644
+--- a/Modules/_xxtestfuzz/fuzzer.c
++++ b/Modules/_xxtestfuzz/fuzzer.c
+@@ -632,6 +632,9 @@ int LLVMFuzzerInitialize(int *argc, char ***argv) {
+     PyConfig config;
+     PyConfig_InitPythonConfig(&config);
+     config.install_signal_handlers = 0;
++    /* `site` finds nothing to add without a stdlib on disk, and importing it
++       is ~40 % of the interpreter start-up that every fresh instance pays. */
++    config.site_import = 0;
+     /* Raise the limit above the default allows exercising larger things
+      * now that we fall back to the _pylong module for large values. */
+     config.int_max_str_digits = 8086;

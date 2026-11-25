@@ -1,0 +1,199 @@
+zune-jpeg: restore the component-scan rows a suspended attempt wrote
+
+In the multi-scan baseline path (component scans buffered for the whole
+image) an incremental attempt can decode rows past its last checkpoint from
+the zero padding the bit reader appends at the end of the visible data: a
+row whose start already has look-ahead past the end gets no checkpoint of
+its own. The retry resumes from the earlier checkpoint, and when the now
+visible data ends the scan at a marker before those rows, their padding
+blocks stay in the buffered plane where a one-shot decode has the samples
+from before the scan ("incremental pixels diverge from one-shot decode").
+Save each scan row before an attempt writes it, starting a new backup at
+every checkpoint (`save_multi_scan_row`), and put the rows back when
+resuming from that checkpoint (`restore_multi_scan_rows`). Only incremental
+or retried decodes of multi-scan images do the copy. Includes a regression
+test (tests/incremental_resume.rs).
+
+Not fixed upstream as of zune-image 2cdbbf5.
+Upstream: open #506 (recover sequential component scans) mentions rolling
+back speculative row writes on suspension in the same path; not merged.
+
+diff --git a/crates/zune-jpeg/src/decoder.rs b/crates/zune-jpeg/src/decoder.rs
+index c685741b..6d14d14b 100644
+--- a/crates/zune-jpeg/src/decoder.rs
++++ b/crates/zune-jpeg/src/decoder.rs
+@@ -161,7 +161,13 @@ pub(crate) struct ScanDecodeState {
+     pub(crate) progressive_checkpoint:     Option<Box<ProgressiveScanCheckpoint>>,
+     pub(crate) progressive_fine_checkpoint: Option<Box<ProgressiveFineCheckpoint>>,
+     pub(crate) baseline_components_seen:   [bool; MAX_COMPONENTS],
+-    pub(crate) baseline_scans_seen:        usize
++    pub(crate) baseline_scans_seen:        usize,
++    /// Multi-SOS baseline: the data-unit rows written since `scan_checkpoint`
++    /// was saved, as they were before this attempt wrote them, so a retry can
++    /// put them back (see `save_multi_scan_row`).
++    pub(crate) multi_scan_row_backup:      Vec<i16>,
++    /// `(component, row)` of each row saved in `multi_scan_row_backup`, in order.
++    pub(crate) multi_scan_backup_rows:     Vec<(usize, usize)>
+ }
+ 
+ /// Saved state at the start of a progressive scan.
+@@ -1898,7 +1904,9 @@ where
+             progressive_checkpoint: None,
+             progressive_fine_checkpoint: None,
+             baseline_components_seen: [false; MAX_COMPONENTS],
+-            baseline_scans_seen: 0
++            baseline_scans_seen: 0,
++            multi_scan_row_backup: Vec::new(),
++            multi_scan_backup_rows: Vec::new()
+         }));
+         Ok(())
+     }
+@@ -1980,6 +1988,68 @@ where
+         usize::from(num_scans) == self.components.len()
+     }
+ 
++    /// Multi-SOS baseline: save data-unit row `mcu_row` of the current scan's
++    /// components before this attempt writes it. `checkpoint` starts a new
++    /// backup for a checkpoint saved at this row; later rows decoded without
++    /// a checkpoint of their own (the bit reader already looked past the end
++    /// of the visible data) are added to it. A retry from the checkpoint puts
++    /// them all back, so blocks decoded from the zero padding past the end of
++    /// the data cannot survive a row that now ends early at a marker.
++    pub(crate) fn save_multi_scan_row(
++        &mut self, progressive: &[Vec<i16>; MAX_COMPONENTS], mcu_row: usize, checkpoint: bool
++    ) {
++        let z_order = self.z_order;
++        let Some(state) = self.scan_state.as_deref_mut() else {
++            return;
++        };
++        if checkpoint {
++            state.multi_scan_row_backup.clear();
++            state.multi_scan_backup_rows.clear();
++        } else if state.scan_checkpoint.is_none() {
++            return;
++        }
++        for &k in &z_order[..usize::from(self.num_scans)] {
++            let (Some(component), Some(buffer)) = (self.components.get(k), progressive.get(k))
++            else {
++                continue;
++            };
++            let row_len = component.width_stride * 8;
++            if let Some(row) = mcu_row
++                .checked_mul(row_len)
++                .and_then(|start| buffer.get(start..start.checked_add(row_len)?))
++            {
++                state.multi_scan_row_backup.extend_from_slice(row);
++                state.multi_scan_backup_rows.push((k, mcu_row));
++            }
++        }
++    }
++
++    /// Undo `save_multi_scan_row`: put the saved rows back.
++    pub(crate) fn restore_multi_scan_rows(&mut self, progressive: &mut [Vec<i16>; MAX_COMPONENTS]) {
++        let Some(state) = self.scan_state.as_deref() else {
++            return;
++        };
++        let mut saved = state.multi_scan_row_backup.as_slice();
++        for &(k, mcu_row) in &state.multi_scan_backup_rows {
++            let (Some(component), Some(buffer)) = (self.components.get(k), progressive.get_mut(k))
++            else {
++                return;
++            };
++            let row_len = component.width_stride * 8;
++            let Some(row) = mcu_row
++                .checked_mul(row_len)
++                .and_then(|start| buffer.get_mut(start..start.checked_add(row_len)?))
++            else {
++                return;
++            };
++            if saved.len() < row_len {
++                return;
++            }
++            row.copy_from_slice(&saved[..row_len]);
++            saved = &saved[row_len..];
++        }
++    }
++
+     pub(crate) fn baseline_scans_seen(&self) -> usize {
+         self.scan_state.as_deref().map_or(0, |state| state.baseline_scans_seen)
+     }
+diff --git a/crates/zune-jpeg/src/mcu.rs b/crates/zune-jpeg/src/mcu.rs
+index 67e4ef9a..2d07c04d 100644
+--- a/crates/zune-jpeg/src/mcu.rs
++++ b/crates/zune-jpeg/src/mcu.rs
+@@ -256,6 +256,13 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
+ 
+             // Restore bitstream decoder state for fine-grained resume.
+             stream.restore_snapshot(checkpoint.bitstream_state);
++
++            // A suspended attempt may have written blocks from the zero padding
++            // past the end of the visible data; if a row now ends early at a
++            // marker, those blocks would survive.
++            if !all_components_in_first_scan {
++                self.restore_multi_scan_rows(progressive_mcus);
++            }
+         }
+ 
+         let is_hv = usize::from(self.is_interleaved && !raw_mode);
+@@ -379,6 +386,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
+                         dc_predictions,
+                         bs_state
+                     )?;
++                    if !all_components_in_first_scan {
++                        self.save_multi_scan_row(progressive_mcus, i, true);
++                    }
++                } else if self.mcu_checkpoints_enabled && !all_components_in_first_scan {
++                    self.save_multi_scan_row(progressive_mcus, i, false);
+                 }
+ 
+                 // decode a whole MCU width,
+@@ -1280,6 +1292,9 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
+                             .map_or((0, 0), |component| (component.dc_pred, component.dc_diff))
+                     });
+                     self.checkpoint_scan(mcu_row, j + 1, ctx_pixels_written, dc_predictions)?;
++                    if PROGRESSIVE {
++                        self.save_multi_scan_row(progressive, mcu_row, true);
++                    }
+                 }
+                 if !handled_restart && stream.marker().is_some() {
+                     if matches!(stream.marker(), Some(Marker::DNL)) && j + 1 < mcu_width {
+diff --git a/crates/zune-jpeg/tests/incremental_resume.rs b/crates/zune-jpeg/tests/incremental_resume.rs
+index bec5f0f7..5dc5d749 100644
+--- a/crates/zune-jpeg/tests/incremental_resume.rs
++++ b/crates/zune-jpeg/tests/incremental_resume.rs
+@@ -283,3 +283,35 @@ fn resume_in_later_component_scan_keeps_buffered_mode() {
+         assert_chunked_matches_oneshot(RESUME_IN_LATER_COMPONENT_SCAN, chunk);
+     }
+ }
++
++/// One component scan of a three-component image whose entropy data ends at
++/// a COM marker before its last data-unit row. While the marker was not yet
++/// visible, the suspended attempt decoded that row from the zero padding past
++/// the end of the data; the retry resumed from the previous row's checkpoint
++/// and kept the padding blocks in the buffered component plane.
++const SUSPENDED_ROWS_IN_COMPONENT_SCAN: &[u8; 262] = &[
++    0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x00, 0x00, 0x0f, 0xde, 0x00, 0x00, 0x7f, 0xff, 0x01,
++    0x00, 0x50, 0x00, 0x9d, 0xda, 0x00, 0x7f, 0xff, 0x00, 0x00, 0x00, 0x2f, 0x7c, 0x4c, 0xf4, 0x00,
++    0xff, 0x69, 0x08, 0x1f, 0x00, 0x10, 0xdb, 0x31, 0x31, 0x31, 0x31, 0xe2, 0x00, 0xff, 0x00, 0x00,
++    0x01, 0xff, 0x20, 0xba, 0xba, 0xba, 0x46, 0x45, 0xff, 0xd8, 0xff, 0xe8, 0xff, 0xe8, 0xe8, 0xe8,
++    0xe8, 0xe8, 0xe8, 0xe8, 0xea, 0xe8, 0xe8, 0xff, 0xc1, 0x00, 0x11, 0x08, 0x00, 0x09, 0x00, 0x02,
++    0x03, 0x04, 0x11, 0x00, 0x03, 0x11, 0x00, 0x04, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x26, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c,
++    0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01, 0x04, 0x00, 0x00, 0x02, 0x36, 0x00, 0x00, 0x00, 0x00,
++    0xff, 0xfe, 0x00, 0x02, 0xff, 0xd9, 0x64, 0x55, 0x11, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x9d, 0x54, 0x3e, 0x79,
++    0xb7, 0xdc, 0x49, 0xcd, 0xd7, 0xcf, 0x2f, 0x6d, 0xc2, 0xfe, 0x8c, 0x1d, 0xee, 0x29, 0x22, 0x4a,
++    0x7e, 0xb2, 0x95, 0xe9, 0x2f, 0x2f, 0x2f, 0x2f, 0x2f, 0x2f, 0x2f, 0x2f, 0x2f, 0x2f, 0x2f, 0xac,
++    0xfb, 0x31, 0xd7, 0x68, 0xd3, 0x23, 0xd9, 0xc9, 0x92, 0x40, 0xb0, 0x82, 0x80, 0x00, 0x00, 0x00,
++    0xd4, 0xfe, 0x24, 0x17, 0x14, 0x67, 0x6f, 0x54, 0xe5, 0x2f, 0x38, 0xe6, 0xf2, 0x9d, 0x29, 0x0a,
++    0x29, 0x0b, 0x45, 0x0c, 0xa4, 0x83, 0xf5, 0x50, 0x25, 0xec, 0x7f, 0x11, 0x00, 0xff, 0xc4, 0x00,
++    0x5c, 0x32, 0xd8, 0x4c, 0x77, 0x0d,
++];
++
++#[test]
++fn resume_in_component_scan_restores_suspended_rows() {
++    for chunk in [1, 2, 6] {
++        assert_chunked_matches_oneshot(SUSPENDED_ROWS_IN_COMPONENT_SCAN, chunk);
++    }
++}

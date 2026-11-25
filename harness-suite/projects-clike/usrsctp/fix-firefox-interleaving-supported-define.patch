@@ -1,0 +1,26 @@
+Export SCTP_INTERLEAVING_SUPPORTED from usrsctp.h.
+
+Firefox's change to its usrsctp copy (netwerk/sctp/src/interleaving-supported-define.patch,
+Mozilla bug 1947783): the public header lacks the socket option for I-DATA (RFC 8260), which
+netinet/sctp.h defines as 0x00001206. Header only, no behaviour change: fuzzer_fragment.c and
+fuzzer_connect.c define the value themselves, so the fuzzers build the same without it.
+Not in usrsctp c625e21950 (master, 2026-10-07).
+Firefox removed usrsctp on 2026-11-17 (mozilla-firefox ea71900566b5, Bug 2072337); its last
+vendored copy (moz.yaml revision c625e21950, as of ed7b5f6fc244) carries this patch unchanged.
+
+Upstream: open PR sctplab/usrsctp#746 (2026-08-09) adds the same define to usrsctp.h.
+Drop this patch once #746 lands.
+
+diff --git a/usrsctp.h b/usrsctp.h
+--- a/usrsctp.h
++++ b/usrsctp.h
+@@ -568,6 +568,9 @@
+ #define SCTP_PLUGGABLE_SS               0x00001203
+ #define SCTP_SS_VALUE                   0x00001204
+ 
++/* For I-DATA */
++#define SCTP_INTERLEAVING_SUPPORTED 0x00001206
++
+ /*
+  * read-only options
+  */

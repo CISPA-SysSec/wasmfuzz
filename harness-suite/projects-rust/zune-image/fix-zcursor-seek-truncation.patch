@@ -1,0 +1,221 @@
+diff --git a/crates/zune-core/src/bytestream/reader.rs b/crates/zune-core/src/bytestream/reader.rs
+index f57539f1..e12c3889 100644
+--- a/crates/zune-core/src/bytestream/reader.rs
++++ b/crates/zune-core/src/bytestream/reader.rs
+@@ -179,7 +179,9 @@ impl<T: ZByteReaderTrait> ZReader<T> {
+     pub fn skip(&mut self, num: usize) -> Result<u64, ZByteIoError> {
+         //check for zero
+         if num != 0 {
+-            self.inner.z_seek(ZSeekFrom::Current(num as i64))
++            let num = i64::try_from(num)
++                .map_err(|_| ZByteIoError::SeekError("Skip length does not fit in i64"))?;
++            self.inner.z_seek(ZSeekFrom::Current(num))
+         } else {
+             Ok(0)
+         }
+@@ -198,7 +200,9 @@ impl<T: ZByteReaderTrait> ZReader<T> {
+     ///  - `Error` If something went wrong
+     #[inline(always)]
+     pub fn rewind(&mut self, num: usize) -> Result<u64, ZByteIoError> {
+-        self.inner.z_seek(ZSeekFrom::Current(-(num as i64)))
++        let num = i64::try_from(num)
++            .map_err(|_| ZByteIoError::SeekError("Rewind length does not fit in i64"))?;
++        self.inner.z_seek(ZSeekFrom::Current(-num))
+     }
+     /// Move around a stream of bytes
+     ///
+@@ -501,6 +505,7 @@ where
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use crate::bytestream::ZCursor;
+ 
+     #[test]
+     fn not_enough_bytes_is_recoverable() {
+@@ -523,6 +528,29 @@ mod tests {
+         assert!(!err.is_recoverable_eof());
+     }
+ 
++    #[test]
++    fn skip_past_i64_max_is_an_error() {
++        let mut reader = ZReader::new(ZCursor::new([0_u8; 16]));
++        reader.skip(8).unwrap();
++        // `usize::MAX as i64` is -1, which used to seek one byte backwards
++        assert!(reader.skip(usize::MAX).is_err());
++        assert_eq!(reader.position().unwrap(), 8);
++    }
++
++    #[test]
++    fn forward_seek_never_moves_backwards() {
++        // On 32-bit targets these offsets used to be truncated to a negative
++        // isize, e.g. a PNG chunk skip of 0xffffffdd became a seek by -35
++        for offset in [1_i64 << 31, 0xffff_ffdd, 1 << 32, i64::MAX] {
++            let mut reader = ZReader::new(ZCursor::new([0_u8; 16]));
++            reader.skip(8).unwrap();
++            if let Ok(pos) = reader.seek(ZSeekFrom::Current(offset)) {
++                assert!(pos > 8, "offset {offset} seeked to {pos}");
++            }
++            assert!(reader.position().unwrap() >= 8, "offset {offset}");
++        }
++    }
++
+     #[test]
+     fn seek_error_is_not_recoverable() {
+         let err = ZByteIoError::SeekError("seek failed");
+diff --git a/crates/zune-core/src/bytestream/reader/no_std_readers.rs b/crates/zune-core/src/bytestream/reader/no_std_readers.rs
+index 11bf8512..50e63c21 100644
+--- a/crates/zune-core/src/bytestream/reader/no_std_readers.rs
++++ b/crates/zune-core/src/bytestream/reader/no_std_readers.rs
+@@ -143,12 +143,17 @@ impl<T: AsRef<[u8]>>  ZCursor<T> {
+     pub (crate) fn z_seek_impl(&mut self, from: ZSeekFrom) -> Result<u64, ZByteIoError> {
+         let (base_pos, offset) = match from {
+             ZSeekFrom::Start(n) => {
+-                self.position = n as usize;
++                self.position = usize::try_from(n)
++                    .map_err(|_| ZByteIoError::SeekError("Seek position does not fit in usize"))?;
+                 return Ok(n);
+             }
+-            ZSeekFrom::End(n) => (self.stream.as_ref().len(), n as isize),
+-            ZSeekFrom::Current(n) => (self.position, n as isize)
++            ZSeekFrom::End(n) => (self.stream.as_ref().len(), n),
++            ZSeekFrom::Current(n) => (self.position, n)
+         };
++        // A plain `as isize` truncates on 32-bit targets and turns a large
++        // forward seek into a backward one
++        let offset = isize::try_from(offset)
++            .map_err(|_| ZByteIoError::SeekError("Seek offset does not fit in isize"))?;
+         match base_pos.checked_add_signed(offset) {
+             Some(n) => {
+                 self.position = n;
+diff --git a/crates/zune-core/src/bytestream/reader/std_readers.rs b/crates/zune-core/src/bytestream/reader/std_readers.rs
+index 53249e4e..194635ab 100644
+--- a/crates/zune-core/src/bytestream/reader/std_readers.rs
++++ b/crates/zune-core/src/bytestream/reader/std_readers.rs
+@@ -120,12 +120,18 @@ impl<T: AsRef<[u8]>> std::io::Seek for ZCursor<T> {
+     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+         let (base_pos, offset) = match pos {
+             std::io::SeekFrom::Start(n) => {
+-                self.position = n as usize;
++                self.position = usize::try_from(n).map_err(|_| {
++                    std::io::Error::other("Seek position does not fit in usize")
++                })?;
+                 return Ok(n);
+             }
+-            std::io::SeekFrom::End(n) => (self.stream.as_ref().len(), n as isize),
+-            std::io::SeekFrom::Current(n) => (self.position, n as isize)
++            std::io::SeekFrom::End(n) => (self.stream.as_ref().len(), n),
++            std::io::SeekFrom::Current(n) => (self.position, n)
+         };
++        // A plain `as isize` truncates on 32-bit targets and turns a large
++        // forward seek into a backward one
++        let offset = isize::try_from(offset)
++            .map_err(|_| std::io::Error::other("Seek offset does not fit in isize"))?;
+         match base_pos.checked_add_signed(offset) {
+             Some(n) => {
+                 self.position = n;
+diff --git a/crates/zune-png/src/headers/readers.rs b/crates/zune-png/src/headers/readers.rs
+index d7d14a93..ccc9c2f5 100644
+--- a/crates/zune-png/src/headers/readers.rs
++++ b/crates/zune-png/src/headers/readers.rs
+@@ -16,6 +16,13 @@ use crate::enums::{FilterMethod, InterlaceMethod, PngColor};
+ use crate::error::PngDecodeErrors;
+ use crate::{ClliInfo, PhysInfo, PngDecoder};
+ 
++/// Length of a chunk's payload plus its CRC
++fn chunk_skip_len(length: usize) -> Result<usize, PngDecodeErrors> {
++    length
++        .checked_add(4)
++        .ok_or(PngDecodeErrors::GenericStatic("Chunk length overflow"))
++}
++
+ impl<T: ZByteReaderTrait> PngDecoder<T> {
+     pub(crate) fn parse_ihdr(&mut self, chunk: PngChunk) -> Result<(), PngDecodeErrors> {
+         if self.seen_hdr {
+@@ -216,7 +223,7 @@ impl<T: ZByteReaderTrait> PngDecoder<T> {
+     pub(crate) fn parse_actl(&mut self, chunk: PngChunk) -> Result<(), PngDecodeErrors> {
+         if chunk.length != 8 {
+             warn!("Invalid chunk length for ACTL, skipping");
+-            self.stream.skip(chunk.length + 4)?;
++            self.stream.skip(chunk_skip_len(chunk.length)?)?;
+             return Ok(());
+         }
+         // extract num_frames
+@@ -243,7 +250,7 @@ impl<T: ZByteReaderTrait> PngDecoder<T> {
+             }
+             warn!("Invalid time chunk length {:?}", chunk.length);
+             // skip chunk + crc
+-            self.stream.skip(chunk.length + 4)?;
++            self.stream.skip(chunk_skip_len(chunk.length)?)?;
+             return Ok(());
+         }
+ 
+@@ -285,12 +292,12 @@ impl<T: ZByteReaderTrait> PngDecoder<T> {
+                 warn!("Invalid exif chunk, it doesn't start with the magic bytes");
+             }
+             // do not parse
+-            self.stream.skip(chunk.length + 4)?;
++            self.stream.skip(chunk_skip_len(chunk.length)?)?;
+             return Ok(());
+         }
+         self.png_info.exif = Some(data.to_vec());
+         // skip past crc
+-        self.stream.skip(chunk.length + 4)?;
++        self.stream.skip(chunk_skip_len(chunk.length)?)?;
+ 
+         Ok(())
+     }
+diff --git a/crates/zune-png/src/options.rs b/crates/zune-png/src/options.rs
+index 55cd25e0..e176c807 100644
+--- a/crates/zune-png/src/options.rs
++++ b/crates/zune-png/src/options.rs
+@@ -29,9 +29,12 @@ where
+ 
+     trace!("Encountered unknown chunk {chunk_name:?}");
+     trace!("Length of chunk {length}");
+-    trace!("Skipping {} bytes", length + 4);
++    let skip = length
++        .checked_add(4)
++        .ok_or(PngDecodeErrors::GenericStatic("Chunk length overflow"))?;
++    trace!("Skipping {} bytes", skip);
+ 
+-    reader.skip(length + 4)?;
++    reader.skip(skip)?;
+ 
+     Ok(())
+ }
+diff --git a/crates/zune-png/tests/test_chunk_skip.rs b/crates/zune-png/tests/test_chunk_skip.rs
+new file mode 100644
+index 00000000..90e59a7f
+--- /dev/null
++++ b/crates/zune-png/tests/test_chunk_skip.rs
+@@ -0,0 +1,30 @@
++use zune_core::bytestream::ZCursor;
++
++fn chunk(kind: &[u8; 4], data: &[u8], crc: u32) -> Vec<u8> {
++    let mut out = (data.len() as u32).to_be_bytes().to_vec();
++    out.extend_from_slice(kind);
++    out.extend_from_slice(data);
++    out.extend_from_slice(&crc.to_be_bytes());
++    out
++}
++
++/// An unknown ancillary chunk whose length makes `skip(length + 4)` a huge
++/// forward skip used to be truncated to a backward seek on 32-bit targets
++/// (wasm32). It landed on the zTXt chunk before it, so the header loop parsed
++/// the same chunks forever and kept every decoded zTXt until memory ran out.
++#[test]
++fn huge_unknown_chunk_does_not_seek_backwards() {
++    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
++    png.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0], 0x3a7e_9b55));
++    // keyword "a", compression method 0, zlib stream with one stored block "x"
++    let ztxt = b"a\0\0\x78\x01\x01\x01\x00\xfe\xff\x78\x00\x79\x00\x79";
++    png.extend(chunk(b"zTXt", ztxt, 0x6c6f_d667));
++    // 0xffffffd9 + 4 == -35 as i32: back to the start of the zTXt chunk
++    png.extend_from_slice(&0xffff_ffd9_u32.to_be_bytes());
++    png.extend_from_slice(b"abcd\0\0\0\0");
++    assert_eq!(png.len(), 72);
++
++    let mut decoder = zune_png::PngDecoder::new(ZCursor::new(&png));
++    assert!(decoder.decode_headers().is_err());
++    assert!(decoder.info().unwrap().ztxt_chunk.len() <= 1);
++}

@@ -1,0 +1,134 @@
+stb_image's JPEG Huffman decoder looks up codes of up to FAST_BITS (9) bits in
+h->fast[], which stores the symbol id as an stbi_uc and uses 255 as the "not
+accelerated" flag. A table may define 256 symbols (stbi__build_huffman accepts
+it, as does libjpeg); when the last one, symbol id 255, has a code of 9 bits or
+less, its fast[] entries read as "not accelerated" and stbi__jpeg_huff_decode()
+takes the slow path, which only searches lengths FAST_BITS+1..16. It then picks
+a symbol id of the wrong length and the STBI_ASSERT on the decoded code fires
+(abort). Example table: 1 code of length 7, 252 of length 8, 3 of length 9;
+the 9-bit code 111111110 of symbol id 255 trips it.
+
+Start the slow-path search at length 1 when the code is below maxcode[FAST_BITS],
+i.e. when it is prefixed by a code of FAST_BITS bits or less (which, after a
+fast[] miss, can only be symbol id 255); the common slow path is unchanged.
+This decodes such tables correctly rather than rejecting them. Checked against
+a naive bit-by-bit decoder on 200k random canonical tables, half of them with
+256 symbols. Includes tests/test_jpeg_huff_symbol255.c (a standalone program
+like tests/test_data_after_image.c): it builds such a table inline and fails
+without the fix ("bad huffman code") and passes with it.
+
+Not fixed upstream as of 9600522 or at HEAD 6b5799b (2026-11-19).
+Upstream: none found (nothings/stb issues/PRs searched for stbi__jpeg_huff_decode,
+code_buffer, huffman assert, FAST_BITS; last checked 2026-11-21).
+
+diff --git a/stb_image.h b/stb_image.h
+index dcc7c7f..b1a1d6f 100644
+--- a/stb_image.h
++++ b/stb_image.h
+@@ -2183,7 +2183,11 @@ stbi_inline static int stbi__jpeg_huff_decode(stbi__jpeg *j, stbi__huffman *h)
+    // wants to be compared against something shifted to have 16;
+    // that way we don't need to shift inside the loop.
+    temp = j->code_buffer >> 16;
+-   for (k=FAST_BITS+1 ; ; ++k)
++   // fast[] stores symbol ids as stbi_uc with 255 as the "not accelerated"
++   // flag, so a code of FAST_BITS bits or less for symbol id 255 (the last
++   // symbol of a 256-symbol table) also ends up here: search from 1 then.
++   k = (temp < h->maxcode[FAST_BITS]) ? 1 : FAST_BITS+1;
++   for ( ; ; ++k)
+       if (temp < h->maxcode[k])
+          break;
+    if (k == 17) {
+diff --git a/tests/test_jpeg_huff_symbol255.c b/tests/test_jpeg_huff_symbol255.c
+new file mode 100644
+index 0000000..f7a49f2
+--- /dev/null
++++ b/tests/test_jpeg_huff_symbol255.c
+@@ -0,0 +1,88 @@
++// Regression test: a JPEG Huffman table with 256 symbols whose last symbol
++// (id 255) has a code of FAST_BITS (9) bits or less. h->fast[] stores symbol
++// ids as stbi_uc with 255 meaning "not accelerated", so that code used to take
++// the slow path, which only searches lengths FAST_BITS+1..16: it decoded the
++// wrong symbol and tripped the STBI_ASSERT in stbi__jpeg_huff_decode().
++
++#include <stdio.h>
++#include <string.h>
++
++static int assert_failed;
++#define STBI_ASSERT(x) ((x) ? (void)0 : (void)(assert_failed = 1))
++
++#define STB_IMAGE_STATIC
++#define STBI_ONLY_JPEG
++#define STB_IMAGE_IMPLEMENTATION
++#include "stb_image.h"
++
++static unsigned char jpg[512];
++static int len;
++
++static void put(const unsigned char *p, int n)
++{
++   memcpy(jpg + len, p, n);
++   len += n;
++}
++
++static void put1(int b)
++{
++   jpg[len++] = (unsigned char) b;
++}
++
++int main()
++{
++   static const unsigned char soi[] = { 0xff, 0xd8 };
++   // baseline, 8x8, one 8-bit component, 1x1 sampling, quant table 0
++   static const unsigned char sof[] = { 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x08, 0x00, 0x08, 0x01, 0x01, 0x11, 0x00 };
++   // AC table 0: one code of length 1, symbol 0x00 (EOB)
++   static const unsigned char dht_ac[] = { 0xff, 0xc4, 0x00, 0x14, 0x10, 0x01, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0x00 };
++   static const unsigned char sos[] = { 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00 };
++   // DC code of symbol id 255 (9 bits 111111110), one magnitude bit (1: DC
++   // diff +1), AC EOB (0), padded with 1 bits: 11111111 01011111
++   static const unsigned char scan[] = { 0xff, 0x00, 0x5f };
++   static const unsigned char eoi[] = { 0xff, 0xd9 };
++   int i, x, y, n, ok = 1;
++   stbi_uc *data;
++
++   put(soi, sizeof(soi));
++
++   // quant table 0: DC 16, rest 1
++   put1(0xff); put1(0xdb); put1(0x00); put1(0x43); put1(0x00);
++   put1(16);
++   for (i = 1; i < 64; ++i) put1(1);
++
++   put(sof, sizeof(sof));
++
++   // DC table 0: 1 code of length 7, 252 of length 8, 3 of length 9 = 256
++   // symbols; ids 0..254 map to category 0, id 255 to category 1
++   put1(0xff); put1(0xc4); put1(0x01); put1(0x13); put1(0x00);
++   for (i = 1; i <= 16; ++i)
++      put1(i == 7 ? 1 : i == 8 ? 252 : i == 9 ? 3 : 0);
++   for (i = 0; i < 256; ++i)
++      put1(i == 255 ? 1 : 0);
++
++   put(dht_ac, sizeof(dht_ac));
++   put(sos, sizeof(sos));
++   put(scan, sizeof(scan));
++   put(eoi, sizeof(eoi));
++
++   data = stbi_load_from_memory(jpg, len, &x, &y, &n, 1);
++   if (!data) {
++      printf("image failed to load: %s\n", stbi_failure_reason());
++      return 1;
++   }
++   if (assert_failed) {
++      printf("STBI_ASSERT failed in the Huffman decoder\n");
++      ok = 0;
++   }
++   // DC coefficient 1 * 16 adds 16/8 = 2 to the 128 level shift
++   for (i = 0; i < x * y; ++i) {
++      if (data[i] != 130) {
++         printf("pixel %d is %d, expected 130\n", i, data[i]);
++         ok = 0;
++         break;
++      }
++   }
++   stbi_image_free(data);
++   return ok ? 0 : 1;
++}

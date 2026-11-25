@@ -1,3 +1,18 @@
+Subject: [PATCH] jpeg: don't unwrap the first-row upsample carry in decode_mcu
+
+Defensive: replaces `rchunks_exact_mut(size).next().unwrap()` with a skip
+when the raw coefficient buffer is shorter than one MCU row (or the row size
+is 0). No input found that reaches the unwrap at the pin: a replay of the
+zune-jpeg fuzz corpora (14.6k files) and of ~120k JPEG crash inputs from
+other zune-jpeg and image fuzzing runs, plus a 15 min run of decode_buffer,
+decode_incremental and decode_apis (6 workers each), all on the pin with
+the other suite patches and without this one, found no panic here. An image
+crash input that panics in zune-jpeg 0.5.15 at the matching unwrap
+(mcu.rs:897) decodes cleanly at the pin, so upstream's buffer sizing
+changes since 0.5.15 seem to prevent it. Kept as a cheap guard.
+
+Upstream: the unwrap is unchanged at zune-image HEAD (692520a, mcu.rs:1820).
+
 diff --git a/crates/zune-jpeg/src/mcu.rs b/crates/zune-jpeg/src/mcu.rs
 index fd0d808b..802e5749 100644
 --- a/crates/zune-jpeg/src/mcu.rs

@@ -1,0 +1,69 @@
+Subject: [PATCH] codestream_parser: keep a skipped preview frame skipped
+
+With skip_preview (the default), the frames of the preview are marked
+ProcessMode::Skip, but the check for frames that are not visible then replaced
+that with ProcessMode::SkipOutput, so an invisible preview frame was decoded
+anyway, with the preview's viewport. When that frame is an LF frame, a flush
+rendered its LF preview into the output buffer of the main image, with the
+preview's size, and panicked out of the buffer's bounds (image/internal.rs:
+assertion failed: rect.origin.1 < self.num_rows). Leave skipped frames skipped.
+libjxl does not decode a preview frame that is not requested, and rejects
+preview frames that are not regular frames ("Only regular frame could be a
+preview"). Test: test_fuzzer_skipped_invisible_preview.
+
+Upstream: not reported; the code is unchanged at upstream HEAD (f370be4, 2026-11-15).
+
+diff --git a/jxl/src/api/codestream_parser/mod.rs b/jxl/src/api/codestream_parser/mod.rs
+index 70b83de..68833a7 100644
+--- a/jxl/src/api/codestream_parser/mod.rs
++++ b/jxl/src/api/codestream_parser/mod.rs
+@@ -412,7 +412,9 @@ impl CodestreamParser {
+ 
+                     let header = self.frame_info.current_frame_header().unwrap();
+                     let is_stored = stored_slot(header).is_some();
+-                    if !header.is_visible() {
++                    if matches!(process_mode, ProcessMode::Skip(_)) {
++                        // A skipped preview frame stays skipped, also if it is not visible.
++                    } else if !header.is_visible() {
+                         process_mode = ProcessMode::SkipOutput;
+                     } else if let Some(n) = self.visible_frames_to_skip.as_mut() {
+                         if *n > 0 {
+diff --git a/jxl/src/tests/api.rs b/jxl/src/tests/api.rs
+index 08351b7..f321e21 100644
+--- a/jxl/src/tests/api.rs
++++ b/jxl/src/tests/api.rs
+@@ -2215,3 +2215,24 @@ fn test_fuzzer_partial_render_resends_noise() {
+         );
+     }
+ }
++
++/// Regression test: a preview frame that is not decoded (`skip_preview`) was still decoded when it
++/// is not visible, because the check for invisible frames replaced the skip. This preview frame is
++/// an LF frame, so a flush rendered its LF preview, sized for the preview, into the output buffer
++/// of the main image, out of the buffer's bounds (image/internal.rs: assertion failed:
++/// rect.origin.1 < self.num_rows).
++#[test]
++fn test_fuzzer_skipped_invisible_preview() {
++    let data = include_bytes!("../../tests/testdata/skipped_invisible_preview.jxl");
++    for chunk_size in 1..=data.len() {
++        let _ = decode::<f32>(
++            data,
++            DecodeParams {
++                chunk_size,
++                do_flush: true,
++                allow_partial: true,
++                ..Default::default()
++            },
++        );
++    }
++}
+diff --git a/jxl/tests/testdata/skipped_invisible_preview.jxl b/jxl/tests/testdata/skipped_invisible_preview.jxl
+new file mode 100644
+index 0000000000000000000000000000000000000000..3595d7573ab227a017aad82c201756564e32308e
+GIT binary patch
+literal 17
+Ycmey*<+zvg0Sgxc69Z$y>BLD!05atTQUCw|
+
+literal 0
+HcmV?d00001
+

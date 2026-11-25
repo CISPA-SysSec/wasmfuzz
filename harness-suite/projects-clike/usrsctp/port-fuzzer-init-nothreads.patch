@@ -1,0 +1,49 @@
+Use usrsctp_init_nothreads() instead of usrsctp_init(): wasm32-wasip1 has no
+threads, so the timer (and iterator) threads cannot be started. Timers are
+simply never fired (the harnesses never wait for them anyway).
+
+diff --git a/fuzzer/fuzzer_connect.c b/fuzzer/fuzzer_connect.c
+index 0c9b0fd..634ce36 100644
+--- a/fuzzer/fuzzer_connect.c
++++ b/fuzzer/fuzzer_connect.c
+@@ -136,9 +136,9 @@ handle_upcall(struct socket *sock, void *arg, int flgs)
+ int
+ initialize_fuzzer(void) {
+ #ifdef FUZZ_VERBOSE
+-	usrsctp_init(0, conn_output, debug_printf_stack);
++	usrsctp_init_nothreads(0, conn_output, debug_printf_stack);
+ #else // FUZZ_VERBOSE
+-	usrsctp_init(0, conn_output, NULL);
++	usrsctp_init_nothreads(0, conn_output, NULL);
+ #endif // FUZZ_VERBOSE
+ 
+ 	usrsctp_enable_crc32c_offload();
+diff --git a/fuzzer/fuzzer_fragment.c b/fuzzer/fuzzer_fragment.c
+index 9a04a2f..d4fe062 100644
+--- a/fuzzer/fuzzer_fragment.c
++++ b/fuzzer/fuzzer_fragment.c
+@@ -106,7 +106,7 @@ conn_output(void *addr, void *buf, size_t length, uint8_t tos, uint8_t set_df)
+ 
+ int
+ initialize_fuzzer(void) {
+-	usrsctp_init(0, conn_output, NULL);
++	usrsctp_init_nothreads(0, conn_output, NULL);
+ 
+ 	usrsctp_enable_crc32c_offload();
+ 
+diff --git a/fuzzer/fuzzer_listen.c b/fuzzer/fuzzer_listen.c
+index ca17582..a1d80b2 100644
+--- a/fuzzer/fuzzer_listen.c
++++ b/fuzzer/fuzzer_listen.c
+@@ -103,9 +103,9 @@ init_fuzzer(void) {
+ #endif
+ 
+ #ifdef FUZZ_VERBOSE
+-	usrsctp_init(0, conn_output, debug_printf_stack);
++	usrsctp_init_nothreads(0, conn_output, debug_printf_stack);
+ #else
+-	usrsctp_init(0, conn_output, NULL);
++	usrsctp_init_nothreads(0, conn_output, NULL);
+ #endif
+ 
+ 	usrsctp_enable_crc32c_offload();

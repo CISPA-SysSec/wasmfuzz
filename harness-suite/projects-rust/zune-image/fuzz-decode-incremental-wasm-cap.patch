@@ -1,28 +1,25 @@
 diff --git a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs b/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
-index d5c7013..2331d09 100644
+index 5335e19..29489ff 100644
 --- a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
 +++ b/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
-@@ -26,6 +26,7 @@ use std::rc::Rc;
- use libfuzzer_sys::fuzz_target;
- use zune_jpeg::JpegDecoder;
- use zune_jpeg::zune_core::bytestream::ZCursor;
-+use zune_jpeg::zune_core::options::DecoderOptions;
- 
- /// Cursor over a byte slice with an externally-controllable visibility
- /// limit. Reads/seeks past `limit` behave as EOF; growing `limit` simulates
-@@ -122,14 +123,26 @@ fuzz_target!(|data: &[u8]| {
+@@ -127,13 +127,25 @@ fuzz_target!(|data: &[u8]| {
      // decoder). If it succeeds, we use it as ground truth; if it fails,
      // we only require that the incremental path doesn't panic and reaches
      // a terminal state.
--    let mut oneshot = JpegDecoder::new(ZCursor::new(payload));
--    let oneshot_pixels = oneshot.decode().ok();
 +    // Cap allocations: DNL images (SOF height 0) pre-allocate
-+    // `max_height * width * ncomp` inside `decode()`, which is hundreds of
++    // `max_height * width * ncomp` inside `decode()`, which is tens of
 +    // MB even when `output_buffer_size()` reports 0. Bind that path to the
 +    // same 8 MiB limit used for the incremental output buffer.
 +    const MAX_DECODE_BYTES: usize = 8 * 1024 * 1024;
-+    let opts = DecoderOptions::default().inflate_set_limit(MAX_DECODE_BYTES);
-+    let mut oneshot = JpegDecoder::new_with_options(ZCursor::new(payload), opts);
+     let options = DecoderOptions::default()
+         .set_strict_mode(true)
+         .set_max_width(4_096)
+         .set_max_height(4_096)
+-        .jpeg_set_max_scans(256);
++        .jpeg_set_max_scans(256)
++        .inflate_set_limit(MAX_DECODE_BYTES);
+     let mut oneshot = JpegDecoder::new_with_options(ZCursor::new(payload), options);
+-    let oneshot_pixels = oneshot.decode().ok();
 +    if oneshot.decode_headers().is_err() {
 +        return;
 +    }
@@ -30,22 +27,15 @@ index d5c7013..2331d09 100644
 +        Some(sz) if sz <= MAX_DECODE_BYTES => oneshot.decode().ok(),
 +        _ => return,
 +    };
+     let oneshot_succeeded = oneshot_pixels.is_some();
      let oneshot_icc = oneshot.icc_profile();
  
-     // Drive the incremental path on the same decoder instance.
-     let limit = Rc::new(Cell::new(0_usize));
-     let cursor = GrowableCursor::new(payload, Rc::clone(&limit));
--    let mut decoder = JpegDecoder::new(cursor);
-+    let mut decoder = JpegDecoder::new_with_options(cursor, opts);
- 
-     let mut out: Vec<u8> = Vec::new();
-     let mut headers_done = false;
-@@ -149,7 +162,7 @@ fuzz_target!(|data: &[u8]| {
+@@ -161,7 +173,7 @@ fuzz_target!(|data: &[u8]| {
              Ok(()) => {
                  headers_done = true;
                  let size = match decoder.output_buffer_size() {
 -                    Some(s) if s <= 64 * 1024 * 1024 => s,
 +                    Some(s) if s <= MAX_DECODE_BYTES => s,
-                     _ => return // refuse implausibly large allocations
+                     _ => return, // refuse implausibly large allocations
                  };
                  out = vec![0_u8; size];

@@ -1,0 +1,54 @@
+diff --git a/include/mruby/throw.h b/include/mruby/throw.h
+index 20a64c863..bfadddcfe 100644
+--- a/include/mruby/throw.h
++++ b/include/mruby/throw.h
+@@ -50,6 +50,22 @@ typedef void *mrb_jmpbuf_impl;
+ # error "need to be compiled with C++ compiler"
+ # endif  /* __cplusplus */
+ 
++#elif defined(__wasi__) && !defined(__wasm_exception_handling__)
++
++/* wasm32-wasip1 without the exception-handling proposal has no setjmp/longjmp:
++ * a throw ends the test case through the wasmfuzz `exit_testcase` import, so
++ * rescue/ensure after a raise are never reached. */
++void wasmfuzz_exit_testcase(void)
++    __attribute__((__noreturn__))
++    __attribute__((__import_module__("wasmfuzz"), __import_name__("exit_testcase")));
++
++#define MRB_TRY(buf) if (((void)(buf), 1)) {
++#define MRB_CATCH(buf) } else {
++#define MRB_END_EXC(buf) }
++
++#define MRB_THROW(buf) ((void)(buf), wasmfuzz_exit_testcase());
++#define mrb_jmpbuf_impl int
++
+ #else
+ 
+ #include <setjmp.h>
+diff --git a/mrbgems/mruby-compiler/include/mrc_throw.h b/mrbgems/mruby-compiler/include/mrc_throw.h
+index 1052d7823..5aff01bf1 100644
+--- a/mrbgems/mruby-compiler/include/mrc_throw.h
++++ b/mrbgems/mruby-compiler/include/mrc_throw.h
+@@ -26,6 +26,22 @@ typedef void *mrc_jmpbuf_impl;
+ # error "need to be compiled with C++ compiler"
+ # endif  /* __cplusplus */
+ 
++#elif defined(__wasi__) && !defined(__wasm_exception_handling__)
++
++/* wasm32-wasip1 without the exception-handling proposal has no setjmp/longjmp:
++ * a throw ends the test case through the wasmfuzz `exit_testcase` import, so
++ * rescue/ensure after a raise are never reached. */
++void wasmfuzz_exit_testcase(void)
++    __attribute__((__noreturn__))
++    __attribute__((__import_module__("wasmfuzz"), __import_name__("exit_testcase")));
++
++#define MRC_TRY(buf) if (((void)(buf), 1)) {
++#define MRC_CATCH(buf) } else {
++#define MRC_END_EXC(buf) }
++
++#define MRC_THROW(buf) ((void)(buf), wasmfuzz_exit_testcase());
++#define mrc_jmpbuf_impl int
++
+ #else
+ 
+ #include <setjmp.h>

@@ -1,0 +1,341 @@
+Subject: [PATCH] fuzz: build lazily initialised library state in FuzzerInitialize()
+
+These fuzzers paid OpenSSL's one-time lazy initialisation in their first
+FuzzerTestOneInput() call: the error strings and config (smime, x509v3,
+cms_verify and pkcs7_verify had an empty FuzzerInitialize()), the namemap and
+provider key managers/decoders behind the first public key decode (cms,
+pkcs7_verify, cmp), the decoder-cache template of the constant
+OSSL_DECODER_CTX_new_for_pkey() query (decoder; d2i_AutoPrivateKey() in asn1),
+the encoders of EVP_PKEY_print_*() (decoder), the fetches of SSL_CTX_new()
+(client, server) and OSSL_CMP_CTX_new() (cmp), and server's fixed key and
+certificate decodes (moved unchanged into server_ctx_new()). Do that once in
+FuzzerInitialize(), so a fresh process starts where a long-running fuzzer is
+after its first input: every input runs the same code as before, on the
+cache-hit paths. No related upstream PR or issue (gh, 2026-11-21); open
+openssl/openssl#30439 adds SSL_COMP #ifdefs next to the client.c/server.c hunks.
+Drop when upstream builds this state in FuzzerInitialize().
+
+diff --git a/fuzz/asn1.c b/fuzz/asn1.c
+index 2ceed4b548..a0ef2d2ada 100644
+--- a/fuzz/asn1.c
++++ b/fuzz/asn1.c
+@@ -36,6 +36,7 @@
+ #include <openssl/rand.h>
+ #include <openssl/bio.h>
+ #include <openssl/evp.h>
++#include <openssl/decoder.h>
+ #include <openssl/ssl.h>
+ #include <openssl/x509_acert.h>
+ #include "internal/nelem.h"
+@@ -285,6 +286,8 @@ static ASN1_PCTX *pctx;
+ 
+ int FuzzerInitialize(int *argc, char ***argv)
+ {
++    EVP_PKEY *pkey = NULL;
++
+     FuzzerSetRand();
+     pctx = ASN1_PCTX_new();
+     if (pctx == NULL)
+@@ -294,6 +297,12 @@ int FuzzerInitialize(int *argc, char ***argv)
+ 
+     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
+     OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS, NULL);
++    /*
++     * Build the decoder context that d2i_AutoPrivateKey() gets from the
++     * decoder cache for input that is not PKCS#8 (see crypto/asn1/d2i_pr.c).
++     */
++    OSSL_DECODER_CTX_free(OSSL_DECODER_CTX_new_for_pkey(&pkey, "DER",
++        "type-specific", NULL, EVP_PKEY_KEYPAIR, NULL, NULL));
+     ERR_clear_error();
+     CRYPTO_free_ex_index(0, -1);
+ 
+diff --git a/fuzz/client.c b/fuzz/client.c
+index 8ed77ea8cd..47be7be317 100644
+--- a/fuzz/client.c
++++ b/fuzz/client.c
+@@ -45,6 +45,8 @@ time_t time(time_t *t) TIME_IMPL(t)
+     FuzzerSetRand();
+     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS | OPENSSL_INIT_ASYNC, NULL);
+     OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS, NULL);
++    /* Fetch the provider algorithms that every SSL_CTX_new() fetches. */
++    SSL_CTX_free(SSL_CTX_new(TLS_method()));
+     ERR_clear_error();
+     CRYPTO_free_ex_index(0, -1);
+     if (SSL_get_ex_data_X509_STORE_CTX_idx() != 0) {
+diff --git a/fuzz/cmp.c b/fuzz/cmp.c
+index ae4dcc033d..2e77f7c0b0 100644
+--- a/fuzz/cmp.c
++++ b/fuzz/cmp.c
+@@ -14,13 +14,30 @@
+ #include <openssl/bio.h>
+ #include <openssl/cmp.h>
+ #include "../crypto/cmp/cmp_local.h"
++#include <openssl/decoder.h>
+ #include <openssl/err.h>
+ #include "fuzzer.h"
+ 
++static void prefetch_keymgmt(EVP_KEYMGMT *keymgmt, void *arg)
++{
++}
++
++static void prefetch_decoder(OSSL_DECODER *decoder, void *arg)
++{
++}
++
+ int FuzzerInitialize(int *argc, char ***argv)
+ {
+     FuzzerSetRand();
+     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
++    /*
++     * Construct the provider key managers and decoders once here rather
++     * than in the first public key decode.
++     */
++    EVP_KEYMGMT_do_all_provided(NULL, prefetch_keymgmt, NULL);
++    OSSL_DECODER_do_all_provided(NULL, prefetch_decoder, NULL);
++    /* Fetch what every OSSL_CMP_CTX_new() fetches. */
++    OSSL_CMP_CTX_free(OSSL_CMP_CTX_new(NULL, NULL));
+     ERR_clear_error();
+     CRYPTO_free_ex_index(0, -1);
+     return 1;
+diff --git a/fuzz/cms.c b/fuzz/cms.c
+index bd67e4f3a8..32e6e1ff26 100644
+--- a/fuzz/cms.c
++++ b/fuzz/cms.c
+@@ -14,12 +14,27 @@
+ 
+ #include <openssl/bio.h>
+ #include <openssl/cms.h>
++#include <openssl/decoder.h>
+ #include <openssl/err.h>
+ #include "fuzzer.h"
+ 
++static void prefetch_keymgmt(EVP_KEYMGMT *keymgmt, void *arg)
++{
++}
++
++static void prefetch_decoder(OSSL_DECODER *decoder, void *arg)
++{
++}
++
+ int FuzzerInitialize(int *argc, char ***argv)
+ {
+     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
++    /*
++     * Construct the provider key managers and decoders once here rather
++     * than in the first public key decode.
++     */
++    EVP_KEYMGMT_do_all_provided(NULL, prefetch_keymgmt, NULL);
++    OSSL_DECODER_do_all_provided(NULL, prefetch_decoder, NULL);
+     ERR_clear_error();
+     CRYPTO_free_ex_index(0, -1);
+     return 1;
+diff --git a/fuzz/cms_verify.c b/fuzz/cms_verify.c
+index 1a73d096d1..1c4f8108bf 100644
+--- a/fuzz/cms_verify.c
++++ b/fuzz/cms_verify.c
+@@ -15,6 +15,10 @@
+ 
+ int FuzzerInitialize(int *argc, char ***argv)
+ {
++    OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS
++            | OPENSSL_INIT_LOAD_CONFIG,
++        NULL);
++    ERR_clear_error();
+     return 1;
+ }
+ 
+diff --git a/fuzz/decoder.c b/fuzz/decoder.c
+index ab5dd3112b..2a739210b6 100644
+--- a/fuzz/decoder.c
++++ b/fuzz/decoder.c
+@@ -9,14 +9,21 @@
+  */
+ 
+ #include <openssl/decoder.h>
++#include <openssl/encoder.h>
+ #include <openssl/err.h>
+ #include <openssl/rand.h>
+ #include "fuzzer.h"
+ 
+ static ASN1_PCTX *pctx;
+ 
++static void prefetch_encoder(OSSL_ENCODER *encoder, void *arg)
++{
++}
++
+ int FuzzerInitialize(int *argc, char ***argv)
+ {
++    EVP_PKEY *pkey = NULL;
++
+     FuzzerSetRand();
+ 
+     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS
+@@ -30,6 +37,14 @@ int FuzzerInitialize(int *argc, char ***argv)
+     ASN1_PCTX_set_flags(pctx, ASN1_PCTX_FLAGS_SHOW_ABSENT | ASN1_PCTX_FLAGS_SHOW_SEQUENCE | ASN1_PCTX_FLAGS_SHOW_SSOF | ASN1_PCTX_FLAGS_SHOW_TYPE | ASN1_PCTX_FLAGS_SHOW_FIELD_STRUCT_NAME);
+     ASN1_PCTX_set_str_flags(pctx, ASN1_STRFLGS_UTF8_CONVERT | ASN1_STRFLGS_SHOW_TYPE | ASN1_STRFLGS_DUMP_ALL);
+ 
++    /*
++     * Build the decoder context that FuzzerTestOneInput() gets from the
++     * decoder cache, and construct the encoders that EVP_PKEY_print_*() use.
++     */
++    OSSL_DECODER_CTX_free(OSSL_DECODER_CTX_new_for_pkey(&pkey, NULL, NULL,
++        NULL, 0, NULL, NULL));
++    OSSL_ENCODER_do_all_provided(NULL, prefetch_encoder, NULL);
++
+     ERR_clear_error();
+     CRYPTO_free_ex_index(0, -1);
+     return 1;
+diff --git a/fuzz/pkcs7_verify.c b/fuzz/pkcs7_verify.c
+index a167afb13d..bc1614af78 100644
+--- a/fuzz/pkcs7_verify.c
++++ b/fuzz/pkcs7_verify.c
+@@ -9,12 +9,32 @@
+  */
+ #include <limits.h>
+ #include <openssl/bio.h>
++#include <openssl/decoder.h>
+ #include <openssl/err.h>
++#include <openssl/evp.h>
+ #include <openssl/pkcs7.h>
+ #include "fuzzer.h"
+ 
++static void prefetch_keymgmt(EVP_KEYMGMT *keymgmt, void *arg)
++{
++}
++
++static void prefetch_decoder(OSSL_DECODER *decoder, void *arg)
++{
++}
++
+ int FuzzerInitialize(int *argc, char ***argv)
+ {
++    OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS
++            | OPENSSL_INIT_LOAD_CONFIG,
++        NULL);
++    /*
++     * Construct the provider key managers and decoders once here rather
++     * than in the first public key decode.
++     */
++    EVP_KEYMGMT_do_all_provided(NULL, prefetch_keymgmt, NULL);
++    OSSL_DECODER_do_all_provided(NULL, prefetch_decoder, NULL);
++    ERR_clear_error();
+     return 1;
+ }
+ 
+diff --git a/fuzz/server.c b/fuzz/server.c
+index a06d872d1d..27deaa09a3 100644
+--- a/fuzz/server.c
++++ b/fuzz/server.c
+@@ -25,6 +25,8 @@
+ #include <openssl/err.h>
+ #include "fuzzer.h"
+ 
++static SSL_CTX *server_ctx_new(void);
++
+ #ifndef OPENSSL_NO_DEPRECATED_3_0
+ static const uint8_t kCertificateDER[] = {
+     0x30, 0x82, 0x02, 0xff, 0x30, 0x82, 0x01, 0xe7,
+@@ -578,6 +580,11 @@ time_t time(time_t *t) TIME_IMPL(t)
+     FuzzerSetRand();
+     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS | OPENSSL_INIT_ASYNC, NULL);
+     OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS, NULL);
++    /*
++     * Do the provider fetches and key decodes of the input-independent
++     * server_ctx_new() once here.
++     */
++    SSL_CTX_free(server_ctx_new());
+     ERR_clear_error();
+     CRYPTO_free_ex_index(0, -1);
+     if (SSL_get_ex_data_X509_STORE_CTX_idx() == 0) {
+@@ -638,27 +645,21 @@ static int use_pem_cert(SSL_CTX *ctx, const void *pem, size_t pem_len)
+ }
+ #endif
+ 
+-int FuzzerTestOneInput(const uint8_t *buf, size_t len)
++/* The server context with its fixed keys and certificates. */
++static SSL_CTX *server_ctx_new(void)
+ {
+-    SSL *server = NULL;
+-    BIO *in;
+-    BIO *out;
+     SSL_CTX *ctx;
+ #ifndef OPENSSL_NO_DEPRECATED_3_0
+     const uint8_t *bufp;
+     RSA *privkey = NULL;
+     EVP_PKEY *pkey = NULL;
+     X509 *cert = NULL;
+-#endif
+-    uint8_t opt;
+     int ret;
+-
+-    if (len < 2 || len > INT_MAX)
+-        return 0;
++#endif
+ 
+     ctx = SSL_CTX_new(TLS_method());
+     if (ctx == NULL)
+-        return 0;
++        return NULL;
+     if (SSL_CTX_set_min_proto_version(ctx, 0) != 1)
+         goto end;
+     if (SSL_CTX_set_cipher_list(ctx, "ALL:eNULL:@SECLEVEL=0") != 1)
+@@ -712,6 +713,29 @@ int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+         goto end;
+ #endif
+ 
++    return ctx;
++
++end:
++    SSL_CTX_free(ctx);
++    return NULL;
++}
++
++int FuzzerTestOneInput(const uint8_t *buf, size_t len)
++{
++    SSL *server = NULL;
++    BIO *in;
++    BIO *out;
++    SSL_CTX *ctx;
++    uint8_t opt;
++    int ret;
++
++    if (len < 2 || len > INT_MAX)
++        return 0;
++
++    ctx = server_ctx_new();
++    if (ctx == NULL)
++        goto end;
++
+     server = SSL_new(ctx);
+     if (server == NULL)
+         goto end;
+diff --git a/fuzz/smime.c b/fuzz/smime.c
+index 2556e49718..955e13bab3 100644
+--- a/fuzz/smime.c
++++ b/fuzz/smime.c
+@@ -16,6 +16,10 @@
+ 
+ int FuzzerInitialize(int *argc, char ***argv)
+ {
++    OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS
++            | OPENSSL_INIT_LOAD_CONFIG,
++        NULL);
++    ERR_clear_error();
+     return 1;
+ }
+ 
+diff --git a/fuzz/x509v3.c b/fuzz/x509v3.c
+index d44b958082..5030403c40 100644
+--- a/fuzz/x509v3.c
++++ b/fuzz/x509v3.c
+@@ -25,6 +25,10 @@
+ 
+ int FuzzerInitialize(int *argc, char ***argv)
+ {
++    OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS
++            | OPENSSL_INIT_LOAD_CONFIG,
++        NULL);
++    ERR_clear_error();
+     return 1;
+ }
+ 

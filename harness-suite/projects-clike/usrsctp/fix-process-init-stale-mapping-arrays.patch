@@ -1,0 +1,396 @@
+Clear the mapping arrays when sctp_process_init() resets the peer's initial TSN.
+
+sctp_process_init() sets mapping_array_base_tsn, cumulative_tsn and the
+highest-TSN markers from the INIT's initial TSN but leaves mapping_array and
+nr_mapping_array as they are. A new association starts with zeroed arrays and
+the restart path (case A) clears them first, but a COOKIE-ECHO handled as case B
+of RFC 9260 section 5.2.4 (our tag matches, peer tag differs) on an established
+association that already received DATA keeps the old bits. They then mark TSNs
+of the new sequence space as received, and the next sctp_slide_mapping_arrays()
+computes a cumulative TSN above the highest TSN: INVARIANTS panic "cumack
+greater than high-tsn" (reached via sctp_sack_check after DATA).
+
+Includes programs/test_cookie_case_b.c: it plays the peer of a connecting
+socket over AF_CONN, keeps the cookie of the INIT-ACK sent for a colliding
+INIT, establishes the association with another peer tag/TSN, sends one DATA
+chunk, then echoes the kept cookie (case B) and sends the first DATA chunk of
+the new TSN space. Without the fix that chunk is dropped as a duplicate (the
+test fails) and with INVARIANTS the process aborts in
+sctp_slide_mapping_arrays().
+
+Upstream: none found.
+
+diff --git a/programs/CMakeLists.txt b/programs/CMakeLists.txt
+index 7c8bc5d..8da84d8 100644
+--- a/programs/CMakeLists.txt
++++ b/programs/CMakeLists.txt
+@@ -100,6 +100,7 @@ list(APPEND check_programs
+ 	http_client_upcall.c
+ 	rtcweb.c
+ 	st_client.c
++	test_cookie_case_b.c
+ 	test_libmgmt.c
+ 	test_timer.c
+ 	test_tsn_wrap.c
+diff --git a/programs/meson.build b/programs/meson.build
+index 485ef27..99c00ec 100644
+--- a/programs/meson.build
++++ b/programs/meson.build
+@@ -21,6 +21,7 @@ programs = {
+     'http_client': files('http_client.c'),
+     'http_client_upcall': files('http_client_upcall.c'),
+     'rtcweb': files('rtcweb.c'),
++    'test_cookie_case_b': files('test_cookie_case_b.c'),
+     'test_libmgmt': files('test_libmgmt.c'),
+     'test_timer': files('test_timer.c'),
+     'test_tsn_wrap': files('test_tsn_wrap.c'),
+diff --git a/programs/test_cookie_case_b.c b/programs/test_cookie_case_b.c
+new file mode 100644
+index 0000000..0e62b89
+--- /dev/null
++++ b/programs/test_cookie_case_b.c
+@@ -0,0 +1,321 @@
++/*
++ * Copyright (C) 2026 Florian Bauckholt
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 3. Neither the name of the project nor the names of its contributors
++ *    may be used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.	IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++/*
++ * Regression test: a COOKIE-ECHO handled as case B of RFC 9260,
++ * section 5.2.4 (our tag matches, the peer's tag differs) on an established
++ * association must not keep the mapping array bits of the peer's previous
++ * TSN space.
++ *
++ * The test plays the peer of a connecting socket over AF_CONN:
++ * 1. it answers our INIT with an INIT of its own (an INIT collision), and
++ *    keeps the cookie of the INIT-ACK we send back, which carries our tag
++ *    and the peer tag/TSN of that second INIT;
++ * 2. it completes the association with a different peer tag and TSN and
++ *    sends one DATA chunk;
++ * 3. it echoes the kept cookie (case B) and sends the first DATA chunk of the
++ *    new TSN space.
++ * The stale bit of the first DATA chunk made the new first TSN look like a
++ * duplicate: the message was dropped and, with INVARIANTS, the next
++ * sctp_slide_mapping_arrays() panicked with "cumack greater than high-tsn".
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <string.h>
++#include <errno.h>
++#ifndef _WIN32
++#include <arpa/inet.h>
++#endif
++#include <usrsctp.h>
++
++#define LOCAL_PORT 5000
++#define PEER_PORT 5001
++#define PEER_TAG_1 0x11111111
++#define PEER_TSN_1 0x10000000
++#define PEER_TAG_2 0x22222222
++#define PEER_TSN_2 0x20000000
++
++static uint8_t last_out[2048];
++static size_t last_out_len;
++static uint32_t my_vtag;
++
++static int
++conn_output(void *addr, void *buf, size_t length, uint8_t tos, uint8_t set_df)
++{
++	const uint8_t *p = buf;
++
++	if (length > sizeof(last_out)) {
++		length = sizeof(last_out);
++	}
++	memcpy(last_out, buf, length);
++	last_out_len = length;
++	/* Remember the initiate tag of our INIT. */
++	if (length >= 20 && p[12] == 0x01) {
++		memcpy(&my_vtag, p + 16, sizeof(my_vtag));
++	}
++	return (0);
++}
++
++struct pkt {
++	uint8_t buf[2048];
++	size_t len;
++};
++
++static void
++put8(struct pkt *p, uint8_t v)
++{
++	p->buf[p->len++] = v;
++}
++
++static void
++put16(struct pkt *p, uint16_t v)
++{
++	put8(p, v >> 8);
++	put8(p, v & 0xff);
++}
++
++static void
++put32(struct pkt *p, uint32_t v)
++{
++	put16(p, v >> 16);
++	put16(p, v & 0xffff);
++}
++
++static void
++pkt_start(struct pkt *p, uint32_t vtag)
++{
++	p->len = 0;
++	put16(p, PEER_PORT);
++	put16(p, LOCAL_PORT);
++	memcpy(p->buf + p->len, &vtag, 4);	/* already in network byte order */
++	p->len += 4;
++	put32(p, 0);
++}
++
++static void
++pkt_init(struct pkt *p, uint8_t type, uint32_t tag, uint32_t tsn,
++    const uint8_t *cookie, size_t cookie_len)
++{
++	size_t start = p->len;
++
++	put8(p, type);
++	put8(p, 0);
++	put16(p, 0);
++	put32(p, tag);
++	put32(p, 0x10000);	/* a_rwnd */
++	put16(p, 10);		/* outbound streams */
++	put16(p, 10);		/* inbound streams */
++	put32(p, tsn);
++	put16(p, 0xc000);	/* Forward-TSN supported */
++	put16(p, 4);
++	if (cookie != NULL) {
++		put16(p, 0x0007);	/* State Cookie */
++		put16(p, 4 + cookie_len);
++		memcpy(p->buf + p->len, cookie, cookie_len);
++		p->len += cookie_len;
++		while (p->len % 4) {
++			put8(p, 0);
++		}
++	}
++	p->buf[start + 2] = (p->len - start) >> 8;
++	p->buf[start + 3] = (p->len - start) & 0xff;
++}
++
++static void
++pkt_data(struct pkt *p, uint32_t tsn)
++{
++	put8(p, 0x00);		/* DATA */
++	put8(p, 0x03);		/* B and E bits */
++	put16(p, 20);
++	put32(p, tsn);
++	put16(p, 0);		/* stream */
++	put16(p, 0);		/* SSN, unused for unordered */
++	put32(p, 0);		/* PPID */
++	put32(p, 0x41414141);
++}
++
++static void
++pkt_send(struct pkt *p)
++{
++	uint32_t crc;
++
++	crc = usrsctp_crc32c(p->buf, p->len);
++	memcpy(p->buf + 8, &crc, 4);
++	last_out_len = 0;
++	usrsctp_conninput((void *)1, p->buf, p->len, 0);
++}
++
++/* Find the State Cookie parameter of an INIT-ACK we sent. */
++static const uint8_t *
++find_cookie(size_t *len)
++{
++	size_t off = 12 + 20;
++
++	if (last_out_len < off || last_out[12] != 0x02) {
++		return (NULL);
++	}
++	while (off + 4 <= last_out_len) {
++		uint16_t type = (last_out[off] << 8) | last_out[off + 1];
++		uint16_t plen = (last_out[off + 2] << 8) | last_out[off + 3];
++
++		if (plen < 4 || off + plen > last_out_len) {
++			return (NULL);
++		}
++		if (type == 0x0007) {
++			*len = plen - 4;
++			return (last_out + off + 4);
++		}
++		off += (plen + 3) & ~3;
++	}
++	return (NULL);
++}
++
++static int
++read_messages(struct socket *sock)
++{
++	char buf[256];
++	struct sockaddr_conn from;
++	socklen_t fromlen;
++	int flags, n = 0;
++	unsigned int infotype;
++	struct sctp_rcvinfo rcv;
++	socklen_t infolen;
++	ssize_t len;
++
++	for (;;) {
++		fromlen = sizeof(from);
++		infolen = sizeof(rcv);
++		flags = 0;
++		len = usrsctp_recvv(sock, buf, sizeof(buf), (struct sockaddr *)&from,
++		    &fromlen, &rcv, &infolen, &infotype, &flags);
++		if (len <= 0) {
++			break;
++		}
++		if ((flags & MSG_NOTIFICATION) == 0) {
++			n++;
++		}
++	}
++	return (n);
++}
++
++int
++main(void)
++{
++	struct socket *sock;
++	struct sockaddr_conn sconn;
++	struct pkt p;
++	uint8_t cookie[1024];
++	const uint8_t *c;
++	size_t cookie_len = 0;
++	int n;
++
++	usrsctp_init_nothreads(0, conn_output, NULL);
++	usrsctp_register_address((void *)1);
++
++	if ((sock = usrsctp_socket(AF_CONN, SOCK_STREAM, IPPROTO_SCTP, NULL, NULL, 0, NULL)) == NULL) {
++		perror("usrsctp_socket");
++		return (1);
++	}
++	usrsctp_set_non_blocking(sock, 1);
++	memset(&sconn, 0, sizeof(sconn));
++	sconn.sconn_family = AF_CONN;
++#ifdef HAVE_SCONN_LEN
++	sconn.sconn_len = sizeof(sconn);
++#endif
++	sconn.sconn_port = htons(LOCAL_PORT);
++	sconn.sconn_addr = (void *)1;
++	if (usrsctp_bind(sock, (struct sockaddr *)&sconn, sizeof(sconn)) < 0) {
++		perror("usrsctp_bind");
++		return (1);
++	}
++	sconn.sconn_port = htons(PEER_PORT);
++	if (usrsctp_connect(sock, (struct sockaddr *)&sconn, sizeof(sconn)) < 0 &&
++	    errno != EINPROGRESS) {
++		perror("usrsctp_connect");
++		return (1);
++	}
++	if (my_vtag == 0) {
++		fprintf(stderr, "no INIT sent\n");
++		return (1);
++	}
++
++	/* 1. INIT collision: keep the cookie of our INIT-ACK. */
++	pkt_start(&p, 0);
++	pkt_init(&p, 0x01, PEER_TAG_2, PEER_TSN_2, NULL, 0);
++	pkt_send(&p);
++	if ((c = find_cookie(&cookie_len)) == NULL || cookie_len > sizeof(cookie)) {
++		fprintf(stderr, "no INIT-ACK with a cookie sent\n");
++		return (1);
++	}
++	memcpy(cookie, c, cookie_len);
++
++	/* 2. Establish the association with the first peer tag and TSN. */
++	pkt_start(&p, my_vtag);
++	pkt_init(&p, 0x02, PEER_TAG_1, PEER_TSN_1, (const uint8_t *)"cookie", 6);
++	pkt_send(&p);
++	pkt_start(&p, my_vtag);
++	put32(&p, 0x0b000004);	/* COOKIE-ACK */
++	pkt_send(&p);
++	pkt_start(&p, my_vtag);
++	pkt_data(&p, PEER_TSN_1);
++	pkt_send(&p);
++	n = read_messages(sock);
++	if (n != 1) {
++		fprintf(stderr, "first DATA chunk not delivered (%d)\n", n);
++		return (1);
++	}
++
++	/* 3. Case B: same local tag, new peer tag and TSN. */
++	pkt_start(&p, my_vtag);
++	put8(&p, 0x0a);		/* COOKIE-ECHO */
++	put8(&p, 0);
++	put16(&p, 4 + cookie_len);
++	memcpy(p.buf + p.len, cookie, cookie_len);
++	p.len += cookie_len;
++	while (p.len % 4) {
++		put8(&p, 0);
++	}
++	pkt_send(&p);
++	pkt_start(&p, my_vtag);
++	pkt_data(&p, PEER_TSN_2);
++	pkt_send(&p);
++	n = read_messages(sock);
++
++	usrsctp_close(sock);
++	while (usrsctp_finish() != 0) {
++		usrsctp_handle_timers(10);
++	}
++	if (n != 1) {
++		fprintf(stderr, "first DATA chunk after the restart not delivered (%d)\n", n);
++		return (1);
++	}
++	printf("ok\n");
++	return (0);
++}
+diff --git a/usrsctplib/netinet/sctp_input.c b/usrsctplib/netinet/sctp_input.c
+index 217b494..e428324 100755
+--- a/usrsctplib/netinet/sctp_input.c
++++ b/usrsctplib/netinet/sctp_input.c
+@@ -356,6 +356,18 @@ sctp_process_init(struct sctp_init_chunk *cp, struct sctp_tcb *stcb)
+ 
+ 	asoc->mapping_array_base_tsn = ntohl(init->initial_tsn);
+ 	asoc->tsn_last_delivered = asoc->cumulative_tsn = asoc->asconf_seq_in;
++	/*
++	 * The mapping arrays are relative to mapping_array_base_tsn, so bits
++	 * left over from the peer's previous initial TSN (e.g. a COOKIE-ECHO
++	 * handled as case B of RFC 9260, section 5.2.4, on an established
++	 * association) would mark TSNs of the new sequence space as received.
++	 */
++	if (asoc->mapping_array != NULL) {
++		memset(asoc->mapping_array, 0, asoc->mapping_array_size);
++	}
++	if (asoc->nr_mapping_array != NULL) {
++		memset(asoc->nr_mapping_array, 0, asoc->mapping_array_size);
++	}
+ 
+ 	asoc->advanced_peer_ack_point = asoc->last_acked_seq;
+ 	/* open the requested streams */

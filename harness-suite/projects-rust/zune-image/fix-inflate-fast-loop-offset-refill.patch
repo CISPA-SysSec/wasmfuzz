@@ -1,0 +1,239 @@
+diff --git a/crates/zune-inflate/src/constants.rs b/crates/zune-inflate/src/constants.rs
+index 6b3d5907..22b13286 100644
+--- a/crates/zune-inflate/src/constants.rs
++++ b/crates/zune-inflate/src/constants.rs
+@@ -41,6 +41,11 @@ pub const OFFSET_TABLEBITS: usize = 8;
+ /// Note, default libdeflate value is 402, but with 512,
+ /// we can remove a branch check by simply doing & 511, and I'll take that.
+ pub const OFFSET_ENOUGH: usize = 512;
++
++/// Most bits one match offset consumes: the longest offset codeword plus the
++/// 13 extra bits of offset symbols 28 and 29.
++pub const OFFSET_MAX_BITS: u8 = DEFLATE_MAX_OFFSET_CODEWORD_LENGTH as u8 + 13;
++
+ /// Maximum number of symbols across all codes
+ pub const DEFLATE_MAX_NUM_SYMS: usize = 288;
+ 
+diff --git a/crates/zune-inflate/src/decoder.rs b/crates/zune-inflate/src/decoder.rs
+index 41f7acf6..e30be0ed 100644
+--- a/crates/zune-inflate/src/decoder.rs
++++ b/crates/zune-inflate/src/decoder.rs
+@@ -20,8 +20,8 @@ use crate::constants::{
+     DEFLATE_NUM_PRECODE_SYMS, DEFLATE_PRECODE_LENS_PERMUTATION, DELFATE_MAX_LENS_OVERRUN,
+     FASTCOPY_BYTES, FASTLOOP_MAX_BYTES_WRITTEN, HUFFDEC_END_OF_BLOCK, HUFFDEC_EXCEPTIONAL,
+     HUFFDEC_LITERAL, HUFFDEC_SUITABLE_POINTER, LITLEN_DECODE_BITS, LITLEN_DECODE_RESULTS,
+-    LITLEN_ENOUGH, LITLEN_TABLE_BITS, OFFSET_DECODE_RESULTS, OFFSET_ENOUGH, OFFSET_TABLEBITS,
+-    PRECODE_DECODE_RESULTS, PRECODE_ENOUGH, PRECODE_TABLE_BITS,
++    LITLEN_ENOUGH, LITLEN_TABLE_BITS, OFFSET_DECODE_RESULTS, OFFSET_ENOUGH, OFFSET_MAX_BITS,
++    OFFSET_TABLEBITS, PRECODE_DECODE_RESULTS, PRECODE_ENOUGH, PRECODE_TABLE_BITS,
+ };
+ use crate::errors::{DecodeErrorStatus, InflateDecodeErrors};
+ #[cfg(feature = "gzip")]
+@@ -861,6 +861,13 @@ impl<'a> DeflateDecoder<'a> {
+ 
+                         length += (saved_bitbuf & mask) as usize >> ((entry_dup >> 8) as u8);
+ 
++                        // A literal and a length codeword with extra bits can consume up to 31
++                        // bits since the refill, which leaves too few for a long offset codeword
++                        // with 13 extra bits (`bits_left` would wrap). Refill, like libdeflate.
++                        if self.stream.bits_left < OFFSET_MAX_BITS {
++                            self.stream.refill();
++                        }
++
+                         // offset requires a subtable
+                         if (entry & HUFFDEC_EXCEPTIONAL) != 0 {
+                             self.stream.drop_bits(OFFSET_TABLEBITS as u8);
+diff --git a/crates/zune-inflate/src/streaming_decoder.rs b/crates/zune-inflate/src/streaming_decoder.rs
+index 4d2d423d..7e20fb61 100644
+--- a/crates/zune-inflate/src/streaming_decoder.rs
++++ b/crates/zune-inflate/src/streaming_decoder.rs
+@@ -6,7 +6,7 @@ use crate::constants::{
+     DELFATE_MAX_LENS_OVERRUN, FASTCOPY_BYTES, FASTLOOP_MAX_BYTES_WRITTEN, HUFFDEC_END_OF_BLOCK,
+     HUFFDEC_EXCEPTIONAL, HUFFDEC_LITERAL, HUFFDEC_SUITABLE_POINTER, LITLEN_DECODE_BITS,
+     LITLEN_DECODE_RESULTS, LITLEN_ENOUGH, LITLEN_TABLE_BITS, OFFSET_DECODE_RESULTS, OFFSET_ENOUGH,
+-    OFFSET_TABLEBITS, PRECODE_DECODE_RESULTS, PRECODE_ENOUGH, PRECODE_TABLE_BITS,
++    OFFSET_MAX_BITS, OFFSET_TABLEBITS, PRECODE_DECODE_RESULTS, PRECODE_ENOUGH, PRECODE_TABLE_BITS,
+ };
+ use crate::decoder::{build_decode_table_inner, DeflateHeaderTables};
+ use crate::errors::{DecodeErrorStatus, InflateDecodeErrors};
+@@ -815,8 +815,9 @@ impl StreamingDecoder {
+                 entry = litlen_decode_table[lit_mask];
+ 
+                 'sequence: loop {
+-                    // Check if we are approaching the end of the input chunk or output slice
+-                    if self.stream.remaining_bytes(chunk) < 8
++                    // Check if we are approaching the end of the input chunk or output slice.
++                    // The refill below may advance 7 bytes, the one before the offset needs 8.
++                    if self.stream.remaining_bytes(chunk) < 16
+                         || self.dest_offset + FASTLOOP_MAX_BYTES_WRITTEN > out_block.len()
+                     {
+                         break 'sequence;
+@@ -902,6 +903,13 @@ impl StreamingDecoder {
+                     let mask = (1 << entry_dup as u8) - 1;
+                     length += (saved_bitbuf & mask) as usize >> ((entry_dup >> 8) as u8);
+ 
++                    // Two literals and a length codeword with extra bits can consume up to 42
++                    // bits since the refill, which leaves too few for an offset codeword with
++                    // extra bits (`bits_left` would wrap). Refill, like libdeflate.
++                    if self.stream.bits_left < OFFSET_MAX_BITS {
++                        self.stream.refill(chunk);
++                    }
++
+                     if (entry & HUFFDEC_EXCEPTIONAL) != 0 {
+                         self.stream.drop_bits(OFFSET_TABLEBITS as u8);
+                         let extra = self.stream.peek_var_bits(((entry >> 8) & 0x3F) as usize);
+diff --git a/crates/zune-inflate/src/tests.rs b/crates/zune-inflate/src/tests.rs
+index b43f9108..ca2aab9f 100644
+--- a/crates/zune-inflate/src/tests.rs
++++ b/crates/zune-inflate/src/tests.rs
+@@ -835,6 +835,150 @@ mod tests {
+             }
+         }
+     }
++
++    // ============================================================================
++    // FAST LOOP BIT BUDGET
++    // ============================================================================
++
++    /// LSB-first bit writer for hand-built deflate streams.
++    struct BitWriter {
++        out: Vec<u8>,
++        acc: u8,
++        n:   u32,
++    }
++
++    impl BitWriter {
++        fn bits(&mut self, v: u32, n: u32) {
++            for i in 0..n {
++                self.acc |= (((v >> i) & 1) as u8) << self.n;
++                self.n += 1;
++                if self.n == 8 {
++                    self.out.push(self.acc);
++                    self.acc = 0;
++                    self.n = 0;
++                }
++            }
++        }
++        /// Huffman codewords are packed starting with the most significant bit.
++        fn code(&mut self, (code, len): (u32, u32)) {
++            for i in (0..len).rev() {
++                self.bits(code >> i, 1);
++            }
++        }
++    }
++
++    /// Canonical (codeword, length) pairs for the given code lengths.
++    fn canonical_codes(lens: &[u32]) -> Vec<(u32, u32)> {
++        let mut count = [0u32; 16];
++        for &l in lens.iter().filter(|&&l| l > 0) {
++            count[l as usize] += 1;
++        }
++        let mut next = [0u32; 16];
++        for l in 1..16 {
++            next[l] = (next[l - 1] + count[l - 1]) << 1;
++        }
++        lens.iter()
++            .map(|&l| {
++                let code = next[l as usize];
++                next[l as usize] += 1;
++                (code, l)
++            })
++            .collect()
++    }
++
++    /// A valid dynamic block whose matches take 59 bits each in the fast loop: a literal with an
++    /// 11-bit codeword, then length symbol 284 (15-bit codeword + 5 extra bits) and offset symbol
++    /// 28 (15-bit codeword + 13 extra bits). A refill only guarantees 56 bits.
++    fn long_codeword_stream(seed: u64, matches: usize) -> Vec<u8> {
++        // Complete codes: the i-th listed symbol gets length i + 1, the last two get 15.
++        let chain = |order: &[usize], n: usize| {
++            let mut lens = vec![0u32; n];
++            for (i, &sym) in order.iter().enumerate() {
++                lens[sym] = (i as u32 + 1).min(15);
++            }
++            lens
++        };
++        let (lit_b, lit_a, eob, len_258, len_284) = (98, 97, 256, 285, 284);
++        let litlen = chain(
++            &[lit_b, 99, len_258, 100, 101, 102, 103, 104, 105, eob, lit_a, 106, 107, 108, len_284, 109],
++            286,
++        );
++        let dist = chain(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 28, 29], 30);
++        let (lc, dc) = (canonical_codes(&litlen), canonical_codes(&dist));
++
++        let mut w = BitWriter { out: Vec::new(), acc: 0, n: 0 };
++        w.bits(1, 1); // BFINAL
++        w.bits(2, 2); // dynamic Huffman
++        w.bits(286 - 257, 5);
++        w.bits(30 - 1, 5);
++        w.bits(19 - 4, 4);
++        // Precode: code lengths 0..=15 get 4-bit codewords, 16..=18 are unused.
++        for sym in [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15] {
++            w.bits(if sym < 16 { 4 } else { 0 }, 3);
++        }
++        for &len in litlen.iter().chain(dist.iter()) {
++            w.code((len, 4));
++        }
++        // Fill the window past offset 16385 (the base of offset symbol 28).
++        w.code(lc[lit_b]);
++        let mut out_len = 1;
++        while out_len < 16385 + 300 {
++            w.code(lc[len_258]);
++            w.code(dc[0]);
++            out_len += 258;
++        }
++        let mut rng = WyRand::new_seed(seed);
++        for _ in 0..matches {
++            // Vary the bit alignment at which the fast loop sees the match.
++            for _ in 0..rng.generate_range(0_u32..4) {
++                w.code(lc[lit_b]);
++                out_len += 1;
++            }
++            w.code(lc[lit_a]);
++            w.code(lc[len_284]);
++            let extra_len = rng.generate_range(0_u32..31);
++            w.bits(extra_len, 5);
++            w.code(dc[28]);
++            w.bits(rng.generate_range(0_u32..(out_len as u32 + 1 - 16385).min(1 << 13)), 13);
++            out_len += 1 + 227 + extra_len as usize;
++        }
++        w.code(lc[eob]);
++        w.bits(0, 7);
++        w.out
++    }
++
++    /// Valid streams with long offset codewords used to wrap `bits_left` in the fast loops:
++    /// panics (`refill_slow` slicing past the input), "Corrupt data" or truncated output.
++    #[test]
++    fn test_fast_loop_long_offset_after_long_length() {
++        for seed in 0..16 {
++            let compressed = long_codeword_stream(seed, 40);
++            let expected = miniz_oxide::inflate::decompress_to_vec(&compressed).unwrap();
++
++            let decoded = crate::DeflateDecoder::new(&compressed).decode_deflate().unwrap();
++            assert!(decoded == expected, "DeflateDecoder output mismatch (seed {seed})");
++
++            // Driven like zune-png drives it: `reset_position()` before each new chunk.
++            for chunk_size in [compressed.len(), 100] {
++                let mut decoder = StreamingDecoder::new();
++                let mut out = vec![0u8; expected.len()];
++                let mut start = 0;
++                let decoded = loop {
++                    let end = (start + chunk_size).min(compressed.len());
++                    let is_final = end == compressed.len();
++                    decoder.reset_position();
++                    match decoder.decode_chunk(&compressed[start..end], is_final, &mut out) {
++                        DecodeStatus::NeedsMoreInput if !is_final => start = end,
++                        DecodeStatus::Finished => break decoder.current_dest_offset(),
++                        DecodeStatus::Error(e) => panic!("seed {seed}, chunk {chunk_size}: {e:?}"),
++                        _ => panic!("seed {seed}, chunk {chunk_size}: unexpected status")
++                    }
++                };
++                assert_eq!(decoded, expected.len(), "seed {seed}, chunk {chunk_size}");
++                assert!(out == expected, "seed {seed}, chunk {chunk_size}: output differs");
++            }
++        }
++    }
+ }
+ 
+ /// One-shot [`crate::DeflateDecoder`] tests for the stored/uncompressed-block output

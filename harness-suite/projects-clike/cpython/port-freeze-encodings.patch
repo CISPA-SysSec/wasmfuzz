@@ -1,0 +1,81 @@
+diff --git a/Makefile.pre.in b/Makefile.pre.in
+index f1b5eb3bba..cc6101bd0b 100644
+--- a/Makefile.pre.in
++++ b/Makefile.pre.in
+@@ -1728,6 +1728,9 @@ FROZEN_FILES_IN = \
+ 		Lib/_pybuiltins.py \
+ 		Lib/abc.py \
+ 		Lib/codecs.py \
++		Lib/encodings/__init__.py \
++		Lib/encodings/aliases.py \
++		Lib/encodings/utf_8.py \
+ 		Lib/io.py \
+ 		Lib/_collections_abc.py \
+ 		Lib/_sitebuiltins.py \
+@@ -1755,6 +1758,9 @@ FROZEN_FILES_OUT = \
+ 		Python/frozen_modules/builtins.h \
+ 		Python/frozen_modules/abc.h \
+ 		Python/frozen_modules/codecs.h \
++		Python/frozen_modules/encodings.h \
++		Python/frozen_modules/encodings.aliases.h \
++		Python/frozen_modules/encodings.utf_8.h \
+ 		Python/frozen_modules/io.h \
+ 		Python/frozen_modules/_collections_abc.h \
+ 		Python/frozen_modules/_sitebuiltins.h \
+@@ -1807,6 +1813,15 @@ Python/frozen_modules/abc.h: Lib/abc.py $(FREEZE_MODULE_DEPS)
+ Python/frozen_modules/codecs.h: Lib/codecs.py $(FREEZE_MODULE_DEPS)
+ 	$(FREEZE_MODULE) codecs $(srcdir)/Lib/codecs.py Python/frozen_modules/codecs.h
+ 
++Python/frozen_modules/encodings.h: Lib/encodings/__init__.py $(FREEZE_MODULE_DEPS)
++	$(FREEZE_MODULE) encodings $(srcdir)/Lib/encodings/__init__.py Python/frozen_modules/encodings.h
++
++Python/frozen_modules/encodings.aliases.h: Lib/encodings/aliases.py $(FREEZE_MODULE_DEPS)
++	$(FREEZE_MODULE) encodings.aliases $(srcdir)/Lib/encodings/aliases.py Python/frozen_modules/encodings.aliases.h
++
++Python/frozen_modules/encodings.utf_8.h: Lib/encodings/utf_8.py $(FREEZE_MODULE_DEPS)
++	$(FREEZE_MODULE) encodings.utf_8 $(srcdir)/Lib/encodings/utf_8.py Python/frozen_modules/encodings.utf_8.h
++
+ Python/frozen_modules/io.h: Lib/io.py $(FREEZE_MODULE_DEPS)
+ 	$(FREEZE_MODULE) io $(srcdir)/Lib/io.py Python/frozen_modules/io.h
+ 
+diff --git a/Python/frozen.c b/Python/frozen.c
+index 1f92ea01dc..933418a9f5 100644
+--- a/Python/frozen.c
++++ b/Python/frozen.c
+@@ -47,6 +47,9 @@
+ #include "frozen_modules/builtins.h"
+ #include "frozen_modules/abc.h"
+ #include "frozen_modules/codecs.h"
++#include "frozen_modules/encodings.h"
++#include "frozen_modules/encodings.aliases.h"
++#include "frozen_modules/encodings.utf_8.h"
+ #include "frozen_modules/io.h"
+ #include "frozen_modules/_collections_abc.h"
+ #include "frozen_modules/_sitebuiltins.h"
+@@ -79,6 +82,9 @@ static const struct _frozen stdlib_modules[] = {
+     /* stdlib - startup, without site (python -S) */
+     {"abc", _Py_M__abc, (int)sizeof(_Py_M__abc), false},
+     {"codecs", _Py_M__codecs, (int)sizeof(_Py_M__codecs), false},
++    {"encodings", _Py_M__encodings, (int)sizeof(_Py_M__encodings), true},
++    {"encodings.aliases", _Py_M__encodings_aliases, (int)sizeof(_Py_M__encodings_aliases), false},
++    {"encodings.utf_8", _Py_M__encodings_utf_8, (int)sizeof(_Py_M__encodings_utf_8), false},
+     {"io", _Py_M__io, (int)sizeof(_Py_M__io), false},
+ 
+     /* stdlib - startup, with site */
+diff --git a/Tools/build/freeze_modules.py b/Tools/build/freeze_modules.py
+index 8c817daec0..8998b276a6 100644
+--- a/Tools/build/freeze_modules.py
++++ b/Tools/build/freeze_modules.py
+@@ -57,9 +57,9 @@
+         'codecs',
+         # gh-148750: Partially freezing encodings causes import errors of
+         # submodules when using a zipped standard library.
+-        #'<encodings>',
+-        #'encodings.aliases',
+-        #'encodings.utf_8',
++        '<encodings>',
++        'encodings.aliases',
++        'encodings.utf_8',
+         #'encodings._win_cp_codecs',
+         #'encodings._iconv_codecs',
+         'io',

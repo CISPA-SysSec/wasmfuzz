@@ -1,0 +1,101 @@
+zune-jpeg: keep the multi-scan baseline mode when a later component scan resumes
+
+`decode_mcu_ycbcr_baseline_inner` (mcu.rs) decides between row-by-row output
+and buffering every component scan for the whole image (multi-SOS images
+whose first scan lacks some components, #277) from `self.num_scans`, the
+component count of the current SOS. `decode_into` restores the SOS
+parameters of the scan the checkpoint was saved in, so an incremental decode
+that resumed inside a later scan listing all components took the row-by-row
+path: it dropped the buffered planes of the earlier scans and rendered from
+the current scan alone ("incremental pixels diverge from one-shot decode",
+e.g. a constant third channel). Decide from the first SOS of the image
+(`ScanDecodeState::sos_snapshot`, new helper
+`first_scan_has_all_components`); one-shot decodes are unchanged. This was
+the cause of 38 of the 40 incremental/one-shot mismatches that remained after
+the other incremental fixes, across all their messages ("Unknown marker in
+bit stream", "Unexpected marker ... at restart boundary", "SOS after a
+baseline scan that already had all components", "Bad Huffman Code", "AC
+coefficient run past the end of the block", scan exhausted). Includes a
+regression test (tests/incremental_resume.rs).
+
+Not fixed upstream as of zune-image 2cdbbf5.
+Upstream: open #506 (recover sequential component scans, "used the wrong
+scan geometry") reworks the same multi-scan path; no issue for the resume.
+
+diff --git a/crates/zune-jpeg/src/decoder.rs b/crates/zune-jpeg/src/decoder.rs
+index ef514de6..c685741b 100644
+--- a/crates/zune-jpeg/src/decoder.rs
++++ b/crates/zune-jpeg/src/decoder.rs
+@@ -1967,6 +1967,19 @@ where
+         })
+     }
+ 
++    /// Whether the first scan of the image carries every component, i.e. the
++    /// baseline image is decoded row by row rather than buffered until all
++    /// component scans are in. Resuming from a checkpoint in a later scan
++    /// restores that scan's SOS parameters, so the current `num_scans` does not
++    /// answer this.
++    pub(crate) fn first_scan_has_all_components(&self) -> bool {
++        let num_scans = self
++            .scan_state
++            .as_deref()
++            .map_or(self.num_scans, |state| state.sos_snapshot.num_scans);
++        usize::from(num_scans) == self.components.len()
++    }
++
+     pub(crate) fn baseline_scans_seen(&self) -> usize {
+         self.scan_state.as_deref().map_or(0, |state| state.baseline_scans_seen)
+     }
+diff --git a/crates/zune-jpeg/src/mcu.rs b/crates/zune-jpeg/src/mcu.rs
+index 3042edd9..67e4ef9a 100644
+--- a/crates/zune-jpeg/src/mcu.rs
++++ b/crates/zune-jpeg/src/mcu.rs
+@@ -211,7 +211,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
+         // If all components are contained in the first scan of MCUs, then we can process into
+         // (upsampled) pixels immediately after each MCU, for convenience we use each row of MCUS.
+         // Otherwise, we must first wait until following SOS provide the remaining components.
+-        let all_components_in_first_scan = usize::from(self.num_scans) == self.components.len();
++        let all_components_in_first_scan = self.first_scan_has_all_components();
+         if self.expects_dnl && !all_components_in_first_scan {
+             return Err(DecodeErrors::FormatStatic(
+                 "baseline multi-scan JPEG with DNL is not supported",
+diff --git a/crates/zune-jpeg/tests/incremental_resume.rs b/crates/zune-jpeg/tests/incremental_resume.rs
+index 3f0d142a..bec5f0f7 100644
+--- a/crates/zune-jpeg/tests/incremental_resume.rs
++++ b/crates/zune-jpeg/tests/incremental_resume.rs
+@@ -251,3 +251,35 @@ fn row_cut_short_by_marker_does_not_keep_suspended_blocks() {
+         assert_chunked_matches_oneshot(MARKER_INSIDE_MCU_ROW, chunk);
+     }
+ }
++
++/// Four components; the first scan carries only one of them, the second all
++/// four. A one-shot decode buffers the component scans for the whole image.
++/// Resuming from a checkpoint in the second scan took that scan's component
++/// count for the first scan's and switched to row-by-row output, dropping the
++/// first scan's samples.
++const RESUME_IN_LATER_COMPONENT_SCAN: &[u8; 264] = &[
++    0xff, 0xd8, 0xff, 0x6f, 0x00, 0x06, 0x54, 0xfd, 0x29, 0x61, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x11,
++    0x00, 0x02, 0x61, 0x61, 0x7b, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x01, 0x61, 0x61, 0x61, 0x5f, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x9e, 0x61, 0x61, 0x61, 0x61, 0x4f, 0x61, 0x61, 0x61, 0x61, 0x01, 0xff,
++    0xc0, 0x00, 0x14, 0x08, 0x00, 0x02, 0x00, 0x08, 0x04, 0x01, 0x11, 0x00, 0x02, 0x12, 0x00, 0x03,
++    0x12, 0x00, 0x00, 0x12, 0x00, 0xff, 0xe0, 0x00, 0x09, 0x41, 0x56, 0x49, 0x31, 0x00, 0x00, 0x00,
++    0xff, 0xe1, 0x00, 0x09, 0x45, 0x92, 0x00, 0x84, 0xff, 0x00, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01,
++    0x00, 0x01, 0x01, 0x16, 0x61, 0x61, 0x61, 0x61, 0x61, 0x62, 0x61, 0x61, 0x61, 0x61, 0x61, 0x78,
++    0x78, 0x86, 0x64, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x4c, 0x45, 0x00, 0x0f, 0xff, 0xda, 0x00, 0x0e, 0x04, 0x01, 0x00, 0x02, 0x00, 0x03,
++    0x11, 0x00, 0x11, 0x25, 0x08, 0x86, 0x3f, 0x00, 0x28, 0x10, 0x00, 0xf4, 0xf4, 0xf4, 0x40, 0x00,
++    0xc2, 0x01, 0xef, 0x7e, 0xff, 0xd9, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x10, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x5d, 0x61, 0x63, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x01, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x6a, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x01, 0x61, 0x61, 0x61,
++];
++
++#[test]
++fn resume_in_later_component_scan_keeps_buffered_mode() {
++    for chunk in [1, 4, 8, 16] {
++        assert_chunked_matches_oneshot(RESUME_IN_LATER_COMPONENT_SCAN, chunk);
++    }
++}

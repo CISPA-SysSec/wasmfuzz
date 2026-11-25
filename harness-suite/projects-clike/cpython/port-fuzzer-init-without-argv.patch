@@ -1,0 +1,19 @@
+diff --git a/Modules/_xxtestfuzz/fuzzer.c b/Modules/_xxtestfuzz/fuzzer.c
+index 8c2d0e93cd..26f5a7b03a 100644
+--- a/Modules/_xxtestfuzz/fuzzer.c
++++ b/Modules/_xxtestfuzz/fuzzer.c
+@@ -607,9 +607,11 @@ int LLVMFuzzerInitialize(int *argc, char ***argv) {
+      * now that we fall back to the _pylong module for large values. */
+     config.int_max_str_digits = 8086;
+     PyStatus status;
+-    status = PyConfig_SetBytesString(&config, &config.program_name, *argv[0]);
+-    if (PyStatus_Exception(status)) {
+-        goto fail;
++    if (argv != NULL && *argv != NULL && (*argv)[0] != NULL) {
++        status = PyConfig_SetBytesString(&config, &config.program_name, (*argv)[0]);
++        if (PyStatus_Exception(status)) {
++            goto fail;
++        }
+     }
+ 
+     status = Py_InitializeFromConfig(&config);

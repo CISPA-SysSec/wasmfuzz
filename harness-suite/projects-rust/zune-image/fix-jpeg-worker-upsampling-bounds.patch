@@ -1,3 +1,15 @@
+Subject: [PATCH] jpeg: don't index or unwrap the raw rows in upsample
+
+Defensive: returns an error when `raw_coeff` is shorter than one row for the
+row-below lookup, and skips the first-row carry when `dest_coeff` is shorter
+than the carry buffer. No input found that reaches either at the pin (same
+replay and fuzzing as fix-jpeg-mcu-upsampling-bounds.patch). zune-jpeg
+0.5.16-rc3 on crates.io panics on `raw_coeff[0..stride]` with an image crash
+input, but that input decodes cleanly at the pin. Kept as a cheap guard.
+
+Upstream: both are unchanged at zune-image HEAD (692520a, worker.rs:475 and
+worker.rs:596).
+
 diff --git a/crates/zune-jpeg/src/worker.rs b/crates/zune-jpeg/src/worker.rs
 index ce378e5a..27f66ddb 100644
 --- a/crates/zune-jpeg/src/worker.rs

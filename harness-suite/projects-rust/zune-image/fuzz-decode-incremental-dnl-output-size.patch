@@ -1,0 +1,34 @@
+zune-jpeg fuzz: decode_incremental: compare DNL output at the resolved height
+
+For a DNL image (SOF height 0) `output_buffer_size()` reports the size for
+`max_height` until the scan has resolved the DNL height, so the harness
+allocates its incremental output buffer at max height (4096 rows) while the
+one-shot `decode()` returns exactly width x DNL-height pixels. Once
+`decode_into` succeeds the harness compared the whole max-height buffer and
+asserted on the length ("incremental output length diverges from one-shot
+decode", e.g. 36864 vs 36). Truncate the buffer to `output_buffer_size()`
+after the scan, as the decoder documents for DNL images; for all other
+images the size is unchanged. Harness bug in upstream's fuzz target, not a
+decoder bug (with the truncation all 162 crashers of this kind compare equal).
+
+Not fixed upstream as of zune-image 2cdbbf5.
+Upstream: none found (fuzz target added in #389).
+
+diff --git a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs b/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
+index 29489ff0..fa508f02 100644
+--- a/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
++++ b/crates/zune-jpeg/fuzz/fuzz_targets/decode_incremental.rs
+@@ -236,6 +236,13 @@ fuzz_target!(|data: &[u8]| {
+         return;
+     }
+ 
++    // DNL images (SOF height 0) need an output buffer sized for the
++    // configured maximum height; once the scan resolves the DNL height only
++    // `output_buffer_size()` bytes are image data.
++    if let Some(size) = decoder.output_buffer_size() {
++        out.truncate(size);
++    }
++
+     // Compare against ground truth: one-shot succeeded AND incremental
+     // finished with full data visibility for the scan.
+     if let Some(expected_pixels) = oneshot_pixels {

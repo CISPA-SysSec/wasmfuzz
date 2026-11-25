@@ -1,0 +1,262 @@
+Avoid a division by zero in sctp_cwnd_update_after_packet_dropped().
+
+A PKTDROP chunk reporting a bottleneck bandwidth/RTT that gives bw_avail == 0
+and a current_onq smaller than the path MTU makes seg_onqueue = on_queue / mtu
+zero, and my_portion = (incr * seg_inflight) / seg_onqueue divides by it
+(SIGFPE natively, IntegerDivisionByZero trap on wasm). on_queue is raised to at
+least flight_size first, so seg_onqueue == 0 implies seg_inflight == 0 and our
+portion of the overage is 0.
+
+Includes programs/test_pktdrop_cwnd.c: it plays the peer of a connecting socket
+over AF_CONN and answers the INIT with a HEARTBEAT-ACK echoing a timestamp one
+second old (the RTO then exceeds SCTP_SAT_NETWORK_MIN, so sat_network is set)
+and a middle-box PKTDROP with bottle_bw 0 and current_onq 42. Without the fix
+the test dies with SIGFPE.
+
+Upstream: none found; related open PR sctplab/usrsctp#763 (issue #762) fixes a
+division by zero in sctp_cwnd_update_after_fr().
+
+diff --git a/programs/CMakeLists.txt b/programs/CMakeLists.txt
+index 8da84d8..6b4e17a 100644
+--- a/programs/CMakeLists.txt
++++ b/programs/CMakeLists.txt
+@@ -102,6 +102,7 @@ list(APPEND check_programs
+ 	st_client.c
+ 	test_cookie_case_b.c
+ 	test_libmgmt.c
++	test_pktdrop_cwnd.c
+ 	test_timer.c
+ 	test_tsn_wrap.c
+ 	tsctp.c
+diff --git a/programs/meson.build b/programs/meson.build
+index 99c00ec..b6d9d90 100644
+--- a/programs/meson.build
++++ b/programs/meson.build
+@@ -23,6 +23,7 @@ programs = {
+     'rtcweb': files('rtcweb.c'),
+     'test_cookie_case_b': files('test_cookie_case_b.c'),
+     'test_libmgmt': files('test_libmgmt.c'),
++    'test_pktdrop_cwnd': files('test_pktdrop_cwnd.c'),
+     'test_timer': files('test_timer.c'),
+     'test_tsn_wrap': files('test_tsn_wrap.c'),
+     'tsctp': files('tsctp.c'),
+diff --git a/programs/test_pktdrop_cwnd.c b/programs/test_pktdrop_cwnd.c
+new file mode 100644
+index 0000000..8ede30a
+--- /dev/null
++++ b/programs/test_pktdrop_cwnd.c
+@@ -0,0 +1,193 @@
++/*
++ * Copyright (C) 2026 Florian Bauckholt
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 3. Neither the name of the project nor the names of its contributors
++ *    may be used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.	IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++/*
++ * Regression test for a division by zero in
++ * sctp_cwnd_update_after_packet_dropped().
++ *
++ * The test plays the peer of a connecting socket over AF_CONN. It answers
++ * the INIT with a HEARTBEAT-ACK whose echoed timestamp is one second old,
++ * which makes the RTO exceed SCTP_SAT_NETWORK_MIN (sat_network), followed by
++ * a PKTDROP chunk from a middle box reporting no bottleneck bandwidth and
++ * less than one MTU on the queue. Without the fix, seg_onqueue is 0 and the
++ * process dies with SIGFPE.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <string.h>
++#include <errno.h>
++#ifndef _WIN32
++#include <sys/time.h>
++#include <arpa/inet.h>
++#endif
++#include <usrsctp.h>
++
++#define LOCAL_PORT 5000
++#define PEER_PORT 5001
++
++#if defined(_MSC_VER)
++#pragma pack(push, 1)
++#define PACKED
++#else
++#define PACKED __attribute__((packed))
++#endif
++
++struct common_header {
++	uint16_t src_port;
++	uint16_t dst_port;
++	uint32_t vtag;
++	uint32_t crc32c;
++} PACKED;
++
++/* struct sctp_heartbeat_chunk, the hb_info is echoed back as it was sent */
++struct heartbeat_ack {
++	uint8_t type;
++	uint8_t flags;
++	uint16_t length;
++	uint16_t param_type;
++	uint16_t param_length;
++	time_t time_value_1;
++	uint32_t time_value_2;
++	uint32_t random_value1;
++	uint32_t random_value2;
++	uint8_t addr_family;
++	uint8_t addr_len;
++	uint8_t padding[2];
++	char address[16];
++} PACKED;
++
++struct pktdrop {
++	uint8_t type;
++	uint8_t flags;
++	uint16_t length;
++	uint32_t bottle_bw;
++	uint32_t current_onq;
++	uint16_t trunc_len;
++	uint16_t reserved;
++} PACKED;
++
++struct packet {
++	struct common_header hdr;
++	struct heartbeat_ack hb;
++	struct pktdrop pd;
++} PACKED;
++
++#if defined(_MSC_VER)
++#pragma pack(pop)
++#endif
++
++static uint32_t peer_vtag;
++
++static int
++conn_output(void *addr, void *buf, size_t length, uint8_t tos, uint8_t set_df)
++{
++	const uint8_t *p = buf;
++
++	/* Remember the initiate tag of our INIT. */
++	if (length >= 20 && p[12] == 0x01) {
++		memcpy(&peer_vtag, p + 16, sizeof(peer_vtag));
++	}
++	return (0);
++}
++
++int
++main(void)
++{
++	struct socket *sock;
++	struct sockaddr_conn sconn;
++	struct packet pkt;
++	struct timeval now;
++	void *conn_addr = (void *)1;
++
++	usrsctp_init_nothreads(0, conn_output, NULL);
++	usrsctp_sysctl_set_sctp_pktdrop_enable(1);
++	usrsctp_register_address(conn_addr);
++
++	if ((sock = usrsctp_socket(AF_CONN, SOCK_STREAM, IPPROTO_SCTP, NULL, NULL, 0, NULL)) == NULL) {
++		perror("usrsctp_socket");
++		return (1);
++	}
++	usrsctp_set_non_blocking(sock, 1);
++	memset(&sconn, 0, sizeof(sconn));
++	sconn.sconn_family = AF_CONN;
++#ifdef HAVE_SCONN_LEN
++	sconn.sconn_len = sizeof(sconn);
++#endif
++	sconn.sconn_port = htons(LOCAL_PORT);
++	sconn.sconn_addr = conn_addr;
++	if (usrsctp_bind(sock, (struct sockaddr *)&sconn, sizeof(sconn)) < 0) {
++		perror("usrsctp_bind");
++		return (1);
++	}
++	sconn.sconn_port = htons(PEER_PORT);
++	if (usrsctp_connect(sock, (struct sockaddr *)&sconn, sizeof(sconn)) < 0 &&
++	    errno != EINPROGRESS) {
++		perror("usrsctp_connect");
++		return (1);
++	}
++	if (peer_vtag == 0) {
++		fprintf(stderr, "no INIT sent\n");
++		return (1);
++	}
++
++	memset(&pkt, 0, sizeof(pkt));
++	pkt.hdr.src_port = htons(PEER_PORT);
++	pkt.hdr.dst_port = htons(LOCAL_PORT);
++	pkt.hdr.vtag = peer_vtag;
++
++	/* A heartbeat sent one second ago: RTO > SCTP_SAT_NETWORK_MIN. */
++	gettimeofday(&now, NULL);
++	pkt.hb.type = 0x05;
++	pkt.hb.length = htons(sizeof(pkt.hb));
++	pkt.hb.param_type = htons(0x0001);
++	pkt.hb.param_length = htons(sizeof(pkt.hb) - 4);
++	pkt.hb.time_value_1 = now.tv_sec - 1;
++	pkt.hb.time_value_2 = (uint32_t)now.tv_usec;
++	pkt.hb.addr_family = AF_CONN;
++	pkt.hb.addr_len = sizeof(struct sockaddr_conn);
++	memcpy(pkt.hb.address, &conn_addr, sizeof(conn_addr));
++
++	/* A middle box reports no bandwidth and less than one MTU queued. */
++	pkt.pd.type = 0x81;
++	pkt.pd.flags = 0x01;	/* SCTP_FROM_MIDDLE_BOX */
++	pkt.pd.length = htons(sizeof(pkt.pd));
++	pkt.pd.bottle_bw = htonl(0);
++	pkt.pd.current_onq = htonl(42);
++
++	pkt.hdr.crc32c = usrsctp_crc32c(&pkt, sizeof(pkt));
++	usrsctp_conninput(conn_addr, &pkt, sizeof(pkt), 0);
++
++	usrsctp_close(sock);
++	while (usrsctp_finish() != 0) {
++		usrsctp_handle_timers(10);
++	}
++	printf("PKTDROP handled\n");
++	return (0);
++}
+diff --git a/usrsctplib/netinet/sctp_cc_functions.c b/usrsctplib/netinet/sctp_cc_functions.c
+index 77193d8..843905c 100755
+--- a/usrsctplib/netinet/sctp_cc_functions.c
++++ b/usrsctplib/netinet/sctp_cc_functions.c
+@@ -1286,7 +1286,15 @@ sctp_cwnd_update_after_packet_dropped(struct sctp_tcb *stcb,
+ 		/* Now how much of that is mine? */
+ 		seg_inflight = net->flight_size / net->mtu;
+ 		seg_onqueue = *on_queue / net->mtu;
+-		my_portion = (incr * seg_inflight) / seg_onqueue;
++		/*
++		 * on_queue >= flight_size, so less than one segment on the
++		 * queue means none of it is ours.
++		 */
++		if (seg_onqueue > 0) {
++			my_portion = (incr * seg_inflight) / seg_onqueue;
++		} else {
++			my_portion = 0;
++		}
+ 
+ 		/* Have I made an adjustment already */
+ 		if (net->cwnd > net->flight_size) {

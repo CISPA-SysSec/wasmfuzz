@@ -1,38 +1,31 @@
-Subject: [PATCH] fuzz: cap decode output allocation sizes
+Subject: [PATCH] fuzz: keep decode memory bounded
+
+fuzz_decode() keeps every decoded frame so that decode_diff can compare them,
+so the memory use of the other targets grows with the number of frames: an
+animation of many small frames of a large image exhausts the 32-bit guest.
+Add FuzzConfig::keep_frames (default true) and turn it off in decode and
+decode_progressive, which drop each frame once it is complete. decode_header
+keeps the sample limit and only scans frames.
 ---
 diff --git a/jxl/fuzz/fuzz_targets/decode.rs b/jxl/fuzz/fuzz_targets/decode.rs
-index e4e5cb4..3774e99 100644
+index d55d131..f6167e0 100644
 --- a/jxl/fuzz/fuzz_targets/decode.rs
 +++ b/jxl/fuzz/fuzz_targets/decode.rs
-@@ -39,12 +39,24 @@ fn fuzz_decode(mut data: &[u8]) -> Result<(), ()> {
-             as_complete(decoder_with_image_info.process(&mut data, None))?;
-         let frame_header = decoder_with_frame_info.frame_header();
-         let frame_size = frame_header.size;
-+        let frame_pixels = frame_size.0.checked_mul(frame_size.1).ok_or(())?;
-+        const MAX_FRAME_PIXELS: usize = 1 << 22;
-+        if frame_pixels >= MAX_FRAME_PIXELS {
-+            return Err(());
-+        }
-+
-+        let row_samples = frame_size.0.checked_mul(samples_per_pixel).ok_or(())?;
-+        let output_samples = row_samples.checked_mul(frame_size.1).ok_or(())?;
-+        const MAX_OUTPUT_SAMPLES: usize = 1 << 22;
-+        if output_samples >= MAX_OUTPUT_SAMPLES {
-+            return Err(());
-+        }
+@@ -8,5 +8,11 @@ use jxl_fuzz::{FuzzConfig, fuzz_decode};
+ use libfuzzer_sys::fuzz_target;
  
-         let mut outputs =
--            vec![Image::<f32>::new((frame_size.0 * samples_per_pixel, frame_size.1)).unwrap()];
-+            vec![Image::<f32>::new((row_samples, frame_size.1)).map_err(|_| ())?];
- 
-         for _ in 0..extra_channels {
--            outputs.push(Image::<f32>::new(frame_size).unwrap());
-+            outputs.push(Image::<f32>::new(frame_size).map_err(|_| ())?);
-         }
- 
-         let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
+ fuzz_target!(|data: &[u8]| {
+-    let _ = fuzz_decode(data, FuzzConfig::default());
++    let _ = fuzz_decode(
++        data,
++        FuzzConfig {
++            keep_frames: false,
++            ..Default::default()
++        },
++    );
+ });
 diff --git a/jxl/fuzz/fuzz_targets/decode_header.rs b/jxl/fuzz/fuzz_targets/decode_header.rs
-index f449f22..7bdd8ee 100644
+index 9887596..5ba79dc 100644
 --- a/jxl/fuzz/fuzz_targets/decode_header.rs
 +++ b/jxl/fuzz/fuzz_targets/decode_header.rs
 @@ -9,7 +9,9 @@ use libfuzzer_sys::fuzz_target;
@@ -43,37 +36,52 @@ index f449f22..7bdd8ee 100644
 +    let mut decoder_options = JxlDecoderOptions::default();
 +    decoder_options.sample_limit = Some(1 << 22);
 +    decoder_options.scan_frames_only = true;
-     let initialized_decoder = JxlDecoder::<states::Initialized>::new(decoder_options);
-     let _ = initialized_decoder.process(&mut data, None);
+     let mut decoder = JxlDecoder::new(decoder_options);
+     let _ = decoder.process(&mut data, None, None);
  });
-diff --git a/jxl/fuzz/fuzz_targets/decode_parallel.rs b/jxl/fuzz/fuzz_targets/decode_parallel.rs
-index a37f9c1..db9053b 100644
---- a/jxl/fuzz/fuzz_targets/decode_parallel.rs
-+++ b/jxl/fuzz/fuzz_targets/decode_parallel.rs
-@@ -109,12 +109,24 @@ fn fuzz_decode_parallel(mut data: &[u8]) -> Result<(), ()> {
-             as_complete(decoder_with_image_info.process(&mut data, reborrow(&mut runner_opt)))?;
-         let frame_header = decoder_with_frame_info.frame_header();
-         let frame_size = frame_header.size;
-+        let frame_pixels = frame_size.0.checked_mul(frame_size.1).ok_or(())?;
-+        const MAX_FRAME_PIXELS: usize = 1 << 22;
-+        if frame_pixels >= MAX_FRAME_PIXELS {
-+            return Err(());
-+        }
-+
-+        let row_samples = frame_size.0.checked_mul(samples_per_pixel).ok_or(())?;
-+        let output_samples = row_samples.checked_mul(frame_size.1).ok_or(())?;
-+        const MAX_OUTPUT_SAMPLES: usize = 1 << 22;
-+        if output_samples >= MAX_OUTPUT_SAMPLES {
-+            return Err(());
-+        }
+diff --git a/jxl/fuzz/fuzz_targets/decode_progressive.rs b/jxl/fuzz/fuzz_targets/decode_progressive.rs
+index 1e2c362..4955688 100644
+--- a/jxl/fuzz/fuzz_targets/decode_progressive.rs
++++ b/jxl/fuzz/fuzz_targets/decode_progressive.rs
+@@ -13,6 +13,7 @@ fuzz_target!(|data: &[u8]| {
+         FuzzConfig {
+             progressive: true,
+             flush_intermediate: true,
++            keep_frames: false,
+             ..Default::default()
+         },
+     );
+diff --git a/jxl/fuzz/src/lib.rs b/jxl/fuzz/src/lib.rs
+index 7208dac..4f6becc 100644
+--- a/jxl/fuzz/src/lib.rs
++++ b/jxl/fuzz/src/lib.rs
+@@ -78,6 +78,9 @@ pub struct FuzzConfig {
+     pub num_threads: usize,
+     pub sample_limit: Option<usize>,
+     pub flush_intermediate: bool,
++    /// Keep the decoded frames and return them. Without this, each frame's buffers are dropped
++    /// once it is complete, so memory use does not grow with the number of frames.
++    pub keep_frames: bool,
+ }
  
-         let mut outputs =
--            vec![Image::<f32>::new((frame_size.0 * samples_per_pixel, frame_size.1)).unwrap()];
-+            vec![Image::<f32>::new((row_samples, frame_size.1)).map_err(|_| ())?];
- 
-         for _ in 0..extra_channels {
--            outputs.push(Image::<f32>::new(frame_size).unwrap());
-+            outputs.push(Image::<f32>::new(frame_size).map_err(|_| ())?);
+ impl Default for FuzzConfig {
+@@ -88,6 +91,7 @@ impl Default for FuzzConfig {
+             num_threads: 2,
+             sample_limit: Some(1 << 22),
+             flush_intermediate: false,
++            keep_frames: true,
          }
- 
-         let mut output_bufs: Vec<JxlOutputBuffer<'_>> = outputs
+     }
+ }
+@@ -193,7 +197,10 @@ pub fn fuzz_decode(data: &[u8], config: FuzzConfig) -> Result<Vec<Vec<Image<f32>
+             }
+             Event::FrameHeader => {}
+             Event::FrameComplete { has_more_frames } => {
+-                all_frames.push(outputs.take().unwrap());
++                let frame = outputs.take().unwrap();
++                if config.keep_frames {
++                    all_frames.push(frame);
++                }
+                 if has_more_frames {
+                     outputs = Some(create_frame_buffers(&decoder)?);
+                 }

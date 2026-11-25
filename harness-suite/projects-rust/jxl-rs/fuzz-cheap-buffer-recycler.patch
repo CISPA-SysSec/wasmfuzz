@@ -1,0 +1,120 @@
+Subject: [PATCH] image: make buffer recycler setup cheap
+
+Since e334652 every JxlDecoder::new() fills 768 recycler buckets keyed by
+SipHash, which costs more than decoding a typical fuzz input and halved the
+exec rate. Build the buckets on first use and hash the (usize, usize) keys
+with a multiplicative hash into a presized map.
+---
+diff --git a/jxl/src/image/recycler.rs b/jxl/src/image/recycler.rs
+index d9f108c..dc325a2 100644
+--- a/jxl/src/image/recycler.rs
++++ b/jxl/src/image/recycler.rs
+@@ -4,6 +4,8 @@
+ // license that can be found in the LICENSE file.
+ 
+ use std::collections::HashMap;
++use std::hash::{BuildHasherDefault, Hasher};
++use std::sync::OnceLock;
+ 
+ use crate::error::{Error, Result};
+ use crate::frame::VarDctBuffers;
+@@ -12,12 +14,40 @@ use crate::image::{Image, ImageDataType, OwnedRawImage};
+ use crate::util::PerThreadStorage;
+ use crate::util::sync::Mutex;
+ 
++/// Multiplicative hash for the `(usize, usize)` bucket keys; SipHash dominates the setup cost.
++#[derive(Default)]
++struct SizeHasher(u64);
++
++impl Hasher for SizeHasher {
++    fn write(&mut self, bytes: &[u8]) {
++        for &b in bytes {
++            self.write_u64(b as u64);
++        }
++    }
++
++    fn write_u64(&mut self, n: u64) {
++        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x517c_c1b7_2722_0a95);
++    }
++
++    fn write_usize(&mut self, n: usize) {
++        self.write_u64(n as u64);
++    }
++
++    fn finish(&self) -> u64 {
++        self.0
++    }
++}
++
++type Buckets = HashMap<(usize, usize), BufferBucket, BuildHasherDefault<SizeHasher>>;
++
+ struct BufferBucket {
+     images: Mutex<Vec<OwnedRawImage>>,
+ }
+ 
+ pub(crate) struct BufferRecycler {
+-    buckets: HashMap<(usize, usize), BufferBucket>,
++    // Created on first use: building the buckets is expensive compared to decoding a small or
++    // invalid image, and many decoders never render anything.
++    buckets: OnceLock<Buckets>,
+     pub(crate) vardct_buffers: PerThreadStorage<VarDctBuffers>,
+     pub(crate) modular_scratch: PerThreadStorage<ScratchSpace>,
+ }
+@@ -30,13 +60,25 @@ impl Default for BufferRecycler {
+ 
+ impl BufferRecycler {
+     pub(crate) fn new() -> Self {
++        Self {
++            buckets: OnceLock::new(),
++            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
++            modular_scratch: PerThreadStorage::new(ScratchSpace::new),
++        }
++    }
++
++    fn buckets(&self) -> &Buckets {
++        self.buckets.get_or_init(Self::make_buckets)
++    }
++
++    fn make_buckets() -> Buckets {
+         let group_dims = [128, 256, 512, 1024];
+         let ty_sizes = [2, 4];
+         let group_shifts = [0, 1, 2, 3];
+         let modular_small_buffer_side = 4;
+         // actually scaled by 4.
+         let small_pipeline_buffer_sides = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+-        let mut buckets = HashMap::new();
++        let mut buckets = Buckets::with_capacity_and_hasher(768, Default::default());
+         let mut add = |x, y| {
+             buckets.entry((x, y)).or_insert(BufferBucket {
+                 images: Mutex::new(vec![]),
+@@ -58,11 +100,7 @@ impl BufferRecycler {
+                 }
+             }
+         }
+-        Self {
+-            buckets,
+-            vardct_buffers: PerThreadStorage::new(VarDctBuffers::new),
+-            modular_scratch: PerThreadStorage::new(ScratchSpace::new),
+-        }
++        buckets
+     }
+ 
+     pub(crate) fn get_buffer<T: ImageDataType>(&self, size: (usize, usize)) -> Result<Image<T>> {
+@@ -79,7 +117,7 @@ impl BufferRecycler {
+         byte_size: (usize, usize),
+         zero_if_recycled: bool,
+     ) -> Result<OwnedRawImage> {
+-        self.buckets
++        self.buckets()
+             .get(&byte_size)
+             .and_then(|x| x.images.lock().unwrap().pop())
+             .map(|mut img| {
+@@ -99,7 +137,7 @@ impl BufferRecycler {
+ 
+     pub(crate) fn recycle_raw_buffer(&self, buffer: OwnedRawImage) {
+         let byte_size = buffer.byte_size();
+-        if let Some(b) = self.buckets.get(&byte_size) {
++        if let Some(b) = self.buckets().get(&byte_size) {
+             b.images.lock().unwrap().push(buffer);
+         }
+     }

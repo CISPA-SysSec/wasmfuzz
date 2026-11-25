@@ -1,0 +1,50 @@
+Upstream: open issue python/cpython#150001 (by StanFromIreland, 2026-05-18) reports the same MemoryError-to-SystemError escalation; open PR #150067 (by sandugood, 2026-05-19) checks p->error_indicator in the generated loop rules instead of in _PyPegen_fill_token. #153437 was closed as its duplicate.
+Drop this patch once #150067 or another fix for #150001 lands.
+
+diff --git a/Lib/test/test_compile.py b/Lib/test/test_compile.py
+index df766387dd..07464c2461 100644
+--- a/Lib/test/test_compile.py
++++ b/Lib/test/test_compile.py
+@@ -797,6 +797,25 @@ def check_limit(prefix, repeated, mode="single"):
+         # check_limit("a", " if a else a")
+         # check_limit("if a: pass", "\nelif a: pass", mode="exec")
+ 
++    @support.cpython_only
++    def test_parser_stack_overflow_in_fstring_middle(self):
++        # A parser stack overflow inside an f-string or t-string middle used
++        # to leave the MemoryError pending while the parser fetched the next
++        # token; the tokenizer's invalid-escape SyntaxWarning then turned it
++        # into a SystemError. The depths bracket MAXSTACK (6000, 4000 on WASI).
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore", SyntaxWarning)
++            for maxstack in (4000, 6000):
++                for prefix in "ft":
++                    for depth in range(maxstack - 100, maxstack + 1):
++                        src = "-" * depth + prefix + "'\\{'\n"
++                        try:
++                            compile(src, "<test>", "exec")
++                        except (SyntaxError, MemoryError):
++                            pass
++                        except SystemError as e:
++                            self.fail(f"{prefix}-string at depth {depth}: {e!r}")
++
+     def test_null_terminated(self):
+         # The source code is null-terminated internally, but bytes-like
+         # objects are accepted, which could be not terminated.
+diff --git a/Parser/pegen.c b/Parser/pegen.c
+index edc54c1618..23f89e63d4 100644
+--- a/Parser/pegen.c
++++ b/Parser/pegen.c
+@@ -375,6 +375,12 @@ _PyPegen_atom_fast_path(Parser *p, void *result)
+ int
+ _PyPegen_fill_token(Parser *p)
+ {
++    // A rule that fails with an error pending (e.g. a stack overflow inside a
++    // loop rule) can return to a caller that still asks for the next token.
++    // Tokenizing now could warn or raise on top of the pending exception.
++    if (p->error_indicator) {
++        return -1;
++    }
+     struct token new_token;
+     _PyToken_Init(&new_token);
+     _PyTokenizer_Get(p->tok, &new_token);

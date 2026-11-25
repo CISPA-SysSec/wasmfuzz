@@ -1,0 +1,73 @@
+Subject: [PATCH] fuzz: load the syntect dumps once in cli_default
+
+cli_default built a SyntectAdapter for every input, so each exec spent most
+of its time deserialising the default syntax and theme dumps. Load both once
+from a static constructor and build the adapter per input from a clone of
+the pristine SyntaxSet (Clone leaves the lazy per-syntax context and regex
+caches empty, so every input still starts from a freshly loaded set) and the
+one theme the adapter reads. The rendered HTML is unchanged. Related upstream:
+kivikakk/comrak#247 (closed: build the adapter once) and #330 (open: the
+adapter keeps the whole theme set). No open PR touches this fuzz target.
+Drop this patch if upstream hoists the adapter.
+
+diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
+index 952dcfc..b792dfb 100644
+--- a/fuzz/Cargo.toml
++++ b/fuzz/Cargo.toml
+@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
+ arbitrary = { version = "1", features = ["derive"] }
+ comrak = { path = "..", features = ["arbitrary", "shortcodes", "phoenix_heex", "grid_table"] }
+ fastrand = "2"
++syntect = { version = "5", default-features = false }
+ unicode-width = { version = "0.2", default-features = false }
+ 
+ # Prevent this from interfering with workspaces
+diff --git a/fuzz/fuzz_targets/cli_default.rs b/fuzz/fuzz_targets/cli_default.rs
+index fe534f8..0ad1c5f 100644
+--- a/fuzz/fuzz_targets/cli_default.rs
++++ b/fuzz/fuzz_targets/cli_default.rs
+@@ -1,13 +1,42 @@
+ #![no_main]
+ 
++use std::sync::LazyLock;
++
+ use libfuzzer_sys::fuzz_target;
+ 
+-use comrak::{markdown_to_html_with_plugins, options, plugins::syntect::SyntectAdapter};
++use comrak::{markdown_to_html_with_plugins, options, plugins::syntect::SyntectAdapterBuilder};
++use syntect::highlighting::ThemeSet;
++use syntect::parsing::SyntaxSet;
+ 
+ // Note that we end up fuzzing Syntect here.
+ 
++const THEME: &str = "base16-ocean.dark";
++
++// Loading the default syntax and theme dumps does not depend on the input, so do it once,
++// from a static constructor (before the first input). Highlighting fills lazy per-syntax
++// caches in a SyntaxSet, so every input gets a clone of the pristine set: the clone starts
++// with empty caches, like a freshly loaded set. The adapter only ever reads THEME.
++static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
++static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
++
++#[used]
++#[link_section = ".init_array"]
++static INIT: extern "C" fn() = {
++    extern "C" fn init() {
++        LazyLock::force(&SYNTAX_SET);
++        LazyLock::force(&THEME_SET);
++    }
++    init
++};
++
+ fuzz_target!(|s: &str| {
+-    let adapter = SyntectAdapter::new(Some("base16-ocean.dark"));
++    let adapter = SyntectAdapterBuilder::new()
++        .theme(THEME)
++        .syntax_set(SYNTAX_SET.clone())
++        .theme_set(ThemeSet {
++            themes: [(THEME.to_string(), THEME_SET.themes[THEME].clone())].into(),
++        })
++        .build();
+ 
+     let mut plugins = options::Plugins::default();
+     plugins.render.codefence_syntax_highlighter = Some(&adapter);

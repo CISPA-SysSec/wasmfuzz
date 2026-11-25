@@ -1,8 +1,8 @@
 diff --git a/jxl/fuzz/Cargo.toml b/jxl/fuzz/Cargo.toml
-index b23e03b..d48587a 100644
+index 2d70976..1b6cb79 100644
 --- a/jxl/fuzz/Cargo.toml
 +++ b/jxl/fuzz/Cargo.toml
-@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
+@@ -14,6 +14,7 @@ rand_xorshift = "0.4.0"
  
  [dependencies.jxl]
  path = ".."

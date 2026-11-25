@@ -1,0 +1,50 @@
+diff --git a/Modules/_xxtestfuzz/fuzzer.c b/Modules/_xxtestfuzz/fuzzer.c
+index 26f5a7b03a..107636f31d 100644
+--- a/Modules/_xxtestfuzz/fuzzer.c
++++ b/Modules/_xxtestfuzz/fuzzer.c
+@@ -582,6 +582,35 @@ static int fuzz_pycompile(const char* data, size_t size) {
+     return 0;
+ }
+ 
++/* Fuzz the full compile pipeline on plain source text: the whole input is
++   the module source (no parameter prefix), compiled with `exec` semantics
++   and default flags, so a source-text generator's output reaches the
++   symtable, code generator and flowgraph optimizer unchanged. */
++static int fuzz_pycompile_source(const char* data, size_t size) {
++    if (size > MAX_PYCOMPILE_TEST_SIZE - 1) {
++        return 0;
++    }
++
++    char pycompile_scratch[MAX_PYCOMPILE_TEST_SIZE];
++    memcpy(pycompile_scratch, data, size);
++    pycompile_scratch[size] = '\0';
++
++    PyCompilerFlags flags = _PyCompilerFlags_INIT;
++    PyObject *result = Py_CompileStringExFlags(pycompile_scratch, "<fuzz input>",
++                                               Py_file_input, &flags, -1);
++    if (result == NULL) {
++        if (PyErr_Occurred() && PyErr_ExceptionMatches(PyExc_SystemError)) {
++            PyErr_Print();
++            abort();
++        }
++        PyErr_Clear();
++    } else {
++        Py_DECREF(result);
++    }
++
++    return 0;
++}
++
+ /* Run fuzzer and abort on failure. */
+ static int _run_fuzz(const uint8_t *data, size_t size, int(*fuzzer)(const char* , size_t)) {
+     int rv = fuzzer((const char*) data, size);
+@@ -728,6 +757,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+ #endif
+ #if !defined(_Py_FUZZ_ONE) || defined(_Py_FUZZ_fuzz_pycompile)
+     rv |= _run_fuzz(data, size, fuzz_pycompile);
++#endif
++#if !defined(_Py_FUZZ_ONE) || defined(_Py_FUZZ_fuzz_pycompile_source)
++    rv |= _run_fuzz(data, size, fuzz_pycompile_source);
+ #endif
+   return rv;
+ }

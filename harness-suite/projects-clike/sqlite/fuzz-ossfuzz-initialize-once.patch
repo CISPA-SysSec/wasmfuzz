@@ -1,0 +1,38 @@
+Subject: [PATCH] test/ossfuzz.c: call sqlite3_initialize() in LLVMFuzzerInitialize
+
+LLVMFuzzerTestOneInput() calls sqlite3_initialize() for every input; the
+first call does the one-time setup (sqlite3RegisterBuiltinFunctions(),
+page cache and malloc subsystem init, about 45k wasm instructions) and
+every later call returns at once. So the first input of each process, or
+every input on a fresh instance, pays for it. Run it once from
+LLVMFuzzerInitialize() instead; the per-input call stays and is then
+always the early-out, as it already is in a persistent fuzzer after its
+first input. ossshell.c, which calls LLVMFuzzerTestOneInput() directly,
+is unaffected.
+
+Upstream context: SQLite does not take pull requests; the GitHub mirror
+has no open issue or PR about the fuzzer (checked 2026-11-20).
+
+diff --git a/test/ossfuzz.c b/test/ossfuzz.c
+index 8e80b98ef6..70fa63bd9b 100644
+--- a/test/ossfuzz.c
++++ b/test/ossfuzz.c
+@@ -112,6 +112,18 @@ static int exec_handler(void *pClientData, int argc, char **argv, char **namev){
+   return (p->execCnt--)<=0 || progress_handler(pClientData);
+ }
+ 
++/*
++** Run sqlite3_initialize() once at startup, so that its one-time setup
++** (built-in function registration, page cache and memory allocator
++** initialization) is not part of the first input.
++*/
++int LLVMFuzzerInitialize(int *pArgc, char ***pArgv){
++  (void)pArgc;
++  (void)pArgv;
++  sqlite3_initialize();
++  return 0;
++}
++
+ /*
+ ** Main entry point.  The fuzzer invokes this function with each
+ ** fuzzed input.

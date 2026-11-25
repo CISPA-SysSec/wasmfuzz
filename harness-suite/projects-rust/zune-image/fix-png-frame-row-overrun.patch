@@ -1,0 +1,76 @@
+Subject: [PATCH] zune-png: never post-process a partial output row
+
+The output buffer is sized from the IHDR dimensions, but rows are decoded at the
+fcTL frame width. When the zlib stream carries more frame rows than the frame
+height, the slow (post-processing) path in extract_rows sliced
+`final_out[pos..min(pos + row, len)]`, which panics once pos > len and otherwise
+hands a short row to expand_bits_to_byte / expand_palette_sub_byte /
+post_process_row_direct, which index past it. Take a full row or stop, exactly
+like the fast path already does.
+
+diff --git a/crates/zune-png/src/streaming.rs b/crates/zune-png/src/streaming.rs
+index d25c511..67cacfe 100644
+--- a/crates/zune-png/src/streaming.rs
++++ b/crates/zune-png/src/streaming.rs
+@@ -711,13 +711,22 @@ where
+                     filter_bpp,
+                 )?;
+ 
+-                let f_len = final_out.len();
+-                let dest_slice = &mut final_out
+-                    [*final_out_pos..core::cmp::min(*final_out_pos + out_chunk_size, f_len)];
+-                // Some specific fuzzed inputs
+-                if dest_slice.is_empty() {
++                // The output buffer is sized from the IHDR dimensions while rows are
++                // frame (fcTL) sized, so the stream can carry more (or partial) rows than
++                // fit. Only ever hand a full row to post-processing, like the fast path.
++                let dest_slice = if let Some(slice) = final_out
++                    .get_mut(*final_out_pos..)
++                    .and_then(|rest| rest.get_mut(..out_chunk_size))
++                {
++                    slice
++                } else {
++                    let msg = "ZLIB PNG bigger than image width and height";
++                    if self.options.strict_mode() {
++                        return Err(PngDecodeErrors::GenericStatic(msg));
++                    }
++                    warn!("{}", msg);
+                     return Ok(ProcessingStatus::Stop);
+-                }
++                };
+ 
+                 self.post_process_row_direct(curr_row, dest_slice, width)?;
+             } else {
+diff --git a/crates/zune-png/tests/test_fctl_row_overrun.rs b/crates/zune-png/tests/test_fctl_row_overrun.rs
+new file mode 100644
+index 0000000..7bf4106
+--- /dev/null
++++ b/crates/zune-png/tests/test_fctl_row_overrun.rs
+@@ -0,0 +1,27 @@
++//! Regression test: an image whose fcTL frame is narrower than IHDR used to panic
++//! with an out-of-bounds slice when the zlib stream carried more frame rows than
++//! the IHDR-sized output buffer holds (expand_bits_to_byte / post_process_row_direct).
++
++use zune_core::bytestream::ZCursor;
++use zune_core::options::DecoderOptions;
++
++// IHDR 5x1 4-bit gray, fcTL 3x1 at (2, 0), IDAT inflating to several frame rows.
++const NARROW_FCTL: &[u8] = &[
++    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
++    0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x01,
++    0x04, 0x00, 0x00, 0x02, 0x00, 0x3c, 0x53, 0xb4, 0xff, 0x00, 0x00, 0x00,
++    0x1a, 0x66, 0x63, 0x54, 0x4c, 0xd2, 0x4c, 0x48, 0x66, 0x00, 0x00, 0x00,
++    0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
++    0x00, 0x9b, 0x11, 0x6b, 0x0e, 0x01, 0x00, 0x24, 0x7d, 0xbc, 0x37, 0x46,
++    0x8d, 0xea, 0xce, 0x49, 0x44, 0x41, 0x54, 0xe9, 0x80, 0x63, 0x20, 0x08,
++    0x00, 0x09, 0x26, 0x80, 0xd4, 0x03, 0xe8, 0x3c, 0xe0, 0x05, 0x67, 0x7e,
++    0x20, 0xd8, 0xd9, 0x24, 0x38, 0x5d, 0xf4, 0x21, 0x73, 0x8b, 0x9b, 0x8c,
++    0x36, 0x07, 0x07, 0xfc, 0x84, 0xa6
++];
++
++#[test]
++fn narrow_fctl_extra_rows_do_not_panic() {
++    let opts = DecoderOptions::new_fast().inflate_set_limit(64 * 1024 * 1024);
++    let mut decoder = zune_png::PngDecoder::new_with_options(ZCursor::new(NARROW_FCTL), opts);
++    let _ = decoder.decode();
++}

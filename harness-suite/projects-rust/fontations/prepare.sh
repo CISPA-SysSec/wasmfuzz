@@ -1,2 +1,3 @@
 set -e
-git clone-rev.sh https://github.com/googlefonts/fontations "$PROJECT/repo" b87ae606c2250823d58aeb38b4aaaf869d463eed
+git clone-rev.sh https://github.com/googlefonts/fontations "$PROJECT/repo" 4f115482ebf24d1989e2c4446bf877d4812a268b
+git -C "$PROJECT/repo" apply "$PROJECT/fix-varc-region-count-alloc.patch"

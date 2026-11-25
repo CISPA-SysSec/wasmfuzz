@@ -1,8 +1,17 @@
+Subject: [PATCH] modular: handle empty inputs in squeeze steps
+
+The squeeze steps unwrapped the first output buffer, and their one-column and
+one-row shortcuts read the rows of the average input up to the size of the
+output. A horizontal squeeze without residual columns whose output tile is 1x1
+but whose average input tile is empty (0x0) then panicked (image/internal.rs:
+assertion failed: row < self.num_rows). Skip empty inputs and copy only what
+the average input has. Test: test_fuzzer_squeeze_empty_inputs.
+
 diff --git a/jxl/src/frame/modular/transforms/squeeze.rs b/jxl/src/frame/modular/transforms/squeeze.rs
-index d85ebb0..28cb4a5 100644
+index d2fc797..2f5e1d1 100644
 --- a/jxl/src/frame/modular/transforms/squeeze.rs
 +++ b/jxl/src/frame/modular/transforms/squeeze.rs
-@@ -801,7 +801,9 @@ fn do_hsqueeze_step_i16(
+@@ -808,7 +808,9 @@ fn do_hsqueeze_step_i16(
      scratch_i16: &mut [i16; 2048],
  ) {
      trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
@@ -13,7 +22,7 @@ index d85ebb0..28cb4a5 100644
      let mut out_rect = ImageRectMut::<i16>::from_raw(out.data.as_rect_mut());
      // Shortcut: guarantees that row is at least 1px in the main loop
      if out_rect.size().0 == 0 || out_rect.size().1 == 0 {
-@@ -811,8 +813,11 @@ fn do_hsqueeze_step_i16(
+@@ -818,8 +820,11 @@ fn do_hsqueeze_step_i16(
      let w = in_res.size().0;
      // Another shortcut: when output row has just 1px
      if w == 0 {
@@ -26,7 +35,7 @@ index d85ebb0..28cb4a5 100644
              out_rect.row(y)[0] = in_avg.row(y)[0];
          }
          return;
-@@ -837,7 +842,9 @@ fn do_hsqueeze_step_i32(
+@@ -845,7 +850,9 @@ fn do_hsqueeze_step_i32(
      buffers: &mut [&mut ModularChannel],
  ) {
      trace!("hsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
@@ -37,7 +46,7 @@ index d85ebb0..28cb4a5 100644
      let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
      // Shortcut: guarantees that row is at least 1px in the main loop
      if out_rect.size().0 == 0 || out_rect.size().1 == 0 {
-@@ -847,8 +854,11 @@ fn do_hsqueeze_step_i32(
+@@ -855,8 +862,11 @@ fn do_hsqueeze_step_i32(
      let w = in_res.size().0;
      // Another shortcut: when output row has just 1px
      if w == 0 {
@@ -50,7 +59,7 @@ index d85ebb0..28cb4a5 100644
              out_rect.row(y)[0] = in_avg.row(y)[0];
          }
          return;
-@@ -1255,7 +1265,9 @@ fn do_vsqueeze_step_i16(
+@@ -1269,7 +1279,9 @@ fn do_vsqueeze_step_i16(
      buffers: &mut [&mut ModularChannel],
  ) {
      trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
@@ -61,7 +70,7 @@ index d85ebb0..28cb4a5 100644
      let mut out_rect = ImageRectMut::<i16>::from_raw(out.data.as_rect_mut());
      // Shortcut: guarantees that there at least 1 output row
      if out_rect.size().1 == 0 || out_rect.size().0 == 0 {
-@@ -1263,8 +1275,11 @@ fn do_vsqueeze_step_i16(
+@@ -1277,8 +1289,11 @@ fn do_vsqueeze_step_i16(
      }
      // Another shortcut: when there is one output row
      if in_res.size().1 == 0 {
@@ -75,7 +84,7 @@ index d85ebb0..28cb4a5 100644
          return;
      }
      // Otherwise: 2 or more rows
-@@ -1281,7 +1296,9 @@ fn do_vsqueeze_step_i32(
+@@ -1295,7 +1310,9 @@ fn do_vsqueeze_step_i32(
      buffers: &mut [&mut ModularChannel],
  ) {
      trace!("vsqueeze step in_avg: {in_avg:?} in_res: {in_res:?} in_next_avg: {in_next_avg:?}");
@@ -86,7 +95,7 @@ index d85ebb0..28cb4a5 100644
      let mut out_rect = ImageRectMut::<i32>::from_raw(out.data.as_rect_mut());
      // Shortcut: guarantees that there at least 1 output row
      if out_rect.size().1 == 0 || out_rect.size().0 == 0 {
-@@ -1289,7 +1306,11 @@ fn do_vsqueeze_step_i32(
+@@ -1303,7 +1320,11 @@ fn do_vsqueeze_step_i32(
      }
      // Another shortcut: when there is one output row
      if in_res.size().1 == 0 {
@@ -99,3 +108,32 @@ index d85ebb0..28cb4a5 100644
          return;
      }
      // Otherwise: 2 or more rows
+diff --git a/jxl/src/tests/api.rs b/jxl/src/tests/api.rs
+index 83a7e49..a037b26 100644
+--- a/jxl/src/tests/api.rs
++++ b/jxl/src/tests/api.rs
+@@ -2130,3 +2130,13 @@ fn test_progressive_status_and_bytes_needed() {
+     let chunked = wrap_with_jxlp_chunks(&prog, &[0, 50, 200, 600, 1500]);
+     assert!(check_progressive_stepping(&chunked, false).len() >= 3);
+ }
++
++/// Regression test: a horizontal squeeze step without residual columns whose output tile is 1x1
++/// but whose average input tile is empty (0x0). The one-column shortcut copied the rows of the
++/// average input up to the output height (image/internal.rs: assertion failed: row <
++/// self.num_rows).
++#[test]
++fn test_fuzzer_squeeze_empty_inputs() {
++    let data = include_bytes!("../../tests/testdata/squeeze_empty_inputs.jxl");
++    let _ = decode::<f32>(data, DecodeParams::default());
++}
+diff --git a/jxl/tests/testdata/squeeze_empty_inputs.jxl b/jxl/tests/testdata/squeeze_empty_inputs.jxl
+new file mode 100644
+index 0000000000000000000000000000000000000000..f0c5814d89be483fefcf465221ae62cbd32e2168
+GIT binary patch
+literal 4834
+zcmeIuF%5t)07b#iz)}xQIwA!fC?QqAile$JLsgL6Q}A-L<gRJScJ}?r5fLCjfB*pk
+X1PBlyK!5-N0t5&U_<_JXuCg{ic&7y%
+
+literal 0
+HcmV?d00001
+

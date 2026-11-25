@@ -1,0 +1,34 @@
+Bound the TSN gap in sctp_mark_non_revokable().
+
+Firefox's change to its usrsctp copy (netwerk/sctp/src/tsn-gap-check.patch, Mozilla bug
+2045773). gap = tsn - mapping_array_base_tsn indexes mapping_array and nr_mapping_array with no
+bound; FORWARD-TSN chunks can move the window so that the TSN of a control still queued for
+reordering gives an arbitrarily large gap (out-of-bounds read and bit set). Return early when
+gap >= mapping_array_size << 3.
+Not fixed in usrsctp c625e21950 (master, 2026-10-07) or in FreeBSD main sys/netinet/sctp_indata.c
+as of 2026-11-21.
+Firefox removed usrsctp on 2026-11-17 (mozilla-firefox ea71900566b5, Bug 2072337); its last
+vendored copy (moz.yaml revision c625e21950, as of ed7b5f6fc244) carries this patch unchanged.
+No harness input reaches it: it needs an ordered message parked on a reorder queue while
+FORWARD-TSN chunks advance the cumulative TSN by more than 2^31.
+
+Upstream: none found.
+
+diff --git a/netinet/sctp_indata.c b/netinet/sctp_indata.c
+--- a/netinet/sctp_indata.c
++++ b/netinet/sctp_indata.c
+@@ -315,6 +315,14 @@
+ 		return;
+ 	}
+ 	SCTP_CALC_TSN_TO_GAP(gap, tsn, asoc->mapping_array_base_tsn);
++	if (gap >= (uint32_t)(asoc->mapping_array_size << 3)) {
++		/*
++		 * The TSN falls outside the mapping window, e.g. a control
++		 * queued before a large FORWARD-TSN moved the window past it.
++		 * It has no bit in either map, so there is nothing to mark.
++		 */
++		return;
++	}
+ 	in_r = SCTP_IS_TSN_PRESENT(asoc->mapping_array, gap);
+ 	in_nr = SCTP_IS_TSN_PRESENT(asoc->nr_mapping_array, gap);
+ 	KASSERT(in_r || in_nr, ("%s: Things are really messed up now", __func__));

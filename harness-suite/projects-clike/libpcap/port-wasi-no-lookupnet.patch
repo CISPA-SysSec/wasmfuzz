@@ -1,0 +1,26 @@
+diff --git a/pcap.c b/pcap.c
+index 7b34061..519b785 100644
+--- a/pcap.c
++++ b/pcap.c
+@@ -1552,7 +1552,20 @@ pcap_lookupdev(char *errbuf)
+ }
+ #endif /* !defined(HAVE_PACKET32) */
+ 
+-#if !defined(_WIN32)
++#if defined(__wasi__)
++/*
++ * WASI has no network interfaces to ask (no socket()/ioctl()).
++ */
++int
++pcap_lookupnet(const char *device, bpf_u_int32 *netp, bpf_u_int32 *maskp,
++    char *errbuf)
++{
++	(void)device; (void)netp; (void)maskp;
++	(void)snprintf(errbuf, PCAP_ERRBUF_SIZE,
++	    "pcap_lookupnet: not supported on WASI");
++	return (-1);
++}
++#elif !defined(_WIN32)
+ /*
+  * We don't just fetch the entire list of devices, search for the
+  * particular device, and use its first IPv4 address, as that's too

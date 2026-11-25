@@ -1,0 +1,80 @@
+send_method() (send, __send__, public_send) calls method_missing for a missing
+name in its own C frame, without pushing a call frame. When method_missing is
+send itself (`alias method_missing __send__`), that call sends the missing
+name again, which is missing again: an unbounded C recursion with no call
+level to count, until the machine stack overflows (crash natively under ASan
+too, not a wasm stack size artefact). CRuby raises SystemStackError here.
+
+Raise mruby's preallocated SystemStackError ("stack level too deep") when the
+method_missing found is send/__send__/public_send or an alias of it, which is
+what running out of call levels would raise. A method_missing written in Ruby
+that calls send goes through the VM and is limited by MRB_CALL_LEVEL_MAX as
+before. Regression test in test/t/kernel.rb.
+
+Not fixed upstream as of 087c688.
+Upstream: none found (mruby/mruby issues/PRs searched for method_missing
+__send__, stack level too deep send).
+
+diff --git a/src/vm.c b/src/vm.c
+index 06121b2a1..42bf9b1c8 100644
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -1824,6 +1824,24 @@ vis_error(mrb_state *mrb, mrb_sym mid, mrb_value args, mrb_value recv, mrb_bool
+   mrb_no_method_error_recv(mrb, mid, recv, args, "%s method '%n' called for %T", (priv ? "private" : "protected"), mid, recv);
+ }
+ 
++/* whether `m` is send, `__send__` or `public_send` (or an alias of one) */
++static mrb_bool
++send_func_p(mrb_method_t m)
++{
++  mrb_func_t f;
++
++  if (MRB_METHOD_FUNC_P(m)) {
++    f = MRB_METHOD_FUNC(m);
++  }
++  else {
++    const struct RProc *p = MRB_METHOD_PROC(m);
++    if (p && MRB_PROC_ALIAS_P(p)) p = p->upper;
++    if (!p || !MRB_PROC_CFUNC_P(p)) return FALSE;
++    f = MRB_PROC_CFUNC(p);
++  }
++  return f == mrb_f_send || f == mrb_f_public_send;
++}
++
+ static mrb_value
+ send_method(mrb_state *mrb, mrb_value self, mrb_bool pub)
+ {
+@@ -1874,6 +1892,13 @@ send_method(mrb_state *mrb, mrb_value self, mrb_bool pub)
+     m = mrb_vm_find_method(mrb, c, &c, MRB_SYM(method_missing));
+ #endif
+     if (MRB_METHOD_UNDEF_P(m)) goto funcall;    /* just in case */
++    /* a `method_missing` that is send itself (`alias method_missing
++       __send__`) sends the missing name again, from this C frame and
++       without a call level to count, until the machine stack runs out:
++       raise what running out of call levels would */
++    if (send_func_p(m)) {
++      mrb_exc_raise(mrb, mrb_obj_value(mrb->stack_err));
++    }
+     if (n == 15) {      /* a copy: the array may be the caller's own */
+       regs[0] = mrb_ary_new_from_values(mrb, RARRAY_LEN(regs[0]), RARRAY_PTR(regs[0]));
+       mrb_ary_set(mrb, regs[0], 0, mrb_symbol_value(name));
+diff --git a/test/t/kernel.rb b/test/t/kernel.rb
+index 9df661da9..b140c843b 100644
+--- a/test/t/kernel.rb
++++ b/test/t/kernel.rb
+@@ -424,6 +424,15 @@ assert('Kernel#__send__ to method_missing') do
+   assert_equal :foo, args[0]
+ end
+ 
++assert('Kernel#__send__ as method_missing') do
++  # method_missing that is send itself sends the missing name again, forever
++  c = Class.new { alias method_missing __send__ }
++  assert_raise(SystemStackError) { c.new.no_such_method }
++  assert_raise(SystemStackError) { c.new.__send__(:no_such_method, 1, k: 2) }
++  args = [:no_such_method, *(1..15).to_a]
++  assert_raise(SystemStackError) { c.new.__send__(*args) }
++end
++
+ assert('Kernel#nil?', '15.3.1.3.32') do
+   assert_false nil?
+ end

@@ -1,0 +1,217 @@
+zune-jpeg: let an incremental decode retry when the DNL segment is not visible yet
+
+`decode_mcu_ycbcr_baseline_inner` (mcu.rs) looks for the DNL marker after the
+scan of a height-0 image with `get_marker`, and turned every error into the
+hard error "DNL marker expected (SOF height was 0) but not found in scan
+data". When an incremental caller has only supplied data up to (or just past
+the 0xFF of) the DNL segment, `get_marker` fails with a recoverable EOF, and
+the decode failed for good although the next chunk carries the DNL; a
+one-shot decode of the same bytes succeeds. Pass the recoverable EOF through
+when the decoder is in incremental mode and the input is not marked complete
+(new helper `scan_eof_is_retryable`, the incremental half of
+`scan_eof_is_error`); one-shot and final-input decodes keep the hard error.
+Includes a regression test (tests/incremental_resume.rs, needs `arith`).
+
+Not fixed upstream as of zune-image 2cdbbf5.
+Upstream: none found.
+
+diff --git a/crates/zune-jpeg/src/decoder.rs b/crates/zune-jpeg/src/decoder.rs
+index d6bb6be3..61953f30 100644
+--- a/crates/zune-jpeg/src/decoder.rs
++++ b/crates/zune-jpeg/src/decoder.rs
+@@ -2463,6 +2463,12 @@ where
+         self.options.strict_mode() || (self.incremental_mode && !self.raw_pull_state.input_complete)
+     }
+ 
++    /// Whether a recoverable EOF may be the end of the data supplied so far
++    /// rather than the end of the image.
++    pub(crate) fn scan_eof_is_retryable(&self) -> bool {
++        self.incremental_mode && !self.raw_pull_state.input_complete
++    }
++
+     /// Return the number of output scanlines known to be stable after the
+     /// most recent `decode_into` attempt.
+     ///
+diff --git a/crates/zune-jpeg/src/mcu.rs b/crates/zune-jpeg/src/mcu.rs
+index d9836752..e46d6f49 100644
+--- a/crates/zune-jpeg/src/mcu.rs
++++ b/crates/zune-jpeg/src/mcu.rs
+@@ -796,6 +796,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
+                         "Expected DNL marker after height-0 scan, got {other:?}"
+                     )));
+                 }
++                // An incremental caller may not have supplied the DNL
++                // segment yet; let it retry with more data.
++                Err(e) if e.is_recoverable_eof() && self.scan_eof_is_retryable() => {
++                    return Err(e);
++                }
+                 Err(_e) => {
+                     return Err(DecodeErrors::FormatStatic(
+                         "DNL marker expected (SOF height was 0) but not found in scan data"
+diff --git a/crates/zune-jpeg/tests/incremental_resume.rs b/crates/zune-jpeg/tests/incremental_resume.rs
+new file mode 100644
+index 00000000..2f4e3c42
+--- /dev/null
++++ b/crates/zune-jpeg/tests/incremental_resume.rs
+@@ -0,0 +1,161 @@
++/*
++ * Copyright (c) 2026.
++ *
++ * This software is free software;
++ *
++ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
++ */
++
++//! Regressions for incremental decoding that diverged from a one-shot decode
++//! of the same bytes, found by the `decode_incremental` fuzz target.
++
++use std::cell::Cell;
++use std::io::{BufRead, Read, Seek, SeekFrom};
++use std::rc::Rc;
++
++use zune_core::bytestream::ZCursor;
++use zune_core::options::DecoderOptions;
++use zune_jpeg::errors::DecodeErrors;
++use zune_jpeg::JpegDecoder;
++
++/// Byte slice whose visible length grows as the test feeds more data.
++struct GrowableCursor<'a> {
++    data:     &'a [u8],
++    position: usize,
++    limit:    Rc<Cell<usize>>
++}
++
++impl GrowableCursor<'_> {
++    fn visible(&self) -> usize {
++        self.limit.get().min(self.data.len())
++    }
++}
++
++impl Read for GrowableCursor<'_> {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        let visible = self.visible();
++        if self.position >= visible {
++            return Ok(0);
++        }
++        let available = &self.data[self.position..visible];
++        let n = available.len().min(buf.len());
++        buf[..n].copy_from_slice(&available[..n]);
++        self.position += n;
++        Ok(n)
++    }
++}
++
++impl BufRead for GrowableCursor<'_> {
++    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
++        let visible = self.visible();
++        if self.position >= visible {
++            return Ok(&[]);
++        }
++        Ok(&self.data[self.position..visible])
++    }
++
++    fn consume(&mut self, amt: usize) {
++        self.position += amt;
++    }
++}
++
++impl Seek for GrowableCursor<'_> {
++    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
++        let new_pos = match pos {
++            SeekFrom::Start(p) => p as i64,
++            SeekFrom::Current(p) => self.position as i64 + p,
++            SeekFrom::End(p) => self.visible() as i64 + p
++        };
++        if new_pos < 0 {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                "seek before start"
++            ));
++        }
++        self.position = new_pos as usize;
++        Ok(self.position as u64)
++    }
++}
++
++fn options() -> DecoderOptions {
++    DecoderOptions::default()
++        .set_strict_mode(true)
++        .set_max_width(4096)
++        .set_max_height(4096)
++        .jpeg_set_max_scans(256)
++}
++
++fn decode_oneshot(data: &[u8]) -> Result<Vec<u8>, DecodeErrors> {
++    JpegDecoder::new_with_options(ZCursor::new(data), options()).decode()
++}
++
++/// Feed `data` `chunk` bytes at a time to one decoder in incremental mode,
++/// retrying `decode_headers` / `decode_into` on recoverable EOF.
++fn decode_chunked(data: &[u8], chunk: usize) -> Result<Vec<u8>, DecodeErrors> {
++    let limit = Rc::new(Cell::new(0));
++    let cursor = GrowableCursor {
++        data,
++        position: 0,
++        limit: Rc::clone(&limit)
++    };
++    let mut decoder = JpegDecoder::new_with_options(cursor, options());
++    decoder.set_incremental_mode(true);
++    loop {
++        limit.set((limit.get() + chunk).min(data.len()));
++        match decoder.decode_headers() {
++            Ok(()) => break,
++            Err(e) if e.is_recoverable_eof() && limit.get() < data.len() => continue,
++            Err(e) => return Err(e)
++        }
++    }
++    let mut out = vec![0; decoder.output_buffer_size().unwrap()];
++    loop {
++        match decoder.decode_into(&mut out) {
++            Ok(()) => break,
++            Err(e) if e.is_recoverable_eof() && limit.get() < data.len() => {
++                limit.set((limit.get() + chunk).min(data.len()));
++            }
++            Err(e) => return Err(e)
++        }
++    }
++    out.truncate(decoder.output_buffer_size().unwrap());
++    Ok(out)
++}
++
++fn assert_chunked_matches_oneshot(data: &[u8], chunk: usize) {
++    let expected = decode_oneshot(data).expect("one-shot decode");
++    let actual = decode_chunked(data, chunk).expect("incremental decode");
++    assert_eq!(actual, expected);
++}
++
++/// SOF height 0 with the DNL segment after the EOI. Feeding stops right
++/// after the EOI: the DNL lookup hit the end of the visible data and
++/// reported a hard "DNL marker expected" error instead of a recoverable EOF.
++#[cfg(feature = "arith")]
++const DNL_AFTER_EOI: &[u8; 259] = &[
++    0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x20, 0x00, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x69, 0x61, 0x61, 0x61, 0x40, 0x61, 0x61, 0x61, 0x9f, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x6e, 0x61, 0x61, 0x61, 0x61, 0x45, 0x61, 0x61, 0x01, 0x42, 0x61, 0x61,
++    0x71, 0x61, 0x9f, 0x61, 0x7b, 0x61, 0x61, 0xff, 0xc9, 0x00, 0x0b, 0x08, 0x00, 0x00, 0x00, 0x01,
++    0x01, 0x01, 0x11, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x10, 0x32, 0x34, 0x01, 0xa4, 0xff,
++    0xfe, 0x00, 0x02, 0xff, 0xd9, 0xff, 0xdc, 0x00, 0x04, 0x00, 0x07, 0xa6, 0xd6, 0xc1, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x61, 0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x61, 0x61, 0x61, 0x61,
++    0x5b, 0x62, 0x60, 0x61, 0x61, 0x65, 0x61, 0x61, 0x7f, 0xff, 0x61, 0x61, 0x61, 0x71, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x61, 0x69, 0x61, 0x61, 0x61, 0x40, 0x61, 0x61, 0x61, 0x93, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x69, 0x61, 0x61, 0x61, 0x40, 0x61, 0x61, 0x61,
++    0x93, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
++    0x61, 0x61, 0x61, 0xa0, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x10, 0x61, 0x61, 0x61,
++    0x2c, 0x61, 0x84, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x69, 0x61, 0x61, 0x61,
++    0x64, 0x61, 0x61,
++];
++
++#[cfg(feature = "arith")]
++#[test]
++fn dnl_lookup_at_end_of_visible_data_is_recoverable() {
++    for chunk in [1, 2, 3, 6] {
++        assert_chunked_matches_oneshot(DNL_AFTER_EOI, chunk);
++    }
++}

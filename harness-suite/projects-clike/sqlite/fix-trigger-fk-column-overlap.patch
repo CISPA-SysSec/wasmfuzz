@@ -1,0 +1,175 @@
+Subject: [PATCH] trigger: allow a NULL change list in checkColumnOverlap()
+
+Check-in 6a1f950 (2026-11-10, bug 2026-11-04T20:21:09Z) added
+fkBeforeTriggersExist() to fkey.c. To learn whether a BEFORE trigger on
+the child table might block an FK CASCADE or SET NULL action with
+RAISE(IGNORE), it calls sqlite3TriggersExist() with op==TK_UPDATE (for
+ON UPDATE and ON DELETE SET NULL actions) and pChanges==0, because the
+columns the action changes are not available there. If the child table
+has an "UPDATE OF <column>" trigger, triggersReallyExist() passes that
+NULL change list to checkColumnOverlap(), which still tests it with
+NEVER(pEList==0), so SQLITE_DEBUG builds fail "Assertion `0'":
+
+    PRAGMA foreign_keys=ON;
+    CREATE TABLE p(a PRIMARY KEY);
+    CREATE TABLE c(b REFERENCES p ON UPDATE CASCADE);
+    CREATE TRIGGER x UPDATE OF b ON c BEGIN SELECT 1; END;
+    UPDATE p SET a=1;
+
+The NEVER() is stale, not the new caller: the function header already
+documents a NULL pEList as a wildcard, and release builds return 1,
+i.e. every UPDATE OF trigger counts as one that might fire. That is
+conservative (at worst a statement journal is used when an UPDATE OF
+trigger on a non-FK column would not fire), and the release results are
+correct, including statement rollback when RAISE(IGNORE) blocks an
+action inside a transaction. The invariant that code generation always
+has a change list for UPDATE is still asserted in sqlite3CodeRowTrigger().
+Turn the NEVER() into a plain test and say why it can be NULL.
+Regression test test/fkeytrig1.sql (CLI .sql format).
+
+Found by fuzzing the SQLITE_DEBUG ossfuzz harness (default selector
+enables FKs).
+
+Upstream: not reported; not fixed as of dc9b322 (master 2026-11-23),
+nor on master 795e28a89e (2026-11-23 19:49Z, no later trigger.c/fkey.c
+check-ins). Introduced by 6a1f950aae; related: 83a276573f (2026-11-17,
+statement journal for recursive trigger/FK programs). SQLite takes no
+patches; drop this one once a check-in fixes it.
+---
+diff --git a/src/trigger.c b/src/trigger.c
+index 339a43e..33fcf23 100644
+--- a/src/trigger.c
++++ b/src/trigger.c
+@@ -792,10 +792,15 @@ void sqlite3UnlinkAndDeleteTrigger(sqlite3 *db, int iDb, const char *zName){
+ ** wildcard that matches anything.  Likewise if pEList==NULL then
+ ** it matches anything so always return true.  Return false only
+ ** if there is no match.
++**
++** pEList is NULL for an UPDATE only when fkBeforeTriggersExist() asks
++** whether any BEFORE UPDATE trigger might fire for the UPDATE done by an
++** FK action.  Treating every UPDATE OF trigger as a match there is
++** conservative: it only causes a statement journal to be used.
+ */
+ static int checkColumnOverlap(IdList *pIdList, ExprList *pEList){
+   int e;
+-  if( pIdList==0 || NEVER(pEList==0) ) return 1;
++  if( pIdList==0 || pEList==0 ) return 1;
+   for(e=0; e<pEList->nExpr; e++){
+     if( sqlite3IdListIndex(pIdList, pEList->a[e].zEName)>=0 ) return 1;
+   }
+diff --git a/test/fkeytrig1.sql b/test/fkeytrig1.sql
+new file mode 100644
+index 0000000..4de3985
+--- /dev/null
++++ b/test/fkeytrig1.sql
+@@ -0,0 +1,110 @@
++#!sqlite3
++#
++# 2026-11-23
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++#***********************************************************************
++#
++# An immediate FK constraint with an ON UPDATE CASCADE or SET NULL
++# action (or ON DELETE SET NULL) on a child table that has an
++# "UPDATE OF <column>" trigger.  fkBeforeTriggersExist() calls
++# sqlite3TriggersExist() for TK_UPDATE with no list of changed columns
++# to find out whether a BEFORE trigger might use RAISE(IGNORE) to block
++# the action.  This used to fail a NEVER() in checkColumnOverlap().
++#
++.open :memory:
++.mode -reset list
++PRAGMA foreign_keys=ON;
++
++.testcase 100
++CREATE TABLE p(a PRIMARY KEY);
++CREATE TABLE c(b REFERENCES p ON UPDATE CASCADE);
++CREATE TRIGGER x UPDATE OF b ON c BEGIN SELECT 1; END;
++UPDATE p SET a=1;
++SELECT count(*) FROM p;
++.check 0
++
++# The BEFORE UPDATE OF trigger blocks the SET NULL for one row, so the
++# UPDATE of the parent fails and must be rolled back, also within a
++# transaction.
++#
++.testcase 200
++CREATE TABLE p200(id INTEGER PRIMARY KEY);
++CREATE TABLE c200(id INTEGER PRIMARY KEY,
++                  r REFERENCES p200(id) ON UPDATE SET NULL);
++INSERT INTO p200 VALUES(1),(2),(3),(4);
++INSERT INTO c200 VALUES(1,1),(2,2),(3,3),(4,4);
++CREATE TRIGGER t200 BEFORE UPDATE OF r ON c200 WHEN old.id=3 BEGIN
++  SELECT RAISE(IGNORE);
++END;
++BEGIN;
++UPDATE p200 SET id=id+10;
++.check -glob "*rror near line *: FOREIGN KEY constraint failed*"
++
++.testcase 210
++SELECT (SELECT group_concat(id) FROM p200), (SELECT group_concat(r) FROM c200);
++COMMIT;
++.check 1,2,3,4|1,2,3,4
++
++# Same again with ON UPDATE CASCADE.
++.testcase 300
++CREATE TABLE p300(id INTEGER PRIMARY KEY);
++CREATE TABLE c300(id INTEGER PRIMARY KEY,
++                  r REFERENCES p300(id) ON UPDATE CASCADE);
++INSERT INTO p300 VALUES(1),(2),(3),(4);
++INSERT INTO c300 VALUES(1,1),(2,2),(3,3),(4,4);
++CREATE TRIGGER t300 BEFORE UPDATE OF r ON c300 WHEN old.id=3 BEGIN
++  SELECT RAISE(IGNORE);
++END;
++BEGIN;
++UPDATE p300 SET id=id+10;
++.check -glob "*rror near line *: FOREIGN KEY constraint failed*"
++
++.testcase 310
++SELECT (SELECT group_concat(id) FROM p300), (SELECT group_concat(r) FROM c300);
++COMMIT;
++.check 1,2,3,4|1,2,3,4
++
++# Same again with ON DELETE SET NULL.
++.testcase 400
++CREATE TABLE p400(id INTEGER PRIMARY KEY);
++CREATE TABLE c400(id INTEGER PRIMARY KEY,
++                  r REFERENCES p400(id) ON DELETE SET NULL);
++INSERT INTO p400 VALUES(1),(2),(3),(4);
++INSERT INTO c400 VALUES(1,1),(2,2),(3,3),(4,4);
++CREATE TRIGGER t400 BEFORE UPDATE OF r ON c400 WHEN old.id=3 BEGIN
++  SELECT RAISE(IGNORE);
++END;
++BEGIN;
++DELETE FROM p400;
++.check -glob "*rror near line *: FOREIGN KEY constraint failed*"
++
++.testcase 410
++SELECT (SELECT count(*) FROM p400), (SELECT count(r) FROM c400);
++COMMIT;
++.check 4|4
++
++# An UPDATE OF trigger on a column that is not part of the FK does not
++# fire for the action.
++#
++.testcase 500
++CREATE TABLE p500(id INTEGER PRIMARY KEY);
++CREATE TABLE c500(id INTEGER PRIMARY KEY,
++                  r REFERENCES p500(id) ON UPDATE SET NULL, z);
++INSERT INTO p500 VALUES(1),(2),(3),(4);
++INSERT INTO c500 VALUES(1,1,0),(2,2,0),(3,3,0),(4,4,0);
++CREATE TRIGGER t500 BEFORE UPDATE OF z ON c500 BEGIN
++  SELECT RAISE(IGNORE);
++END;
++BEGIN;
++UPDATE p500 SET id=id+10;
++SELECT (SELECT group_concat(id) FROM p500), (SELECT count(r) FROM c500);
++COMMIT;
++PRAGMA foreign_key_check;
++.check 11,12,13,14|0

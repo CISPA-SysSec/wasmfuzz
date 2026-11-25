@@ -1,0 +1,145 @@
+read-fonts, skrifa: VARC: size scalar memory by the region offsets present
+
+Found by the suite's fontations `fuzz_skrifa_outline` and harfrust
+`fuzz_shape` targets (both via VARC glyphs). `SparseVariationRegionList`'s
+`regionCount` is a u32 that is never checked against the table data, but
+both VARC implementations size per-draw memory from it:
+
+- skrifa `outline/varc/mod.rs` `scalar_cache_from_store` allocates a
+  `ScalarCache` of `region_count` f32s;
+- read-fonts `model/glyph/outline/varc.rs` `Outlines::region_count` feeds
+  `Layout::packed_len`, which `with_scratch` then allocates (read-fonts is
+  also what harfrust's `glyph_extents` draws through, see harfrust's
+  copy of this patch).
+
+A ~200-byte font with `regionCount = 0x1000_0000` asks for 1 GiB (capacity
+overflow / allocation failure on wasm32, a 1-4 GiB allocation natively).
+Both sites now count `region_offsets()`, i.e. the offsets that are actually
+in the table (the generated accessor returns an empty slice when the
+declared array does not fit). Region lookups past the data already fail with
+`Malformed`, and the caches return INVALID for indices past their end, so
+valid fonts are unaffected. Regression tests in both crates corrupt
+`regionCount` in the CJK_6868 test font.
+
+Not fixed upstream as of 35c2087.
+Upstream: none found (related only by topic: googlefonts/fontations#2033,
+unified VARC work budget).
+
+diff --git a/read-fonts/src/model/glyph/outline/varc.rs b/read-fonts/src/model/glyph/outline/varc.rs
+index 47cd7a4..4543253 100644
+--- a/read-fonts/src/model/glyph/outline/varc.rs
++++ b/read-fonts/src/model/glyph/outline/varc.rs
+@@ -259,10 +259,15 @@ impl<'a> Outlines<'a> {
+ 
+     /// Returns the number of variation regions, or zero if the table has no
+     /// variation store.
++    ///
++    /// The `regionCount` field is a `u32` that is not checked against the
++    /// table, so this counts the region offsets that are actually present.
++    /// Sizing the working memory from the raw field lets a few bytes request
++    /// gigabytes; a region past the data fails to resolve when it is used.
+     fn region_count(&self) -> usize {
+         self.regions
+             .as_ref()
+-            .map_or(0, |regions| regions.region_count() as usize)
++            .map_or(0, |regions| regions.region_offsets().len())
+     }
+ 
+     /// Measures the tree under a composite.
+@@ -1189,6 +1194,32 @@ mod tests {
+         }
+     }
+ 
++    // `regionCount` is a `u32` that is not checked against the table. The
++    // working memory must be sized by the region offsets that are present,
++    // or a few bytes request gigabytes (an allocation failure on 32-bit).
++    #[test]
++    fn region_count_is_bounded_by_the_table() {
++        let data = font_test_data::varc::CJK_6868;
++        let at = {
++            let font = FontRef::new(data).unwrap();
++            let store = font.varc().unwrap().multi_var_store().unwrap().unwrap();
++            let regions = store.region_list().unwrap();
++            assert_eq!(
++                test_outlines(&font).region_count(),
++                regions.region_count() as usize
++            );
++            regions.offset_data().as_bytes().as_ptr() as usize - data.as_ptr() as usize
++        };
++        let mut bytes = data.to_vec();
++        bytes[at..at + 4].copy_from_slice(&0x1000_0000u32.to_be_bytes());
++
++        let font = FontRef::new(&bytes).unwrap();
++        let outlines = test_outlines(&font);
++        assert!(outlines.region_count() <= bytes.len() / 4);
++        let packed_len = test_layout(&outlines).packed_len().unwrap();
++        assert!(packed_len <= 16 * bytes.len(), "{packed_len}");
++    }
++
+     /// A context that draws nothing and needs no memory.
+     struct NullContext;
+ 
+diff --git a/skrifa/src/outline/varc/mod.rs b/skrifa/src/outline/varc/mod.rs
+index 7897fc8..23b595d 100644
+--- a/skrifa/src/outline/varc/mod.rs
++++ b/skrifa/src/outline/varc/mod.rs
+@@ -743,11 +743,15 @@ impl<'a> Outlines<'a> {
+         // cache is correct: any component that references variation data will fail
+         // gracefully when it resolves the missing store, rather than us
+         // panicking here.
++        // `regionCount` is an unchecked `u32`; size the cache by the region
++        // offsets that are actually present so a few bytes cannot request
++        // gigabytes. A region past the data fails to resolve when it is used.
+         let region_count = match store {
+             Some(store) => store
+                 .region_list()
+                 .map_err(|_| DrawError::Malformed)?
+-                .region_count() as usize,
++                .region_offsets()
++                .len(),
+             None => 0,
+         };
+         Ok(ScalarCache::new(region_count))
+@@ -1649,6 +1653,42 @@ mod tests {
+         );
+     }
+ 
++    /// `regionCount` in the sparse region list is a `u32` that read-fonts
++    /// does not check against the table. The scalar cache must be sized by
++    /// the region offsets that are present, not by the raw count, or a few
++    /// bytes request gigabytes (capacity overflow on 32-bit targets).
++    #[test]
++    fn scalar_cache_ignores_oversized_region_count() {
++        use crate::{instance::LocationRef, outline::DrawSettings, MetadataProvider};
++
++        let data = font_test_data::varc::CJK_6868;
++        let at = {
++            let font = FontRef::new(data).unwrap();
++            let store = font.varc().unwrap().multi_var_store().unwrap().unwrap();
++            let regions = store.region_list().unwrap();
++            regions.offset_data().as_bytes().as_ptr() as usize - data.as_ptr() as usize
++        };
++        let mut bytes = data.to_vec();
++        bytes[at..at + 4].copy_from_slice(&0x1000_0000u32.to_be_bytes());
++
++        let font = FontRef::new(&bytes).unwrap();
++        let outlines = Outlines::new(&font).unwrap();
++        let cache = outlines
++            .scalar_cache_from_store(outlines.var_store.as_ref())
++            .unwrap();
++        assert!(cache.values.len() <= bytes.len() / 4);
++
++        let gid = font.cmap().unwrap().map_codepoint(0x6868_u32).unwrap();
++        let glyphs = font.outline_glyphs();
++        let glyph = glyphs.get(gid).expect("covered VARC glyph");
++        let mut pen = Vec::<PathElement>::new();
++        // Ok, or a graceful DrawError, but no allocation failure.
++        let _ = glyph.draw(
++            DrawSettings::unhinted(Size::unscaled(), LocationRef::default()),
++            &mut pen,
++        );
++    }
++
+     fn first_nested_varc_edge(outlines: &Outlines<'_>) -> Option<(GlyphId, u32)> {
+         for gid in outlines.coverage.iter() {
+             let coverage_index = outlines.coverage.get(gid)?;

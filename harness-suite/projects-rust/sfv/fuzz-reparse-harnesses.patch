@@ -1,8 +1,8 @@
 diff --git a/fuzz/Cargo.toml b/fuzz/Cargo.toml
-index 0e54104..f354d83 100644
+index 07cc85c..58e054e 100644
 --- a/fuzz/Cargo.toml
 +++ b/fuzz/Cargo.toml
-@@ -56,3 +56,24 @@ path = "fuzz_targets/roundtrip_dictionary.rs"
+@@ -42,3 +42,24 @@ path = "fuzz_targets/roundtrip_dictionary.rs"
  test = false
  doc = false
  bench = false
@@ -27,6 +27,17 @@ index 0e54104..f354d83 100644
 +test = false
 +doc = false
 +bench = false
+diff --git a/fuzz/fuzz_targets/input.rs b/fuzz/fuzz_targets/input.rs
+new file mode 100644
+index 0000000..3ef7536
+--- /dev/null
++++ b/fuzz/fuzz_targets/input.rs
+@@ -0,0 +1,5 @@
++#[derive(arbitrary::Arbitrary, Debug)]
++pub struct Input<'a> {
++    pub data: &'a [u8],
++    pub version: sfv::Version,
++}
 diff --git a/fuzz/fuzz_targets/reparse_dictionary.rs b/fuzz/fuzz_targets/reparse_dictionary.rs
 new file mode 100644
 index 0000000..e723f0b

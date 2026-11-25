@@ -1,0 +1,16 @@
+Upstream: open PR sctplab/usrsctp#764 (by arthurscchan, 2026-11-12) sets the same association verification tag in fuzzer/fuzzer_fragment.c and adds a dictionary.
+Drop this patch once #764 lands.
+
+diff --git a/fuzzer/fuzzer_fragment.c b/fuzzer/fuzzer_fragment.c
+index 9a04a2f..ec0d28b 100644
+--- a/fuzzer/fuzzer_fragment.c
++++ b/fuzzer/fuzzer_fragment.c
+@@ -332,6 +332,8 @@ LLVMFuzzerTestOneInput(const uint8_t* data, size_t data_size)
+ 		}
+ 		fuzz_packet_buffer = malloc(data_chunk_size + COMMON_HEADER_SIZE);
+ 		memcpy(fuzz_packet_buffer, data_common_headr, COMMON_HEADER_SIZE); // common header
++		/* the association's vtag is random; a packet with the template's fixed tag is dropped */
++		((struct sctp_common_header *)fuzz_packet_buffer)->verification_tag = assoc_vtag;
+ 		memcpy(fuzz_packet_buffer + COMMON_HEADER_SIZE, data+fuzz_data_count, data_chunk_size);
+ 		usrsctp_conninput((void *)1, fuzz_packet_buffer, data_chunk_size + COMMON_HEADER_SIZE, 0);
+ 		free(fuzz_packet_buffer);

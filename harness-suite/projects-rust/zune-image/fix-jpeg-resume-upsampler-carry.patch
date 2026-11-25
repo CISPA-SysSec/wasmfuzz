@@ -1,0 +1,113 @@
+zune-jpeg: keep the up-sampler's carried-over rows when a scan resumes
+
+`decode_mcu_ycbcr_baseline_inner` calls `set_upsampling()` on every
+`decode_into` attempt, and that re-runs `Components::setup_upsample_scanline`,
+which clears any buffer whose length differs from its computed size. The
+horizontal up-sampler (worker.rs, `SampleRatios::H` in a vertically sampled
+image) resizes `upsample_dest` to `2 * raw_coeff.len()` and keeps the last
+up-sampled row of the previous MCU row in it for the next row's
+`first_row_upsample_dest`. When an incremental decode resumed from an MCU-row
+checkpoint, the setup zeroed that row, so the two output rows at the MCU-row
+seam came out different from a one-shot decode ("incremental pixels diverge
+from one-shot decode"). `set_upsampling` now takes `resuming` and skips the
+buffer setup when the baseline scan resumes from a checkpoint (the buffers
+are still the ones the earlier attempt set up); progressive rendering passes
+false. Includes a regression test (tests/incremental_resume.rs).
+
+Not fixed upstream as of zune-image 2cdbbf5.
+Upstream: none found; open #514 (raw output allocates no upsampler buffers)
+touches the same `set_upsampling` call sites.
+
+diff --git a/crates/zune-jpeg/src/decoder.rs b/crates/zune-jpeg/src/decoder.rs
+index 61953f30..ef514de6 100644
+--- a/crates/zune-jpeg/src/decoder.rs
++++ b/crates/zune-jpeg/src/decoder.rs
+@@ -4006,7 +4006,11 @@ where
+     }
+ 
+     /// Set up-sampling routines in case an image is down sampled
+-    pub(crate) fn set_upsampling(&mut self) {
++    ///
++    /// `resuming` is true when a baseline scan resumes from an MCU-row
++    /// checkpoint: the rows the up-samplers carried over from the previous
++    /// MCU row are then still needed and must not be reset.
++    pub(crate) fn set_upsampling(&mut self, resuming: bool) {
+         // no sampling, return early
+         // check if horizontal max ==1
+         if self.h_max == self.v_max && self.h_max == 1 {
+@@ -4039,7 +4043,9 @@ where
+                     generic_sampler()
+                 }
+             };
+-            comp.setup_upsample_scanline();
++            if !resuming || comp.upsample_dest.is_empty() {
++                comp.setup_upsample_scanline();
++            }
+             comp.up_sampler = samp_factor;
+         }
+     }
+diff --git a/crates/zune-jpeg/src/mcu.rs b/crates/zune-jpeg/src/mcu.rs
+index e46d6f49..1aef873c 100644
+--- a/crates/zune-jpeg/src/mcu.rs
++++ b/crates/zune-jpeg/src/mcu.rs
+@@ -114,7 +114,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
+ 
+         if self.is_interleaved {
+             // set upsampling functions
+-            self.set_upsampling();
++            self.set_upsampling(self.scan_checkpoint().is_some());
+ 
+             mcu_width = self.mcu_x;
+             mcu_height = self.mcu_y;
+diff --git a/crates/zune-jpeg/src/mcu_prog.rs b/crates/zune-jpeg/src/mcu_prog.rs
+index 91a56dce..48100ecf 100644
+--- a/crates/zune-jpeg/src/mcu_prog.rs
++++ b/crates/zune-jpeg/src/mcu_prog.rs
+@@ -262,7 +262,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
+ 
+         if self.is_interleaved {
+             // this helps us catch component errors.
+-            self.set_upsampling();
++            self.set_upsampling(false);
+         }
+         if self.is_interleaved {
+             mcu_width = self.mcu_x;
+diff --git a/crates/zune-jpeg/tests/incremental_resume.rs b/crates/zune-jpeg/tests/incremental_resume.rs
+index 2f4e3c42..9d008e49 100644
+--- a/crates/zune-jpeg/tests/incremental_resume.rs
++++ b/crates/zune-jpeg/tests/incremental_resume.rs
+@@ -159,3 +159,34 @@ fn dnl_lookup_at_end_of_visible_data_is_recoverable() {
+         assert_chunked_matches_oneshot(DNL_AFTER_EOI, chunk);
+     }
+ }
++
++/// Y sampled 1x2, chroma 1x2 and 2x1: the Y plane is horizontally
++/// up-sampled while the image is vertically sampled. Resuming at the second
++/// MCU row re-ran the up-sampler buffer setup, which cleared the up-sampled
++/// row carried over from the first MCU row.
++const CARRIED_ROW_AFTER_RESUME: &[u8; 261] = &[
++    0xff, 0xd8, 0xff, 0xee, 0x00, 0x0e, 0x41, 0x64, 0x6f, 0x62, 0x65, 0x00, 0xc6, 0x56, 0x11, 0x00,
++    0x18, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x10, 0x0b, 0x10, 0x0e, 0x0c, 0x0a, 0x28, 0x1b, 0x1b,
++    0x1b, 0x1b, 0x31, 0x1b, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xc2, 0xcc, 0xcd,
++    0xcd, 0x32, 0xcd, 0x3d, 0x3c, 0x39, 0x3b, 0x38, 0x37, 0xc0, 0x48, 0x5c, 0x4e, 0x40, 0x44, 0x57,
++    0x45, 0x37, 0x38, 0x50, 0x6d, 0x51, 0x20, 0x18, 0x34, 0xff, 0x03, 0xaa, 0xb2, 0xb8, 0x76, 0x92,
++    0x00, 0x00, 0x00, 0x00, 0x65, 0x00, 0x80, 0x80, 0xff, 0xc1, 0x00, 0x11, 0x08, 0x00, 0x13, 0x00,
++    0x01, 0x03, 0x01, 0x12, 0x00, 0x09, 0x12, 0x00, 0x04, 0x21, 0x00, 0xff, 0x3d, 0x00, 0x04, 0x00,
++    0x03, 0xcd, 0xff, 0xc4, 0x00, 0x5b, 0x01, 0x01, 0x00, 0x01, 0x04, 0x03, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x01, 0x05, 0x08, 0x0a, 0x02, 0x03, 0x0b,
++    0x11, 0x00, 0x02, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x20, 0x00, 0xc0, 0x80, 0x00, 0x12, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x20, 0x13, 0x01, 0x01, 0x01, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x10, 0xff,
++    0xda, 0x00, 0x0c, 0x03, 0x01, 0x12, 0x09, 0x11, 0x04, 0x13, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d,
++    0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x00, 0x00, 0x01, 0xfe, 0xff, 0x00, 0xff,
++    0xd9, 0x80, 0x00, 0x21, 0x01, 0x01, 0x0c, 0x03, 0x01, 0x12, 0x09, 0x11, 0x04, 0x13, 0x0d, 0x0d,
++    0x0d, 0x0d, 0x0d, 0x0d, 0x0d,
++];
++
++#[test]
++fn resume_keeps_upsampler_carried_rows() {
++    for chunk in [2, 5, 10, 30] {
++        assert_chunked_matches_oneshot(CARRIED_ROW_AFTER_RESUME, chunk);
++    }
++}

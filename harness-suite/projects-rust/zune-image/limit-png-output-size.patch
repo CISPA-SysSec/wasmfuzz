@@ -1,3 +1,6 @@
+Upstream: open issue etemesi254/zune-image#384 (by qarmin, 2026-04-29) reports an OOM from header-declared dimensions; the maintainer points at decoder limits and no fix is proposed.
+This cap stays suite-only.
+
 diff --git a/crates/zune-png/fuzz/fuzz_targets/decode_buffer.rs b/crates/zune-png/fuzz/fuzz_targets/decode_buffer.rs
 index 3888446..e59a6e8 100644
 --- a/crates/zune-png/fuzz/fuzz_targets/decode_buffer.rs

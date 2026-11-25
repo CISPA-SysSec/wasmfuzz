@@ -1,0 +1,90 @@
+Subject: [PATCH] func: skip an in-memory journal in sqlite_filestat()
+
+sqlite_filestat(SCHEMA) (SQLITE_DEBUG or SQLITE_ENABLE_FILESTAT builds)
+also describes the rollback journal if it is open, and passes it
+SQLITE_FCNTL_FILESTAT through sqlite3OsFileControl(). An in-memory
+journal (journal_mode=MEMORY, or the journal of an in-memory or temp
+database) has MemJournalMethods, whose xFileControl is NULL, and
+sqlite3OsFileControl() only checks pMethods, so the call jumps to
+address 0 (SEGV natively; IndirectCallTypeMismatch trap on wasm32):
+
+    BEGIN; CREATE TABLE t(x); SELECT sqlite_filestat('main');
+
+Skip the journal when sqlite3JournalIsInMemory(), as for a journal that
+is not open. Regression test filestat1-1.0/1.1.
+
+Found while checking which debug-only SQL functions the ossfuzz and dbsql
+fuzzers reach in a SQLITE_DEBUG build. Applied only to the SQLITE_DEBUG
+tree (repo-debug): release builds without SQLITE_ENABLE_FILESTAT do not
+compile sqlite_filestat(), and their modules stay byte-identical.
+
+Not fixed upstream as of dc9b322 (master on 2026-11-23).
+Upstream: reported on the SQLite bug forum on 2026-11-23, forumpost
+a73c1d7899
+(https://sqlite.org/bugs/forumpost/a73c1d7899b35b73f393eb9e0fade9bf51da0e6834ec64354d2c6d8a2d7403c6).
+SQLite takes no patches; drop this one once a check-in fixes it.
+---
+diff --git a/src/func.c b/src/func.c
+index 7cd4193..202c854 100644
+--- a/src/func.c
++++ b/src/func.c
+@@ -3231,7 +3231,7 @@ static void filestatFunc(
+       rc = sqlite3OsFileControl(fd, SQLITE_FCNTL_FILESTAT, pStr);
+       if( rc ) sqlite3_str_append(pStr, "null", 4);
+       fd = sqlite3PagerJrnlFile(pPager);
+-      if( fd && fd->pMethods!=0 ){
++      if( fd && fd->pMethods!=0 && !sqlite3JournalIsInMemory(fd) ){
+         sqlite3_str_appendall(pStr, ",\"journal\":");
+         rc = sqlite3OsFileControl(fd, SQLITE_FCNTL_FILESTAT, pStr);
+         if( rc ) sqlite3_str_append(pStr, "null", 4);
+diff --git a/test/filestat1.test b/test/filestat1.test
+new file mode 100644
+index 0000000..7927725
+--- /dev/null
++++ b/test/filestat1.test
+@@ -0,0 +1,45 @@
++# 2026 November 21
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++#***********************************************************************
++#
++# Tests for the sqlite_filestat() SQL function, which is only available
++# in SQLITE_DEBUG and SQLITE_ENABLE_FILESTAT builds.
++#
++
++set testdir [file dirname $argv0]
++source $testdir/tester.tcl
++set testprefix filestat1
++
++if {[catch {db one {SELECT sqlite_filestat('main')}}]} {
++  finish_test
++  return
++}
++
++# An in-memory journal has no xFileControl method.  It used to be
++# passed SQLITE_FCNTL_FILESTAT all the same.
++#
++do_execsql_test 1.0 {
++  PRAGMA journal_mode=memory;
++  CREATE TABLE t1(x);
++  BEGIN;
++  INSERT INTO t1 VALUES(1);
++  SELECT json_valid(sqlite_filestat('main'));
++  COMMIT;
++} {memory 1}
++
++do_execsql_test 1.1 {
++  CREATE TEMP TABLE t2(x);
++  BEGIN;
++  INSERT INTO t2 VALUES(1);
++  SELECT json_valid(sqlite_filestat('temp'));
++  COMMIT;
++} {1}
++
++finish_test

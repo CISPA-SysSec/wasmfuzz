@@ -1,5 +1,17 @@
+Subject: [PATCH] zune-core: check the ZCursor read end for overflow
+
+`position + N` and `position + buf.len()` overflow when the cursor sits near
+usize::MAX. ZSeekFrom::Start puts it wherever the file says, so this is
+reachable: in zune-heic, a grid item whose iloc extent offset is
+usize::MAX - 1 (0xfffffffe on wasm32) is seeked to, one byte is skipped, and
+read_u8_err() then panics on the `get(start..end).unwrap()` in
+peek_bytes_impl (release builds; debug builds panic on the addition). The
+unit test added here fails without the fix.
+
+Upstream: none found.
+
 diff --git a/crates/zune-core/src/bytestream/reader/no_std_readers.rs b/crates/zune-core/src/bytestream/reader/no_std_readers.rs
-index 13670ea4..11bf8512 100644
+index 13670ea..a65eec2 100644
 --- a/crates/zune-core/src/bytestream/reader/no_std_readers.rs
 +++ b/crates/zune-core/src/bytestream/reader/no_std_readers.rs
 @@ -71,12 +71,16 @@ impl<T: AsRef<[u8]>>  ZCursor<T> {
@@ -73,3 +85,25 @@ index 13670ea4..11bf8512 100644
      }
  
      #[inline(always)]
+@@ -175,3 +190,21 @@ impl<T: AsRef<[u8]>> From<T> for ZCursor<T> {
+         ZCursor::new(value)
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use crate::bytestream::{ZCursor, ZReader, ZSeekFrom};
++
++    #[test]
++    fn read_near_usize_max_is_an_error() {
++        // Absolute seeks take offsets from the file (e.g. HEIF item locations),
++        // so the cursor can sit anywhere; `position + N` used to overflow.
++        let mut reader = ZReader::new(ZCursor::new([0_u8; 16]));
++        reader.seek(ZSeekFrom::Start(usize::MAX as u64 - 1)).unwrap();
++        assert!(reader.read_u8_err().is_err());
++        assert!(reader.get_u32_be_err().is_err());
++        let mut buf = [0_u8; 4];
++        assert!(reader.read_bytes(&mut buf).is_err());
++        assert!(reader.read_exact_bytes(&mut buf).is_err());
++    }
++}

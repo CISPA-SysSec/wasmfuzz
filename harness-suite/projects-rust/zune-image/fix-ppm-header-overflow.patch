@@ -1,5 +1,18 @@
+Subject: [PATCH] ppm: reject overflowing header values and short rasters
+
+get_integer() wrapped on overflow, so a width of 2^64 + 1 parsed as 1. And
+decode() allocated the whole output buffer (up to 16384 x 16384 x 4 x 2
+bytes within the default limits) before reading the raster, so a 20-byte
+header such as `P6 16384 16384 255` allocates 768 MiB just to fail with
+NotEnoughBytes. That is out of memory on the 512 MiB wasm heap; natively,
+libFuzzer with -malloc_limit_mb=512 reports it the same way. Check for
+overflow while parsing and the bytes left in the stream before allocating.
+The tests added here fail without the fix.
+
+Upstream: none found.
+
 diff --git a/crates/zune-ppm/src/decoder.rs b/crates/zune-ppm/src/decoder.rs
-index 1ed517cf..b82a6075 100644
+index 6e8adde..8faf98d 100644
 --- a/crates/zune-ppm/src/decoder.rs
 +++ b/crates/zune-ppm/src/decoder.rs
 @@ -12,7 +12,7 @@ use alloc::{format, vec};
@@ -75,3 +88,53 @@ index 1ed517cf..b82a6075 100644
  
          match self.bit_depth.bit_type() {
              BitType::U8 => {
+diff --git a/crates/zune-ppm/tests/test_header_overflow.rs b/crates/zune-ppm/tests/test_header_overflow.rs
+new file mode 100644
+index 0000000..d41f27b
+--- /dev/null
++++ b/crates/zune-ppm/tests/test_header_overflow.rs
+@@ -0,0 +1,44 @@
++use std::alloc::{GlobalAlloc, Layout, System};
++use std::sync::atomic::{AtomicUsize, Ordering};
++
++use zune_ppm::zune_core::bytestream::ZCursor;
++use zune_ppm::PPMDecoder;
++
++/// Records the largest single allocation made by this test binary
++struct LargestAlloc;
++
++static LARGEST: AtomicUsize = AtomicUsize::new(0);
++
++unsafe impl GlobalAlloc for LargestAlloc {
++    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++        LARGEST.fetch_max(layout.size(), Ordering::Relaxed);
++        System.alloc(layout)
++    }
++    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++        LARGEST.fetch_max(layout.size(), Ordering::Relaxed);
++        System.alloc_zeroed(layout)
++    }
++    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++        System.dealloc(ptr, layout)
++    }
++}
++
++#[global_allocator]
++static GLOBAL: LargestAlloc = LargestAlloc;
++
++#[test]
++fn header_values_that_overflow_are_rejected() {
++    // 2^64 + 1 used to wrap around to a width of 1
++    let data = b"P5 18446744073709551617 1 255\nA";
++    assert!(PPMDecoder::new(ZCursor::new(&data[..])).decode().is_err());
++    let data = b"P5 1 1 18446744073709551871\nA";
++    assert!(PPMDecoder::new(ZCursor::new(&data[..])).decode().is_err());
++}
++
++#[test]
++fn truncated_raster_is_rejected_before_allocating() {
++    // the header asks for 16384 * 16384 * 3 bytes, the file has one
++    let data = b"P6 16384 16384 255\nA";
++    assert!(PPMDecoder::new(ZCursor::new(&data[..])).decode().is_err());
++    assert!(LARGEST.load(Ordering::Relaxed) < 1 << 20);
++}

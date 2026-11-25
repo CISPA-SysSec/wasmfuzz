@@ -1,8 +1,11 @@
-diff --git a/jxl/src/api/inner/box_parser.rs b/jxl/src/api/inner/box_parser.rs
-index e08f48e..eb36dce 100644
---- a/jxl/src/api/inner/box_parser.rs
-+++ b/jxl/src/api/inner/box_parser.rs
-@@ -693,7 +693,8 @@ impl BoxParser {
+Upstream: PR libjxl/jxl-rs#1067 (by josefguenther, 2026-11-01) proposed an opt-in limit on buffered out-of-order codestream boxes; it was closed unmerged on 2026-11-05 after the maintainer said such buffering is bounded by the file size.
+No upstream item covers the TOC entry / group count overflow checks in this patch.
+
+diff --git a/jxl/src/api/box_parser.rs b/jxl/src/api/box_parser.rs
+index b119a13..a212b3b 100644
+--- a/jxl/src/api/box_parser.rs
++++ b/jxl/src/api/box_parser.rs
+@@ -784,7 +784,8 @@ impl BoxParser {
                      if self.ooo_jxlp_buffer.contains_key(&idx) {
                          return Err(Error::InvalidBox);
                      }
@@ -12,13 +15,13 @@ index e08f48e..eb36dce 100644
                          return Err(Error::InvalidBox);
                      }
                      self.state = ParseState::OOOJxlp(idx, content_len);
-diff --git a/jxl/src/api/inner/codestream_parser/frame_info.rs b/jxl/src/api/inner/codestream_parser/frame_info.rs
-index 4a3d0e1..2b31b16 100644
---- a/jxl/src/api/inner/codestream_parser/frame_info.rs
-+++ b/jxl/src/api/inner/codestream_parser/frame_info.rs
-@@ -156,6 +156,19 @@ impl FrameInfo {
-             frame_header.size_upsampled(),
+diff --git a/jxl/src/api/codestream_parser/frame_info.rs b/jxl/src/api/codestream_parser/frame_info.rs
+index 2b908f0..865ce4e 100644
+--- a/jxl/src/api/codestream_parser/frame_info.rs
++++ b/jxl/src/api/codestream_parser/frame_info.rs
+@@ -191,6 +191,26 @@ impl FrameInfo {
              frame_header.num_extra_channels as usize,
+             effective_nonvisible_samples,
          )?;
 +        let (gw, gh) = frame_header.size_groups();
 +        let ng = gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
@@ -27,16 +30,23 @@ index 4a3d0e1..2b31b16 100644
 +            return Err(Error::ImageDimensionTooLarge(ng as u64));
 +        }
 +        if let Some(limit) = decode_options.sample_limit {
-+            let (pw, ph) = frame_header.size_padded_upsampled();
-+            check_size_limit(Some(limit), (pw, ph), frame_header.num_extra_channels as usize)?;
++            let (pw, ph) = frame_header.size_padded();
++            let up = frame_header.upsampling as usize;
++            let (pw, ph) = (pw.saturating_mul(up), ph.saturating_mul(up));
++            check_size_limit(
++                Some(limit),
++                (pw, ph),
++                frame_header.num_extra_channels as usize,
++                0,
++            )?;
 +            if ng >= limit {
 +                return Err(Error::ImageDimensionTooLarge(ng as u64));
 +            }
 +        }
  
-         self.frame_header = Some(frame_header);
-         *bits = br.total_bits_read();
-@@ -164,7 +177,27 @@ impl FrameInfo {
+         if level5_limits
+             && frame_header.duration > 0
+@@ -216,7 +236,27 @@ impl FrameInfo {
  
      pub fn parse_toc(&mut self, br: &mut BitReader, bits: &mut usize) -> Result<Toc> {
          if self.toc_parser.is_none() {
@@ -65,9 +75,9 @@ index 4a3d0e1..2b31b16 100644
              self.toc_parser = Some(IncrementalTocReader::new(num_toc_entries as u32, br)?);
          }
  
-@@ -195,7 +228,19 @@ impl FrameInfo {
-         output_profile: &JxlColorProfile,
-         process_mode: ProcessMode,
+@@ -250,7 +290,19 @@ impl FrameInfo {
+         downsample_factor: u8,
+         output_viewport: Rect,
      ) -> Result<()> {
 -        self.section_size = toc.entries.iter().map(|x| *x as u64).sum();
 +        const MAX_TOTAL_SECTION_BYTES: u64 = 64 * 1024 * 1024;
@@ -86,7 +96,7 @@ index 4a3d0e1..2b31b16 100644
          self.ready_section_data = 0;
  
          self.lf_global_section = None;
-@@ -403,9 +448,11 @@ impl FrameInfo {
+@@ -466,9 +518,11 @@ impl FrameInfo {
                  }
                  let len = buf.data.len();
                  if len > ready {
@@ -101,12 +111,12 @@ index 4a3d0e1..2b31b16 100644
                      if available_codestream == 0 {
                          break;
                      }
-diff --git a/jxl/src/api/inner/process.rs b/jxl/src/api/inner/process.rs
-index a4658da..9614035 100644
---- a/jxl/src/api/inner/process.rs
-+++ b/jxl/src/api/inner/process.rs
-@@ -32,7 +32,7 @@ impl SmallBuffer {
-     ) -> Result<usize> {
+diff --git a/jxl/src/api/input.rs b/jxl/src/api/input.rs
+index 6af0bcb..4ad45b1 100644
+--- a/jxl/src/api/input.rs
++++ b/jxl/src/api/input.rs
+@@ -100,7 +100,7 @@ impl SmallBuffer {
+     ) -> JxlResult<usize> {
          let mut total = 0;
          loop {
 -            if self.range.start >= self.buf.len() / 2 {
@@ -114,7 +124,7 @@ index a4658da..9614035 100644
                  let start = self.range.start;
                  let len = self.range.len();
                  let (pre, post) = self.buf.split_at_mut(start);
-@@ -40,7 +40,7 @@ impl SmallBuffer {
+@@ -108,7 +108,7 @@ impl SmallBuffer {
                  self.range.start -= start;
                  self.range.end -= start;
              }
@@ -123,7 +133,7 @@ index a4658da..9614035 100644
                  break;
              }
              let num = get_input(&mut [IoSliceMut::new(&mut self.buf[self.range.end..])])?;
-@@ -102,7 +102,10 @@ impl SmallBuffer {
+@@ -178,7 +178,10 @@ impl SmallBuffer {
  
      pub(super) fn enlarge(&mut self) {
          // Note: we need a *4 here because doubling the buffer size might still not allow refill() to make progress.
@@ -136,51 +146,28 @@ index a4658da..9614035 100644
  
      pub(super) fn can_read_more(&self) -> bool {
 diff --git a/jxl/src/frame/decode.rs b/jxl/src/frame/decode.rs
-index e3e5018..0562a1e 100644
+index 70a528f..5f7be89 100644
 --- a/jxl/src/frame/decode.rs
 +++ b/jxl/src/frame/decode.rs
-@@ -199,6 +199,10 @@ impl Frame {
-         toc: Toc,
-         mut decoder_state: DecoderState,
+@@ -203,6 +203,10 @@ impl Frame {
+         frame_counters: (usize, usize),
+         buffer_recycler: Arc<BufferRecycler>,
      ) -> Result<Box<Self>> {
 +        // The group count is derived from untrusted frame header dimensions and is used
 +        // to size allocations further down (via `GroupStatus::new`); reject overflow here.
 +        let (gw, gh) = frame_header.size_groups();
 +        gw.checked_mul(gh).ok_or(Error::SizeOverflow)?;
-         if frame_header.is_visible() {
-             decoder_state.visible_frame_index += 1;
-             decoder_state.nonvisible_frame_index = 0;
-@@ -376,7 +380,12 @@ impl Frame {
- 
-             if self.header.has_splines() {
-                 info!("decoding splines");
--                let s = Splines::read(br, self.header.width * self.header.height)?;
-+                let spline_area = self
-+                    .header
-+                    .width
-+                    .checked_mul(self.header.height)
-+                    .ok_or(Error::SizeOverflow)?;
-+                let s = Splines::read(br, spline_area)?;
-                 *self.splines.try_write().unwrap() = s;
-             }
- 
+         if frame_header.frame_type == FrameType::LFFrame && frame_header.lf_level == 1 {
+             decoder_state.lf_frame_was_rendered = false;
+         }
 diff --git a/jxl/src/frame/render.rs b/jxl/src/frame/render.rs
-index c445165..e72ba5f 100644
+index 7f12a06..80f1a14 100644
 --- a/jxl/src/frame/render.rs
 +++ b/jxl/src/frame/render.rs
-@@ -29,7 +29,7 @@ use crate::render::SimpleRenderPipeline;
- use crate::render::buffer_splitter::BufferSplitter;
- use crate::render::stages::*;
- use crate::render::{LowMemoryRenderPipeline, RenderPipeline, RenderPipelineBuilder};
--use crate::util::SmallVec;
-+use crate::util::{ShiftRightCeil, SmallVec};
- use crate::util::sync::{Arc, RwLock};
+@@ -735,6 +735,16 @@ impl Frame {
+             channel_types.push((DataTypeTag::U16, None));
+         }
  
- #[cfg(test)]
-@@ -567,6 +567,16 @@ impl Frame {
-         let num_channels = frame_header.num_extra_channels as usize + 3;
-         let num_temp_channels = if frame_header.has_noise() { 3 } else { 0 };
-         let metadata = &decoder_state.file_header.image_metadata;
 +        const MAX_RENDER_PIPELINE_GRID_CELLS: usize = 1 << 22;
 +        let downsampling_shift = frame_header.upsampling.ilog2() as usize;
 +        let log_group_size = frame_header.log_group_dim() + downsampling_shift;
@@ -191,9 +178,9 @@ index c445165..e72ba5f 100644
 +        if grid_cells >= MAX_RENDER_PIPELINE_GRID_CELLS {
 +            return Err(Error::ImageDimensionTooLarge(grid_cells as u64));
 +        }
-         let mut pipeline = RenderPipelineBuilder::<T>::new(
-             num_channels + num_temp_channels,
-             frame_header.size_upsampled(),
+         let mut channel_output_downsamples = vec![output_shift as u8; num_channels];
+         // Noise scratch channels are not downsampled.
+         channel_output_downsamples.extend(std::iter::repeat_n(0, num_temp_channels));
 diff --git a/jxl/src/headers/permutation.rs b/jxl/src/headers/permutation.rs
 index 6a4e047..5470250 100644
 --- a/jxl/src/headers/permutation.rs
@@ -210,7 +197,7 @@ index 6a4e047..5470250 100644
              return Err(Error::InvalidPermutationSize { size, skip, end });
          }
 diff --git a/jxl/src/headers/toc.rs b/jxl/src/headers/toc.rs
-index eaae4ef..0b70113 100644
+index 8762641..a845b82 100644
 --- a/jxl/src/headers/toc.rs
 +++ b/jxl/src/headers/toc.rs
 @@ -41,6 +41,10 @@ pub struct IncrementalTocReader {

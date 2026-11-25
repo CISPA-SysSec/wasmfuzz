@@ -1,0 +1,255 @@
+Subject: [PATCH] select: unlink window functions from an omitted ORDER BY
+
+sqlite3Select() drops a superfluous ORDER BY in two places: on a
+subquery whose result is ignorable (EXISTS, tag-select-0100) and on a
+FROM-clause subquery (tag-select-0230). The ORDER BY is detached with
+sqlite3ParserAddCleanup(), so it is freed only at the end of the parse,
+because an AggInfo of an outer query may still point into it. But the
+window functions in that ORDER BY stay on Select.pWin, and
+sqlite3WindowRewrite() still rewrites them. Its AggInfo persist walk
+(sqlite3AggInfoPersistWalkerInit()) walks only the Select, so it no
+longer sees the detached ORDER BY. For a window function with the
+SQLITE_SUBTYPE property (json_group_array(), json_group_object(),
+jsonb_*) the rewrite changes the arguments in place
+(selectWindowRewriteEList() on pWin->pOwner->x.pList): an argument that
+is an aggregate of the outer query is overwritten with a TK_COLUMN, and
+its sub-expressions are freed. The outer AggInfo is left with aFunc[]
+and aCol[] entries pointing at the changed and the freed Expr nodes,
+and the SQLITE_DEBUG self-checks at the end of sqlite3Select()
+(tag-select-1000) fail ("pExpr->pAggInfo==pAggInfo" in the aCol[] or
+the aFunc[] loop):
+
+    SELECT EXISTS(SELECT 1 ORDER BY json_group_array(avg(x)) OVER ())
+      FROM t1;
+    SELECT (SELECT count(*) FROM (SELECT 1 ORDER BY
+             json_group_array(avg(x)) OVER ()), t1 AS b) FROM t1;
+
+Release builds return correct results: the outer query reads its
+AggInfo before the subquery is coded, so only the debug self-check
+reads the stale pointers (no ASan report with lookaside disabled). They
+do emit dead window-function code for the dropped ORDER BY (53 extra
+opcodes for the first query above with sum() in place of
+json_group_array(); a non-SUBTYPE window function does not trip the
+assert).
+
+Fix: a new helper selectOmitOrderBy() removes the window functions of
+the ORDER BY from Select.pWin, as resolve.c already does when an ORDER
+BY term becomes a reference to a result column, before scheduling the
+ORDER BY for deletion. Both drop sites use it.
+windowRemoveExprFromSelect() in resolve.c is exported as
+sqlite3WindowRemoveExprFromSelect() for that. Regression test
+test/omitorderby1.sql.
+
+Found by fuzzing the SQLITE_DEBUG ossfuzz harness.
+
+Upstream: not reported; not fixed as of dc9b322 (master 2026-11-23);
+no later check-in through 2026-11-23 19:49 touches this. Related:
+4f5062f (2026-10-20, aggregates over window-function rows nested in
+sub-selects), 0665865 (2026-11-10, DISTINCT/OFFSET in the same EXISTS
+ORDER BY-drop block).
+---
+diff --git a/src/resolve.c b/src/resolve.c
+index 792ab05..dda6905 100644
+--- a/src/resolve.c
++++ b/src/resolve.c
+@@ -1819,7 +1819,7 @@ int sqlite3ResolveOrderGroupBy(
+ 
+ #ifndef SQLITE_OMIT_WINDOWFUNC
+ /*
+-** Walker callback for windowRemoveExprFromSelect().
++** Walker callback for sqlite3WindowRemoveExprFromSelect().
+ */
+ static int resolveRemoveWindowsCb(Walker *pWalker, Expr *pExpr){
+   UNUSED_PARAMETER(pWalker);
+@@ -1834,7 +1834,7 @@ static int resolveRemoveWindowsCb(Walker *pWalker, Expr *pExpr){
+ ** Remove any Window objects owned by the expression pExpr from the
+ ** Select.pWin list of Select object pSelect.
+ */
+-static void windowRemoveExprFromSelect(Select *pSelect, Expr *pExpr){
++void sqlite3WindowRemoveExprFromSelect(Select *pSelect, Expr *pExpr){
+   if( pSelect->pWin ){
+     Walker sWalker;
+     memset(&sWalker, 0, sizeof(Walker));
+@@ -1843,8 +1843,6 @@ static void windowRemoveExprFromSelect(Select *pSelect, Expr *pExpr){
+     sqlite3WalkExpr(&sWalker, pExpr);
+   }
+ }
+-#else
+-# define windowRemoveExprFromSelect(a, b)
+ #endif /* SQLITE_OMIT_WINDOWFUNC */
+ 
+ /*
+@@ -1918,7 +1916,7 @@ static int resolveOrderGroupBy(
+         /* Since this expression is being changed into a reference
+         ** to an identical expression in the result set, remove all Window
+         ** objects belonging to the expression from the Select.pWin list. */
+-        windowRemoveExprFromSelect(pSelect, pE);
++        sqlite3WindowRemoveExprFromSelect(pSelect, pE);
+         pItem->u.x.iOrderByCol = j+1;
+       }
+     }
+diff --git a/src/select.c b/src/select.c
+index f6fc3ec..0f481a1 100644
+--- a/src/select.c
++++ b/src/select.c
+@@ -7943,6 +7943,30 @@ static int sqlite3CopySortOrder(ExprList *p1, ExprList *p2){
+   }
+ }
+ 
++/*
++** The ORDER BY clause of SELECT statement p is superfluous.  Remove it.
++**
++** The ORDER BY is not deleted right away, but only when the parse is
++** finished, as an AggInfo object belonging to an outer query might still
++** hold pointers to aggregate functions or columns within it.  But window
++** functions in the ORDER BY are unlinked from p->pWin now.  Otherwise
++** sqlite3WindowRewrite() would still rewrite them, which can modify
++** or free expressions that the outer AggInfo refers to, since the walk
++** that protects such AggInfo references (sqlite3AggInfoPersistWalkerInit())
++** no longer sees the detached ORDER BY.
++*/
++static void selectOmitOrderBy(Parse *pParse, Select *p){
++  ExprList *pOrderBy = p->pOrderBy;
++  int i;
++  assert( pOrderBy!=0 );
++  for(i=0; i<pOrderBy->nExpr; i++){
++    sqlite3WindowRemoveExprFromSelect(p, pOrderBy->a[i].pExpr);
++  }
++  sqlite3ParserAddCleanup(pParse, sqlite3ExprListDeleteGeneric, pOrderBy);
++  testcase( pParse->earlyCleanup );
++  p->pOrderBy = 0;
++}
++
+ /*
+ ** Generate byte-code for the SELECT statement given in the p argument. 
+ **
+@@ -8048,10 +8072,7 @@ int sqlite3Select(
+         sqlite3TreeViewExprList(0, p->pOrderBy, 0, "ORDERBY");
+       }
+ #endif   
+-      sqlite3ParserAddCleanup(pParse, sqlite3ExprListDeleteGeneric,
+-                              p->pOrderBy);
+-      testcase( pParse->earlyCleanup );
+-      p->pOrderBy = 0;
++      selectOmitOrderBy(pParse, p);
+     }
+     /* Do not ignore DISTINCT for an EXISTS subquery with an OFFSET clause.
+     ** In this case the OFFSET must be applied after duplicates are discarded,
+@@ -8259,9 +8280,7 @@ int sqlite3Select(
+     ){
+       TREETRACE(0x800,pParse,p,
+                 ("omit superfluous ORDER BY on %r FROM-clause subquery\n",i+1));
+-      sqlite3ParserAddCleanup(pParse, sqlite3ExprListDeleteGeneric,
+-                              pSub->pOrderBy);
+-      pSub->pOrderBy = 0;
++      selectOmitOrderBy(pParse, pSub);
+     }
+ 
+     /* If the outer query contains a "complex" result set (that is,
+diff --git a/src/sqliteInt.h b/src/sqliteInt.h
+index 170a177..6f3f111 100644
+--- a/src/sqliteInt.h
++++ b/src/sqliteInt.h
+@@ -4676,6 +4676,7 @@ void sqlite3MultiValuesEnd(Parse *pParse, Select *pVal);
+ #ifndef SQLITE_OMIT_WINDOWFUNC
+ void sqlite3WindowDelete(sqlite3*, Window*);
+ void sqlite3WindowUnlinkFromSelect(Window*);
++void sqlite3WindowRemoveExprFromSelect(Select*,Expr*);
+ void sqlite3WindowListDelete(sqlite3 *db, Window *p);
+ Window *sqlite3WindowAlloc(Parse*, int, int, Expr*, int , Expr*, u8);
+ void sqlite3WindowAttach(Parse*, Expr*, Window*);
+@@ -4694,6 +4695,7 @@ Window *sqlite3WindowAssemble(Parse*, Window*, ExprList*, ExprList*, Token*);
+ # define sqlite3WindowDelete(a,b)
+ # define sqlite3WindowFunctions()
+ # define sqlite3WindowAttach(a,b,c)
++# define sqlite3WindowRemoveExprFromSelect(a,b)
+ #endif
+ 
+ /*
+diff --git a/test/omitorderby1.sql b/test/omitorderby1.sql
+new file mode 100644
+index 0000000..8c78619
+--- /dev/null
++++ b/test/omitorderby1.sql
+@@ -0,0 +1,81 @@
++#!sqlite3
++#
++# 2026-11-23
++#
++# The author disclaims copyright to this source code.  In place of
++# a legal notice, here is a blessing:
++#
++#    May you do good and not evil.
++#    May you find forgiveness for yourself and forgive others.
++#    May you share freely, never taking more than you give.
++#
++
++#***********************************************************************
++#
++# A superfluous ORDER BY clause, on an EXISTS subquery or on a FROM-clause
++# subquery, is removed by sqlite3Select() but freed only at the end of the
++# parse.  Window functions in that ORDER BY must also be removed from the
++# Select.pWin list.  Otherwise sqlite3WindowRewrite() still rewrites
++# them.  For a window function with the SQLITE_SUBTYPE property (such as
++# json_group_array()) the rewrite changes its arguments in place, and if
++# an argument is an aggregate of an outer query, the AggInfo of the
++# outer query is left pointing at changed or freed expressions.  An
++# SQLITE_DEBUG build fails an assert() in the self-checks at the end of
++# sqlite3Select().
++#
++.open :memory:
++.mode -reset list -colsep ' ' -rowsep ' '
++
++.testcase 100
++CREATE TABLE t1(x);
++CREATE TABLE t2(y);
++INSERT INTO t1 VALUES(1),(2);
++.check ''
++
++# EXISTS subquery
++.testcase 110
++SELECT EXISTS(SELECT 1 ORDER BY json_group_array(avg(x)) OVER ()) FROM t1;
++.check '1'
++
++.testcase 120
++SELECT EXISTS(SELECT 1 ORDER BY 1, json_group_object('a',avg(x)) OVER ()),
++       avg(x)
++  FROM t1;
++.check '1 1.5'
++
++.testcase 130
++SELECT x FROM t1 GROUP BY x
++ HAVING EXISTS(SELECT 1 ORDER BY jsonb_group_array(sum(x)) OVER ());
++.check '1 2'
++
++.testcase 140
++SELECT EXISTS(SELECT 1 FROM t1 AS a ORDER BY json_group_array(a.x+avg(t1.x)) OVER ())
++  FROM t1;
++.check '1'
++
++.testcase 150
++SELECT EXISTS(SELECT 1 ORDER BY json_group_array(avg(y)) OVER ()) FROM t2;
++.check '1'
++
++# FROM-clause subquery
++.testcase 200
++SELECT (SELECT count(*) FROM (SELECT 1 ORDER BY json_group_array(avg(x)) OVER ()), t1 AS b)
++  FROM t1;
++.check '2'
++
++.testcase 210
++SELECT (SELECT a FROM (SELECT 7 AS a ORDER BY json_group_array(avg(x)) OVER ()) ORDER BY a)
++  FROM t1;
++.check '7'
++
++.testcase 220
++.testctrl opt -OmitOrderBy
++SELECT (SELECT a FROM (SELECT 7 AS a ORDER BY json_group_array(avg(x)) OVER ()) ORDER BY a)
++  FROM t1;
++.testctrl opt +All
++.check '+All -OmitOrderBy 7 +All'
++
++# The test case found by fuzzing
++.testcase 300
++SELECT EXISTS(SELECT ? ORDER BY ?, json_group_array((avg(sql))) OVER ()) FROM sqlite_schema;
++.check '1'
